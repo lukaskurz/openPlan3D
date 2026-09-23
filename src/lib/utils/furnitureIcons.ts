@@ -51,6 +51,46 @@ const drawSofa: DrawFn = (ctx, w, d, color) => {
   ctx.stroke();
 };
 
+/**
+ * Proportions shared by the 2D symbol and 3D model; the return runs along the right (+x) side.
+ * Purely proportional, because the 2D drawers receive zoomed sizes rather than centimetres.
+ */
+export function lSofaLayout(w: number, d: number) {
+  const seat = Math.min(d * 0.5, w * 0.35);
+  return { seat, back: seat * 0.22, arm: seat * 0.2 };
+}
+
+const drawSofaL: DrawFn = (ctx, w, d, color) => {
+  const { seat: S, back: B, arm: A } = lSofaLayout(w, d);
+  const x0 = -w / 2, y0 = -d / 2, x1 = w / 2, y1 = d / 2;
+  // Backs along the top and the right side
+  roundRect(ctx, x0, y0, w, B, 3); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - B, y0 + B, B, d - B, 3); ctx.fill(); ctx.stroke();
+  // Seats
+  ctx.fillStyle = color + '40';
+  roundRect(ctx, x0 + A, y0 + B, w - A - B, S - B, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - S, y0 + S, S - B, d - S - A, 2); ctx.fill(); ctx.stroke();
+  // Arms at both open ends
+  ctx.fillStyle = color + '80';
+  roundRect(ctx, x0, y0 + B, A, S - B, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - S, y1 - A, S - B, A, 2); ctx.fill(); ctx.stroke();
+  // Cushion lines on the long run and the return
+  ctx.beginPath();
+  const run = w - A - S, cushions = Math.max(1, Math.round(run / Math.max(S, 1)));
+  for (let i = 1; i <= cushions; i++) {
+    const x = x0 + A + run * i / cushions;
+    ctx.moveTo(x, y0 + B + 2); ctx.lineTo(x, y0 + S - 2);
+  }
+  const ret = d - S - A, returnCushions = Math.max(1, Math.round(ret / Math.max(S, 1)));
+  for (let i = 0; i < returnCushions; i++) {
+    const y = y0 + S + ret * i / returnCushions;
+    ctx.moveTo(x1 - S + 2, y); ctx.lineTo(x1 - B - 2, y);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+};
+
 const drawLoveseat: DrawFn = (ctx, w, d, color) => {
   // Same as sofa but 2 cushions
   const armW = w * 0.14;
@@ -915,6 +955,7 @@ const iconDrawers: Record<string, DrawFn> = {
     ctx.stroke();
   },
   sofa: drawSofa,
+  sofa_l: drawSofaL,
   loveseat: drawLoveseat,
   chair: drawChair,
   coffee_table: drawTable,

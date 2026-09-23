@@ -244,6 +244,19 @@
       "model": "loungeDesignSofa"
     },
     {
+      "id": "sofa_l",
+      "name": "L-Shaped Sofa",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 280,
+        "depth": 180,
+        "height": 80
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
       "id": "loveseat",
       "name": "Loveseat",
       "category": "Living Room",

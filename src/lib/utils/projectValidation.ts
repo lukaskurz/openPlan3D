@@ -117,6 +117,7 @@ export function readProject(value: unknown): Project {
       // Mirroring uses negative scale. Do not normalize signs or round dimensions.
       for (const key of ['x', 'y', 'z']) number(item.scale[key], `${path}.scale.${key}`);
       for (const key of ['width', 'depth', 'height']) if (item[key] !== undefined) positive(item[key], `${path}.${key}`);
+      if (item.elevation !== undefined) number(item.elevation, `${path}.elevation`, 0);
       strings(item, ['color', 'material', 'sourceCategory'], path); booleans(item, ['locked'], path);
     });
     elements('stairs', (item, path) => {

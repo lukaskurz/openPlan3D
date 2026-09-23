@@ -12,12 +12,13 @@
   import type { DetailTarget } from '$lib/models/types';
   import { catalogAssetUrl } from '$lib/utils/catalogAssetUrl';
 
-  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
-  import { wallLength as calcWallLength, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
+  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, setWallAngle, straightenWalls, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
+  import { wallLength as calcWallLength, wallAngle as calcWallAngle, wallSkew, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
   import { openingOnWall } from '$lib/utils/wallProfiles';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { floorMaterials, wallColors } from '$lib/utils/materials';
   import { getCatalogItem } from '$lib/utils/furnitureCatalog';
+  import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
     import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
@@ -77,6 +78,33 @@
   // Calculate window distances  
   let windowDistFromA = $derived(selectedWindow && selectedWindowWall ? calcWallLength(selectedWindowWall) * selectedWindow.position : 0);
   let windowDistFromB = $derived(selectedWindow && selectedWindowWall ? calcWallLength(selectedWindowWall) * (1 - selectedWindow.position) : 0);
+
+  const STRAIGHTEN_TOLERANCE = 5; // degrees
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+  let wallAngleValue = $derived(selectedWall ? round2(calcWallAngle(selectedWall)) : 0);
+  let wallSkewValue = $derived(selectedWall && !selectedWall.curvePoint ? wallSkew(selectedWall) : 0);
+  let skewedWallCount = $derived(floor?.walls.filter(w => !w.curvePoint && calcWallLength(w) >= MIN_WALL_LENGTH && wallSkew(w) > 0.005 && wallSkew(w) <= STRAIGHTEN_TOLERANCE).length ?? 0);
+  let wallAngleError = $state<string | null>(null);
+  let straightenMessage = $state<string | null>(null);
+  $effect(() => { void selId; wallAngleError = null; straightenMessage = null; });
+
+  function onWallAngle(e: Event) {
+    if (!selectedWall) return;
+    const input = e.target as HTMLInputElement;
+    const parsed = Number.parseFloat(input.value.replace(',', '.').replace('°', ''));
+    if (!Number.isFinite(parsed)) { wallAngleError = $t('wallProperties.angleInvalid'); }
+    else if (round2(parsed) !== wallAngleValue) { wallAngleError = setWallAngle(selectedWall.id, parsed, fixedEndpoint); }
+    else { wallAngleError = null; }
+    input.value = String(round2(calcWallAngle(selectedWall)));
+  }
+  function snapWallAngle() {
+    if (!selectedWall) return;
+    wallAngleError = setWallAngle(selectedWall.id, Math.round(calcWallAngle(selectedWall) / 90) * 90, fixedEndpoint);
+  }
+  function onStraightenAll() {
+    const result = straightenWalls(STRAIGHTEN_TOLERANCE);
+    straightenMessage = typeof result === 'string' ? result : $t('wallProperties.straightened', { count: result });
+  }
 
   function onWallLength(e: Event) {
     if (!selectedWall) return;
@@ -208,6 +236,11 @@
     if (!selectedFurniture) return;
     dimensionInput(e, selectedFurniture.height ?? getCatalogItem(selectedFurniture.catalogId)?.height ?? 50,
       value => updateFurniture(selectedFurniture!.id, { height: value }));
+  }
+  let furnitureSurfaceBelow = $derived(selectedFurniture && floor ? surfaceBelow(selectedFurniture, floor.furniture) : 0);
+  function onFurnitureElevation(e: Event) {
+    if (!selectedFurniture) return;
+    dimensionInput(e, furnitureElevation(selectedFurniture), value => updateFurniture(selectedFurniture!.id, { elevation: value }), true);
   }
   function onFurnitureMaterial(e: Event) {
     if (!selectedFurniture) return;
@@ -376,6 +409,22 @@
         <input type="text" value={displayValue(wallLength)} onblur={onWallLength} onkeydown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
       </label>
       <p class="text-xs text-gray-500">{$t('wallProperties.entryHelp', { unit: unitLabel() })}</p>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('wallProperties.angle')}</span>
+        <input type="text" inputmode="decimal" data-wall-angle value={wallAngleValue} onblur={onWallAngle} onkeydown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      {#if wallSkewValue > 0.005 && wallSkewValue <= STRAIGHTEN_TOLERANCE}
+        <button onclick={snapWallAngle} data-wall-snap class="w-full px-2 py-1.5 border border-amber-300 bg-amber-50 text-amber-800 rounded text-sm hover:bg-amber-100 transition-colors">
+          {$t('wallProperties.snap', { skew: round2(wallSkewValue) })}
+        </button>
+      {/if}
+      {#if wallAngleError}<p role="alert" class="text-xs text-red-700">{wallAngleError}</p>{/if}
+      {#if skewedWallCount > 0}
+        <button onclick={onStraightenAll} data-straighten-all class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm hover:bg-gray-50 transition-colors" title={$t('wallProperties.straightenAllHint', { tolerance: STRAIGHTEN_TOLERANCE })}>
+          {$t('wallProperties.straightenAll', { count: skewedWallCount })}
+        </button>
+      {/if}
+      {#if straightenMessage}<p role="status" class="text-xs text-gray-500">{straightenMessage}</p>{/if}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('wallProperties.fixed')}</span>
         <select bind:value={fixedEndpoint} class="w-full px-2 py-1 border border-gray-200 rounded text-sm">
@@ -705,6 +754,22 @@
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('furnitureProperties.elevation')} ({unitLabel()})</span>
+        <input
+          type="number" data-furniture-elevation
+          value={displayValue(furnitureElevation(selectedFurniture))}
+          oninput={onFurnitureElevation} onblur={onFurnitureElevation} min="0" step="any"
+          class="w-full px-2 py-1 border border-gray-200 rounded text-sm"
+        />
+      </label>
+      {#if Math.abs(furnitureSurfaceBelow - furnitureElevation(selectedFurniture)) > 0.01}
+        <button
+          data-furniture-place-on-surface
+          onclick={() => { if (selectedFurniture) updateFurniture(selectedFurniture.id, { elevation: furnitureSurfaceBelow }); }}
+          class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm hover:bg-gray-50 transition-colors"
+        >{furnitureSurfaceBelow > 0 ? $t('furnitureProperties.placeOnObject', { height: displayValue(furnitureSurfaceBelow), unit: unitLabel() }) : $t('furnitureProperties.placeOnFloor')}</button>
+      {/if}
       
       <!-- Material -->
       <label class="block">

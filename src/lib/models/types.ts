@@ -118,6 +118,8 @@ export interface FurnitureItem {
   width?: number;   // cm
   depth?: number;   // cm
   height?: number;  // cm
+  /** Bottom of the object above the floor, in cm (e.g. a TV on a stand). Missing means 0. */
+  elevation?: number;
   material?: string; // material name/id
   locked?: boolean;
 }

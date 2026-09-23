@@ -20,6 +20,7 @@
   import { snapFurnitureToWalls } from '$lib/utils/furnitureGeometry';
   import { getCatalogItem, getFurnitureSize, type FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
+  import { byElevation } from '$lib/utils/furnitureStacking';
   import { handleGlobalShortcut, isEditingField, isControlKey } from '$lib/utils/shortcuts';
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
@@ -1225,7 +1226,7 @@
 
     // Furniture
     if (showFurniture) {
-      for (const fi of floor.furniture) {
+      for (const fi of byElevation(floor.furniture)) {
         const selected = isSelected(fi.id);
         if (selected && draggingFurnitureId === fi.id) drawAlignmentGuides(fi);
         drawFurniture(fi, selected);

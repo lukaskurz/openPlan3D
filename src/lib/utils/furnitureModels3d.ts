@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { FurnitureDef } from './furnitureCatalog';
+import { lSofaLayout } from './furnitureIcons';
 
 // Helper to darken/lighten colors
 function adjustColor(color: string, factor: number): number {
@@ -50,6 +51,9 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
     }
     case 'sofa':
       createSofa(group, w, d, h, color);
+      break;
+    case 'sofa_l':
+      createSofaL(group, w, d, h, color);
       break;
     case 'loveseat':
       createLoveseat(group, w, d, h, color);
@@ -338,6 +342,55 @@ function createSofa(group: THREE.Group, w: number, d: number, h: number, color: 
   const rightArm = new THREE.Mesh(armGeo, darkColor);
   rightArm.position.set(w * 0.425, h * 0.4, 0);
   group.add(rightArm);
+}
+
+/** Corner sectional: backs along the rear (-Z) and right (+X) sides, arms at both open ends. */
+function createSofaL(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const fabric = createMaterial(color);
+  const frame = createMaterial(color, 0.8, 0.05);
+  frame.color.multiplyScalar(0.82);
+  const { seat: S, back: B, arm: A } = lSofaLayout(w, d);
+  const x0 = -w / 2, z0 = -d / 2, x1 = w / 2, z1 = d / 2;
+  const seatTop = h * 0.5, baseTop = h * 0.32, armTop = h * 0.68;
+  // Axis-aligned box from plan corners (x, z) and a vertical span.
+  const box = (xa: number, za: number, xb: number, zb: number, ya: number, yb: number, material: THREE.Material, inset = 0) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(xb - xa - inset, 0.1), yb - ya, Math.max(zb - za - inset, 0.1)), material);
+    mesh.position.set((xa + xb) / 2, (ya + yb) / 2, (za + zb) / 2);
+    group.add(mesh);
+  };
+  // Plinth under the whole L
+  box(x0, z0, x1, z0 + S, 0, baseTop, frame);
+  box(x1 - S, z0 + S, x1, z1, 0, baseTop, frame);
+  // Backs
+  box(x0, z0, x1, z0 + B, baseTop, h, frame);
+  box(x1 - B, z0 + B, x1, z1, baseTop, h, frame);
+  // Arms
+  box(x0, z0 + B, x0 + A, z0 + S, baseTop, armTop, frame);
+  box(x1 - S, z1 - A, x1 - B, z1, baseTop, armTop, frame);
+  // Seat cushions along the long run, then the corner and return
+  const run = w - A - S, cushions = Math.max(1, Math.round(run / Math.max(S, 1)));
+  for (let i = 0; i < cushions; i++) {
+    const xa = x0 + A + run * i / cushions;
+    box(xa, z0 + B, xa + run / cushions, z0 + S, baseTop, seatTop, fabric, 1.5);
+  }
+  box(x1 - S, z0 + B, x1 - B, z0 + S, baseTop, seatTop, fabric, 1.5);
+  const ret = d - S - A, returnCushions = Math.max(1, Math.round(ret / Math.max(S, 1)));
+  for (let i = 0; i < returnCushions; i++) {
+    const za = z0 + S + ret * i / returnCushions;
+    box(x1 - S, za, x1 - B, za + ret / returnCushions, baseTop, seatTop, fabric, 1.5);
+  }
+  // Back cushions leaning on both backs
+  const cushionDepth = B * 0.9, backTop = h * 0.95;
+  const rearCushions = cushions + 1, rearRun = w - A - B;
+  for (let i = 0; i < rearCushions; i++) {
+    const xa = x0 + A + rearRun * i / rearCushions;
+    box(xa, z0 + B, xa + rearRun / rearCushions, z0 + B + cushionDepth, seatTop, backTop, fabric, 2);
+  }
+  const sideRun = d - S - A + (S - B - cushionDepth);
+  for (let i = 0; i < returnCushions; i++) {
+    const za = z0 + B + cushionDepth + sideRun * i / returnCushions;
+    box(x1 - B - cushionDepth, za, x1 - B, za + sideRun / returnCushions, seatTop, backTop, fabric, 2);
+  }
 }
 
 function createLoveseat(group: THREE.Group, w: number, d: number, h: number, color: string): void {

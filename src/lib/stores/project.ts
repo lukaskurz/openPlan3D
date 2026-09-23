@@ -5,7 +5,7 @@ import { wallPathProfile } from '$lib/utils/wallProfiles';
 import { duplicatePlanSelection, pastePlanSelection } from '$lib/utils/duplicateSelection';
 import { writable, derived, get } from 'svelte/store';
 import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem } from '$lib/models/types';
-import { planWallResize, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
+import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
 import { nextFloorLevel, floorElevations, validFloorElevation, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
 import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight } from '$lib/models/types';
@@ -668,6 +668,36 @@ export function resizeWallLength(id: string, length: number, fixed: WallEndpoint
     }
   }, 'Resized connected wall', `wall-length:${id}:${fixed}`);
   return null;
+}
+
+function applyWallChanges(changes: Map<string, Partial<Wall>>, description: string, coalesceKey?: string) {
+  mutate(f => {
+    for (const wall of f.walls) {
+      const updates = changes.get(wall.id);
+      if (updates) Object.assign(wall, updates);
+    }
+  }, description, coalesceKey);
+}
+
+export function setWallAngle(id: string, angle: number, fixed: WallEndpoint = 'start'): string | null {
+  const floor = get(activeFloor);
+  if (!floor) return 'Select a floor first.';
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = planWallAngle(floor.walls, id, angle, fixed); }
+  catch (error) { return error instanceof Error ? error.message : 'The wall could not be rotated.'; }
+  if (changes.size) applyWallChanges(changes, 'Rotated wall', `wall-angle:${id}:${fixed}`);
+  return null;
+}
+
+/** Returns the number of walls moved, or an error message. */
+export function straightenWalls(tolerance?: number): number | string {
+  const floor = get(activeFloor);
+  if (!floor) return 'Select a floor first.';
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = planStraightenWalls(floor.walls, tolerance); }
+  catch (error) { return error instanceof Error ? error.message : 'The walls could not be straightened.'; }
+  if (changes.size) applyWallChanges(changes, 'Straightened walls');
+  return changes.size;
 }
 
 function unchangedFields(current: object, updates: object): boolean {

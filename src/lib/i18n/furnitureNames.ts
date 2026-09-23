@@ -5,6 +5,7 @@ import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 // Display names only: catalog IDs and saved project data remain unchanged.
 export const portugueseFurnitureNames: Readonly<Record<string, string>> = {
   "sofa": "Sofá",
+  "sofa_l": "Sofá em L",
   "loveseat": "Sofá de dois lugares",
   "chair": "Poltrona",
   "coffee_table": "Mesa de centro",
