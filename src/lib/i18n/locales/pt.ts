@@ -555,7 +555,7 @@ export const pt = {
   "buildTools.text": "Rótulo de texto",
   "buildTools.textHelp": "Adicionar anotações de texto (T)",
   "buildTools.dimension": "Dimensão",
-  "buildTools.dimensionHelp": "Adicionar anotações de dimensão (N)",
+  "buildTools.dimensionHelp": "Cotar paredes e cantos (N)",
   "buildTools.measure": "Medir",
   "buildTools.measureHelp": "Medir distâncias (M)",
   "buildTools.import": "Importar",
@@ -1532,4 +1532,9 @@ export const pt = {
   "dimensionHints.cornerSecond": "Clique noutro canto ou numa parede · Esc para cancelar",
   "dimensionHints.place": "Clique para colocar a cota · Esc para cancelar",
   "dimensionHints.plain": "Clique no segundo ponto da cota simples · Esc para cancelar",
+  "constraintStatus.full": "Totalmente restringida",
+  "constraintStatus.dof": "Restam {count} graus de liberdade",
+  "constraintStatus.dofOne": "Resta 1 grau de liberdade",
+  "constraintStatus.fixHint": "fixe uma parede para prender a planta",
+  "constraintStatus.conflicts": "{count} restrições não cumpridas",
 } as const;

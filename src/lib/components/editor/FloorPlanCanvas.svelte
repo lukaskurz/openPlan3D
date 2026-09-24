@@ -130,6 +130,8 @@
   let editingConstraintId: string | null = $state(null);
   let editingConstraintPos = $state({ x: 0, y: 0 });
   let draggingConstraintId: string | null = null;
+  /** Shown while working with constraints: remaining freedom, and anything left unsatisfied. */
+  let constraintStatus: { dof: number; conflicts: number; fixed: boolean; show: boolean } | null = $state(null);
   let constraintDragStarted = false;
   let notice: { text: string; tone: 'info' | 'error'; at: number } | null = $state(null);
   let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1872,6 +1874,24 @@
         selectedId: isConstraintId(currentSelectedId) ? currentSelectedId : null,
       }, constraintData.sketch);
     }
+    // Constraint status: fully constrained walls dark, the rest blue, while constraints are being edited.
+    const editingConstraints = annotating || !!constraintPick || isConstraintId(currentSelectedId);
+    if (floor && constraintData && editingConstraints) {
+      ctx.save();
+      ctx.lineWidth = 2; ctx.lineCap = 'round';
+      for (const w of floor.walls) {
+        if (!constraintData.analysis.constrainedWalls.has(w.id) || w.curvePoint) continue;
+        const a = worldToScreen(w.start.x, w.start.y), b = worldToScreen(w.end.x, w.end.y);
+        ctx.strokeStyle = constraintData.analysis.fullyConstrainedWalls.has(w.id) ? '#1e1b4b' : '#3b82f6';
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    const status = floor && constraintData ? {
+      dof: constraintData.analysis.dof, conflicts: constraintData.analysis.conflicts.size,
+      fixed: !!floor.constraints?.some(c => c.kind === 'fix'), show: editingConstraints || constraintData.analysis.conflicts.size > 0,
+    } : null;
+    if (JSON.stringify(status) !== JSON.stringify(constraintStatus)) constraintStatus = status;
     if (annotating && floor) {
       for (const pick of dimensionPicks) drawPickHighlight(getCS(), pick, floor.walls, '#4f46e5');
       if (dimensionHover) drawPickHighlight(getCS(), dimensionHover, floor.walls);
@@ -4293,6 +4313,17 @@
   {/if}
   {#if editingConstraintId}
     <DimensionEditor id={editingConstraintId} x={Math.max(136, Math.min(width - 136, editingConstraintPos.x))} y={Math.min(editingConstraintPos.y, height - 150)} onclose={() => { editingConstraintId = null; canvas.focus(); }} />
+  {/if}
+  {#if constraintStatus?.show}
+    <div class="pointer-events-none absolute left-8 top-8 z-20 rounded-full border px-2.5 py-1 text-xs shadow-sm {constraintStatus.conflicts ? 'border-red-200 bg-red-50 text-red-700' : constraintStatus.dof === 0 ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-gray-200 bg-white text-gray-600'}" data-constraint-status>
+      {#if constraintStatus.conflicts}
+        {$t('constraintStatus.conflicts', { count: constraintStatus.conflicts })}
+      {:else if constraintStatus.dof === 0}
+        ✓ {$t('constraintStatus.full')}
+      {:else}
+        {$t(constraintStatus.dof === 1 ? 'constraintStatus.dofOne' : 'constraintStatus.dof', { count: constraintStatus.dof })}{#if !constraintStatus.fixed} · {$t('constraintStatus.fixHint')}{/if}
+      {/if}
+    </div>
   {/if}
   {#if notice}
     <div class="pointer-events-auto absolute top-24 left-1/2 z-30 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border px-3 py-2 text-sm shadow-lg {notice.tone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-indigo-200 bg-white text-gray-700'}" role={notice.tone === 'error' ? 'alert' : 'status'} data-plan-notice>

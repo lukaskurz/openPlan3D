@@ -3,6 +3,7 @@ import type { Locale } from '$lib/i18n';
 import { furnitureName } from '$lib/i18n/furnitureNames';
 import { getEntourageDef } from './entourageCatalog';
 import { canvasSymbolDxf } from './canvasSymbolDxf';
+import { floorDimensionShapes, dxfArcAngles } from './constraintRenderer';
 import { drawStair } from './canvasRenderer';
 import { columnPlanCorners } from './columnPlanGeometry';
 import { hasPlanExportContent } from './planExportContent';
@@ -108,6 +109,19 @@ export function exportDXF(project: Project, language: Locale = 'en') {
       for (const side of [-1,1]) d.drawLine(point.x,-point.y,point.x+g.ux*7*sign+g.nx*3*side,-(point.y+g.uy*7*sign+g.ny*3*side));
     }
     d.drawText(g.center.x,-g.center.y+4,11,0,note.label || formatLength(g.length,get(projectSettings).units),'center','bottom');
+  }
+
+  for (const { shape } of floorDimensionShapes(floor, get(projectSettings).units)) {
+    if (shape.kind === 'linear') {
+      for (const [p, q] of shape.ext) d.drawLine(p.x, -p.y, q.x, -q.y);
+      d.drawLine(shape.from.x, -shape.from.y, shape.to.x, -shape.to.y);
+      d.drawText((shape.from.x + shape.to.x) / 2, -(shape.from.y + shape.to.y) / 2 + 4, 11, 0, shape.text, 'center', 'bottom');
+    } else if (shape.kind === 'arc') {
+      const { start, end } = dxfArcAngles(shape);
+      d.drawArc(shape.center.x, -shape.center.y, shape.radius, start, end);
+      const m = -(start + end) / 2 * Math.PI / 180;
+      d.drawText(shape.center.x + Math.cos(m) * (shape.radius + 14), -(shape.center.y + Math.sin(m) * (shape.radius + 14)), 11, 0, shape.text, 'center', 'middle');
+    }
   }
 
   d.addLayer('MEASUREMENTS', 1, 'DASHED');

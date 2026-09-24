@@ -1,6 +1,7 @@
 import type { CustomEntourageDef, Floor, Point, Project } from '$lib/models/types';
 import { getFurnitureSize } from './furnitureCatalog';
 import { wallPointAt, entourageAspect } from './canvasRenderer';
+import { dimensionShapePoints, floorDimensionShapes } from './constraintRenderer';
 
 export type PrintOptions = { pageSize: 'a4' | 'letter'; orientation: 'landscape' | 'portrait'; scale: 'fit' | 25 | 50 | 100 | 200 };
 export type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
@@ -33,6 +34,7 @@ export function printBounds(floor: Floor, customEntourage?: CustomEntourageDef[]
     box({ x: item.x1, y: item.y1 }, Math.abs(item.offset ?? 40) * 2);
     box({ x: item.x2, y: item.y2 }, Math.abs(item.offset ?? 40) * 2);
   }
+  for (const { shape } of floorDimensionShapes(floor, 'metric')) points.push(...dimensionShapePoints(shape));
   for (const item of floor.textAnnotations ?? []) box({ x: item.x, y: item.y }, item.fontSize * Math.max(item.text.length, 1), item.fontSize * 2, item.rotation);
   const valid = points.filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
   if (!valid.length) return null;

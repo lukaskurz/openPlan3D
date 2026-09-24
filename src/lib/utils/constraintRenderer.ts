@@ -2,7 +2,8 @@
  * Drawing and hit testing for parametric dimensions and constraint badges on the 2D plan.
  * Shapes are computed in world coordinates (shared with exports), then drawn in screen space.
  */
-import type { Constraint, Point, Wall } from '$lib/models/types';
+import type { Constraint, Floor, Point, Wall } from '$lib/models/types';
+import { analyzeConstraints } from './constraints';
 import type { CanvasState } from './canvasInteraction';
 import { formatLength } from '$lib/stores/settings';
 import { buildSketch, endpointKey, refKey, type Sketch } from './constraints/sketch';
@@ -290,4 +291,58 @@ export function drawPickHighlight(cs: CanvasState, pick: DimensionPick, walls: W
 export function constraintLabelPosition(cs: CanvasState, c: Constraint, walls: Wall[], units: 'metric' | 'imperial', sketch = buildSketch(walls)): Point | null {
   const shape = constraintShapes(c, sketch, 0, units).find(s => s.kind !== 'badge');
   return shape ? shapeLabel(cs, shape) : null;
+}
+
+/** The floor's dimensions (no badges), measured now; for exports and content bounds. */
+export function floorDimensionShapes(floor: Floor, units: 'metric' | 'imperial'): { constraint: Constraint; shape: ConstraintShape }[] {
+  if (!floor.constraints?.length) return [];
+  const measures = analyzeConstraints(floor.walls, floor.constraints).measures, sketch = buildSketch(floor.walls);
+  return floor.constraints.flatMap(constraint => constraintShapes(constraint, sketch, measures.get(constraint.id) ?? null, units)
+    .filter(shape => shape.kind !== 'badge').map(shape => ({ constraint, shape })));
+}
+
+/** Parametric dimensions on exported and printed plans (reference ones stay grey, no conflict colours). */
+export function drawFloorDimensions(cs: CanvasState, floor: Floor, units: 'metric' | 'imperial') {
+  for (const { constraint, shape } of floorDimensionShapes(floor, units)) drawConstraintShape(cs, shape, constraint.driven ? 'driven' : 'driving', false);
+}
+
+/** World points a dimension occupies, for plan bounds. */
+export function dimensionShapePoints(shape: ConstraintShape): Point[] {
+  if (shape.kind === 'linear') return [shape.from, shape.to, ...shape.ext.flat()];
+  if (shape.kind === 'arc') return [-1, 1].flatMap(sx => [-1, 1].map(sy => ({ x: shape.center.x + sx * shape.radius, y: shape.center.y + sy * shape.radius })));
+  return [shape.at];
+}
+
+/** SVG markup for the floor's dimensions; `tx`/`ty` map world coordinates into the drawing. */
+export function dimensionsSvg(floor: Floor, units: 'metric' | 'imperial', tx: (x: number) => number, ty: (y: number) => number, escape: (text: string) => string): string {
+  let svg = '';
+  for (const { constraint, shape } of floorDimensionShapes(floor, units)) {
+    const color = constraint.driven ? COLORS.driven : COLORS.driving, dash = constraint.driven ? ' stroke-dasharray="5 3"' : '';
+    if (shape.kind === 'linear') {
+      const a = { x: tx(shape.from.x), y: ty(shape.from.y) }, b = { x: tx(shape.to.x), y: ty(shape.to.y) };
+      for (const [p, q] of shape.ext) svg += `  <line x1="${tx(p.x)}" y1="${ty(p.y)}" x2="${tx(q.x)}" y2="${ty(q.y)}" stroke="${color}" stroke-width="0.75"/>\n`;
+      svg += `  <line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${color}" stroke-width="1.25"${dash}/>\n`;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      if (len > 1) {
+        const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, arrow = Math.min(8, len / 3), w = arrow * 0.4;
+        for (const [p, dir] of [[a, 1], [b, -1]] as const) {
+          svg += `  <polygon points="${p.x},${p.y} ${p.x + ux * arrow * dir - uy * w},${p.y + uy * arrow * dir + ux * w} ${p.x + ux * arrow * dir + uy * w},${p.y + uy * arrow * dir - ux * w}" fill="${color}"/>\n`;
+        }
+      }
+      svg += `  <text x="${(a.x + b.x) / 2}" y="${(a.y + b.y) / 2 - 4}" text-anchor="middle" font-size="11" font-weight="600" fill="${color}" font-family="sans-serif">${escape(shape.text)}</text>\n`;
+    } else if (shape.kind === 'arc') {
+      const d = sweep(shape), c = { x: tx(shape.center.x), y: ty(shape.center.y) }, r = shape.radius;
+      const p0 = { x: c.x + Math.cos(shape.from) * r, y: c.y + Math.sin(shape.from) * r }, p1 = { x: c.x + Math.cos(shape.from + d) * r, y: c.y + Math.sin(shape.from + d) * r };
+      svg += `  <path d="M ${p0.x} ${p0.y} A ${r} ${r} 0 0 ${d > 0 ? 1 : 0} ${p1.x} ${p1.y}" fill="none" stroke="${color}" stroke-width="1.25"${dash}/>\n`;
+      const m = shape.from + d / 2;
+      svg += `  <text x="${c.x + Math.cos(m) * (r + 14)}" y="${c.y + Math.sin(m) * (r + 14) + 4}" text-anchor="middle" font-size="11" font-weight="600" fill="${color}" font-family="sans-serif">${escape(shape.text)}</text>\n`;
+    }
+  }
+  return svg;
+}
+
+/** Arc sweep in DXF terms (Y up, counter-clockwise), in degrees. */
+export function dxfArcAngles(shape: Extract<ConstraintShape, { kind: 'arc' }>): { start: number; end: number } {
+  const from = -shape.from * 180 / Math.PI, d = -sweep(shape) * 180 / Math.PI;
+  return d >= 0 ? { start: from, end: from + d } : { start: from + d, end: from };
 }
