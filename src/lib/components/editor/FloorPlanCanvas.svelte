@@ -21,6 +21,7 @@
   import { getCatalogItem, getFurnitureSize, type FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
   import { byElevation } from '$lib/utils/furnitureStacking';
+  import { createWheelInterpreter } from '$lib/utils/wheelGestures';
   import { handleGlobalShortcut, isEditingField, isControlKey } from '$lib/utils/shortcuts';
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
@@ -1937,8 +1938,12 @@
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('gesturestart', onGestureStart, { passive: false });
+    canvas.addEventListener('gesturechange', onGestureChange, { passive: false });
+    canvas.addEventListener('gestureend', onGestureEnd, { passive: false });
 
-    return () => { mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub14(); unsub_col(); unsub_cols(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); };
+    return () => { mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub14(); unsub_col(); unsub_cols(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('gesturestart', onGestureStart); canvas.removeEventListener('gesturechange', onGestureChange); canvas.removeEventListener('gestureend', onGestureEnd); };
   });
 
   /** Compute world bounding box of all elements */
@@ -3155,45 +3160,56 @@
     wallSnapInfo = null;
   }
 
+  function zoomAt(clientX: number, clientY: number, factor: number) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = clientX - rect.left, sy = clientY - rect.top;
+    const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
+    // Keep the world point under the cursor fixed
+    const worldX = (sx - width / 2) / zoom + camX;
+    const worldY = (sy - height / 2) / zoom + camY;
+    camX = worldX - (sx - width / 2) / newZoom;
+    camY = worldY - (sy - height / 2) / newZoom;
+    zoom = newZoom;
+  }
+
+  const interpretWheel = createWheelInterpreter();
   function onWheel(e: WheelEvent) {
     markDirty();
     e.preventDefault();
-    if (currentPlacingId && !e.ctrlKey) {
-      // Rotate furniture preview
-      const delta = e.deltaY > 0 ? 15 : -15;
-      placingRotation.update(r => (r + delta) % 360);
-      return;
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-
-    if (e.ctrlKey) {
-      // Pinch-to-zoom on trackpad (or Ctrl+scroll)
-      const factor = e.deltaY > 0 ? 0.95 : 1.05;
-      const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
-      // Zoom towards cursor position
-      const worldX = (sx - width / 2) / zoom + camX;
-      const worldY = (sy - height / 2) / zoom + camY;
-      camX = worldX - (sx - width / 2) / newZoom;
-      camY = worldY - (sy - height / 2) / newZoom;
-      zoom = newZoom;
-    } else if (Math.abs(e.deltaX) > 0) {
-      // Two-finger trackpad pan (deltaX present means trackpad gesture)
-      camX += e.deltaX / zoom;
-      camY += e.deltaY / zoom;
+    const action = interpretWheel(e as WheelEvent & { wheelDeltaY?: number });
+    if (action.kind === 'zoom') {
+      // Safari reports the same pinch through gesture events; don't apply it twice.
+      if (!safariGesture) zoomAt(e.clientX, e.clientY, action.factor);
+    } else if (action.kind === 'pan') {
+      // Two-finger trackpad scroll pans in every direction
+      camX += action.dx / zoom;
+      camY += action.dy / zoom;
+    } else if (currentPlacingId) {
+      // Mouse wheel rotates the furniture preview
+      placingRotation.update(r => (r + action.direction * 15) % 360);
     } else {
-      // Regular scroll wheel: zoom towards cursor
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
-      // Zoom towards cursor position
-      const worldX = (sx - width / 2) / zoom + camX;
-      const worldY = (sy - height / 2) / zoom + camY;
-      camX = worldX - (sx - width / 2) / newZoom;
-      camY = worldY - (sy - height / 2) / newZoom;
-      zoom = newZoom;
+      zoomAt(e.clientX, e.clientY, action.direction > 0 ? 0.9 : 1.1);
     }
+  }
+
+  // Safari (macOS) delivers trackpad pinches as non-standard gesture events with a cumulative scale.
+  type SafariGestureEvent = UIEvent & { scale: number; clientX: number; clientY: number };
+  let safariGesture: { scale: number } | null = null;
+  function onGestureStart(e: Event) {
+    e.preventDefault();
+    safariGesture = { scale: (e as SafariGestureEvent).scale || 1 };
+  }
+  function onGestureChange(e: Event) {
+    e.preventDefault();
+    const g = e as SafariGestureEvent;
+    if (!safariGesture || !g.scale) return;
+    zoomAt(g.clientX, g.clientY, g.scale / safariGesture.scale);
+    safariGesture.scale = g.scale;
+    markDirty();
+  }
+  function onGestureEnd(e: Event) {
+    e.preventDefault();
+    safariGesture = null;
   }
 
   // ── Touch input (phones/tablets) ──────────────────────────────────
@@ -3944,7 +3960,6 @@
     onmousemove={onMouseMove}
     onmouseup={onMouseUp}
     ondblclick={onDblClick}
-    onwheel={onWheel}
     oncontextmenu={onContextMenu}
     ondragover={onDragOver}
     ondragleave={onDragLeave}
