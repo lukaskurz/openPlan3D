@@ -26,6 +26,8 @@ const dot = (a: Point, b: Point) => a.x * b.x + a.y * b.y;
 const unit = (v: Point): Point => { const l = Math.hypot(v.x, v.y) || 1; return { x: v.x / l, y: v.y / l }; };
 const wallDir = (w: Wall) => unit(sub(w.end, w.start));
 const mid = (w: Wall): Point => ({ x: (w.start.x + w.end.x) / 2, y: (w.start.y + w.end.y) / 2 });
+/** Badges sit off-centre so they don't cover the centred length labels. */
+const along = (w: Wall, t: number): Point => ({ x: w.start.x + (w.end.x - w.start.x) * t, y: w.start.y + (w.end.y - w.start.y) * t });
 
 /** "3.85 m" / "12'6"" for lengths, "90°" for angles; driven dimensions in parentheses like Fusion. */
 export function constraintText(c: Constraint, value: number, units: 'metric' | 'imperial'): string {
@@ -89,12 +91,12 @@ export function constraintShapes(c: Constraint, sketch: Sketch, value: number | 
     }
     case 'horizontal': case 'vertical': {
       const w = wall(c.wallId);
-      return w ? [{ kind: 'badge', at: mid(w), normal: wallNormal(w), clearance: w.thickness / 2, glyph: c.kind === 'horizontal' ? 'H' : 'V' }] : [];
+      return w ? [{ kind: 'badge', at: along(w, 0.25), normal: wallNormal(w), clearance: w.thickness / 2, glyph: c.kind === 'horizontal' ? 'H' : 'V' }] : [];
     }
     case 'parallel': case 'perpendicular': {
       const glyph = c.kind === 'parallel' ? '∥' : '⊥';
       return [c.wallA, c.wallB].map(wall).filter((w): w is Wall => !!w)
-        .map(w => ({ kind: 'badge' as const, at: mid(w), normal: { x: -wallNormal(w).x, y: -wallNormal(w).y }, clearance: w.thickness / 2, glyph }));
+        .map(w => ({ kind: 'badge' as const, at: along(w, 0.75), normal: wallNormal(w), clearance: w.thickness / 2, glyph }));
     }
     case 'fix': {
       const keys = 'end' in c.target ? [refKey(c.target)] : [endpointKey(c.target.wallId, 'start'), endpointKey(c.target.wallId, 'end')];

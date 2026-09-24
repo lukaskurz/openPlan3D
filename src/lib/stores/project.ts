@@ -12,7 +12,7 @@ import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight 
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
-import type { Constraint, NewConstraint } from '$lib/models/types';
+import type { Constraint, CornerRef, NewConstraint } from '$lib/models/types';
 import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
 import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
 
@@ -829,6 +829,35 @@ export function updateConstraint(id: string, updates: Partial<{ side: 0 | 1 | -1
 
 export function removeConstraint(id: string) {
   removeElement(id);
+}
+
+export type GeometricConstraintKind = 'horizontal' | 'vertical' | 'parallel' | 'perpendicular' | 'fix';
+/** Constrain tool waiting for walls (or a corner, for Fix) to be clicked; null when inactive. */
+export const constraintPickMode = writable<GeometricConstraintKind | null>(null);
+selectedTool.subscribe(() => constraintPickMode.set(null));
+
+/** Add a geometric constraint to walls (and a corner, for Fix), holding them as they are now. */
+export function addGeometricConstraint(kind: GeometricConstraintKind, wallIds: string[], corner?: CornerRef): AddConstraintResult {
+  const floor = get(activeFloor);
+  if (!floor) return { error: 'Select a floor first.' };
+  const walls = wallIds.map(id => floor.walls.find(w => w.id === id));
+  if (walls.some(w => !w)) return { error: 'Pick walls on this floor.' };
+  if (walls.some(w => w!.curvePoint)) return { error: 'Curved walls can’t be constrained.' };
+  if (kind === 'fix') {
+    if (corner) {
+      const wall = floor.walls.find(w => w.id === corner.wallId);
+      return wall ? addConstraint({ kind, target: corner, at: [{ ...wall[corner.end] }] }) : { error: 'Pick a corner on this floor.' };
+    }
+    return addConstraint({ kind, target: { wallId: walls[0]!.id }, at: [{ ...walls[0]!.start }, { ...walls[0]!.end }] });
+  }
+  if (kind === 'horizontal' || kind === 'vertical') return addConstraint({ kind, wallId: walls[0]!.id });
+  if (walls.length < 2 || walls[0]!.id === walls[1]!.id) return { error: 'Pick two different walls.' };
+  return addConstraint({ kind, wallA: walls[0]!.id, wallB: walls[1]!.id });
+}
+
+/** The geometric constraint of `kind` on exactly this wall, if any (H, V or a whole-wall fix). */
+export function wallConstraint(floor: Floor | null | undefined, wallId: string, kind: 'horizontal' | 'vertical' | 'fix'): Constraint | undefined {
+  return floor?.constraints?.find(c => c.kind === kind && (c.kind === 'fix' ? !('end' in c.target) && c.target.wallId === wallId : 'wallId' in c && c.wallId === wallId));
 }
 
 function unchangedFields(current: object, updates: object): boolean {

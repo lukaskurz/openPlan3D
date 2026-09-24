@@ -13,7 +13,7 @@
   import type { DetailTarget } from '$lib/models/types';
   import { catalogAssetUrl } from '$lib/utils/catalogAssetUrl';
 
-  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, setWallAngle, straightenWalls, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
+  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, setWallAngle, straightenWalls, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId, addGeometricConstraint, removeConstraint, wallConstraint } from '$lib/stores/project';
   import { wallLength as calcWallLength, wallAngle as calcWallAngle, wallSkew, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
   import { openingOnWall } from '$lib/utils/wallProfiles';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
@@ -31,6 +31,20 @@
 
   onDestroy(activeFloor.subscribe((f) => { floor = f; }));
   onDestroy(selectedElementId.subscribe((id) => { selId = id; }));
+  // Floors are edited in place; this version makes constraint states follow every edit.
+  let projectVersion = $state(0);
+  onDestroy(currentProject.subscribe(() => { projectVersion++; }));
+  function wallHas(kind: 'horizontal' | 'vertical' | 'fix'): boolean {
+    void projectVersion;
+    return !!selectedWall && !!wallConstraint(floor, selectedWall.id, kind);
+  }
+  function toggleWallConstraint(kind: 'horizontal' | 'vertical' | 'fix') {
+    if (!selectedWall) return;
+    const existing = wallConstraint(floor, selectedWall.id, kind);
+    if (existing) { removeConstraint(existing.id); return; }
+    const result = addGeometricConstraint(kind, [selectedWall.id]);
+    wallAngleError = 'error' in result ? result.error : null;
+  }
   onDestroy(selectedRoomId.subscribe((id) => { selRoomId = id; }));
   onDestroy(detectedRoomsStore.subscribe((rooms) => { detectedRooms = rooms; }));
 
@@ -445,6 +459,21 @@
         </button>
       {/if}
       {#if straightenMessage}<p role="status" class="text-xs text-gray-500">{straightenMessage}</p>{/if}
+      {#if !selectedWall.curvePoint}
+        <div>
+          <span class="text-xs text-gray-500">{$t('wallProperties.constraints')}</span>
+          <div class="mt-1 grid grid-cols-3 gap-1" role="group" aria-label={$t('wallProperties.constraints')}>
+            {#each [['horizontal', 'constraintKinds.horizontal'], ['vertical', 'constraintKinds.vertical'], ['fix', 'constraintKinds.fix']] as const as [kind, label]}
+              <button
+                class="rounded border px-2 py-1 text-xs transition-colors {wallHas(kind) ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}"
+                aria-pressed={wallHas(kind)}
+                data-wall-constraint={kind}
+                onclick={() => toggleWallConstraint(kind)}
+              >{$t(label)}</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('wallProperties.fixed')}</span>
         <select bind:value={fixedEndpoint} class="w-full px-2 py-1 border border-gray-200 rounded text-sm">

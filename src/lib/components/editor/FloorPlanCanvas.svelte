@@ -26,7 +26,7 @@
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
   import DimensionEditor from './DimensionEditor.svelte';
-  import { addConstraint, planNotice, showPlanNotice, updateConstraint } from '$lib/stores/project';
+  import { addConstraint, addGeometricConstraint, constraintPickMode, planNotice, showPlanNotice, updateConstraint, type GeometricConstraintKind } from '$lib/stores/project';
   import { analyzeConstraints, buildSketch, type ConstraintAnalysis, type Sketch } from '$lib/utils/constraints';
   import { dimensionFromPicks, dimensionOffset, pickAt, samePick, type DimensionPick } from '$lib/utils/constraints/picking';
   import { constraintLabelPosition, drawConstraintPreview, drawConstraints, drawPickHighlight, hitTestConstraint } from '$lib/utils/constraintRenderer';
@@ -173,6 +173,24 @@
     const p = constraintLabelPosition(getCS(), c, currentFloor.walls, dimSettings.units);
     if (p && (Math.abs(p.x - editingConstraintPos.x) > 0.5 || Math.abs(p.y - editingConstraintPos.y) > 0.5)) editingConstraintPos = p;
   }
+  // Constrain tool: walls (or a corner for Fix) are clicked to receive the constraint.
+  let constraintPick: GeometricConstraintKind | null = $state(null);
+  let constraintPickWalls: string[] = $state([]);
+  onDestroy(constraintPickMode.subscribe(mode => { constraintPick = mode; constraintPickWalls = []; dimensionHover = null; markDirty(); }));
+  function constraintPickClick(wp: Point) {
+    if (!currentFloor || !constraintPick) return;
+    const pick = pickAt(currentFloor.walls, wp, zoom, { corners: constraintPick === 'fix' });
+    if (!pick) return;
+    let result;
+    if (pick.kind === 'corner') result = addGeometricConstraint('fix', [pick.ref.wallId], pick.ref);
+    else if (constraintPick === 'parallel' || constraintPick === 'perpendicular') {
+      if (!constraintPickWalls.length || constraintPickWalls[0] === pick.wallId) { constraintPickWalls = [pick.wallId]; return; }
+      result = addGeometricConstraint(constraintPick, [constraintPickWalls[0], pick.wallId]);
+      constraintPickWalls = [];
+    } else result = addGeometricConstraint(constraintPick, [pick.wallId]);
+    if ('error' in result) showPlanNotice(result.error, 'error');
+  }
+
   /** Surfaces between two walls; otherwise the Dimensions setting (centreline or edge). */
   function dimensionSurface(picks: DimensionPick[]) {
     return (picks.length === 2 && picks.every(p => p.kind === 'wall')) || dimSettings.wallMeasureMode === 'edge';
@@ -1851,6 +1869,10 @@
         ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
       }
     }
+    if (constraintPick && floor) {
+      for (const wallId of constraintPickWalls) drawPickHighlight(getCS(), { kind: 'wall', wallId }, floor.walls, '#4f46e5');
+      if (dimensionHover) drawPickHighlight(getCS(), dimensionHover, floor.walls);
+    }
     if (editingConstraintId) updateConstraintEditorPosition();
     // Text annotations
     if (layerVis.textAnnotations && floor) drawTextAnnotations(floor);
@@ -2401,6 +2423,7 @@
     if (tool === 'select' && currentFloor && e.detail === 1) {
       selectionPress = { floorId: currentFloor.id, x: e.clientX, y: e.clientY, world: wp };
     }
+    if (constraintPick && currentFloor) { constraintPickClick(wp); return; }
 
     // Elevation pick mode: the next wall clicked opens its elevation view;
     // clicking empty canvas cancels. Consumes the click either way so the
@@ -2927,6 +2950,10 @@
 
     if (annotating && currentFloor && !annotationStart) {
       dimensionHover = e.altKey ? null : pickAt(currentFloor.walls, mousePos, zoom);
+      markDirty();
+    }
+    if (constraintPick && currentFloor) {
+      dimensionHover = pickAt(currentFloor.walls, mousePos, zoom, { corners: constraintPick === 'fix' });
       markDirty();
     }
     if (draggingConstraintId && currentFloor) {
@@ -3674,6 +3701,7 @@
       dimensionPicks = [];
       dimensionHover = null;
       editingConstraintId = null;
+      constraintPickMode.set(null);
       marqueeStart = null;
       marqueeEnd = null;
     }
@@ -4499,8 +4527,15 @@
     </div>
   {/if}
   {#if annotating}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {annotationStart ? 'Click second point to create annotation' : 'Click first point'} · N to exit · Esc to cancel
+    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs shadow max-w-[90%] text-center">
+      {$t(annotationStart ? 'dimensionHints.plain' : dimensionPicks.length === 2 ? 'dimensionHints.place' : dimensionPicks[0]?.kind === 'corner' ? 'dimensionHints.cornerSecond' : dimensionPicks.length ? 'dimensionHints.second' : 'dimensionHints.start')}
+    </div>
+  {/if}
+  {#if constraintPick}
+    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs shadow max-w-[90%] text-center" data-constrain-hint>
+      {constraintPick === 'fix' ? $t('constrainHints.pickFix') : constraintPick === 'parallel' || constraintPick === 'perpendicular'
+        ? $t(constraintPickWalls.length ? 'constrainHints.pickSecond' : 'constrainHints.pickFirst')
+        : $t('constrainHints.pickWall', { kind: $t(`constraintKinds.${constraintPick}`).toLowerCase() })}
     </div>
   {/if}
 

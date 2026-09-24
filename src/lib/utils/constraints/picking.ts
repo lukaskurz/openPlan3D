@@ -20,10 +20,10 @@ function distanceToSegment(p: Point, a: Point, b: Point): number {
 }
 
 /** A corner beats a wall; curved walls can't be dimensioned. */
-export function pickAt(walls: Wall[], p: Point, zoom: number): DimensionPick | null {
+export function pickAt(walls: Wall[], p: Point, zoom: number, { corners = true } = {}): DimensionPick | null {
   let corner: DimensionPick | null = null, best = CORNER_PICK / zoom;
   for (const wall of walls) {
-    if (wall.curvePoint) continue;
+    if (wall.curvePoint || !corners) continue;
     for (const end of ['start', 'end'] as const) {
       const d = Math.hypot(wall[end].x - p.x, wall[end].y - p.y);
       if (d < best) { best = d; corner = { kind: 'corner', ref: { wallId: wall.id, end }, point: { ...wall[end] } }; }
