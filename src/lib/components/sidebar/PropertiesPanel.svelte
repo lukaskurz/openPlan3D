@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ConstraintProperties from './ConstraintProperties.svelte';
   import { wallMaterialLabels } from '$lib/i18n/wallMaterialLabels';
   import { entourageLabels } from '$lib/i18n/entourageLabels';
   import { roomTypeLabels, roomColorLabels, floorGroupLabels, floorMaterialLabels } from '$lib/i18n/roomPropertyLabels';
@@ -56,6 +57,7 @@
   let selectedColumn = $derived(floor?.columns?.find(c => c.id === selId) ?? null);
   let selectedTextAnnotation = $derived(floor?.textAnnotations?.find(t => t.id === selId) ?? null);
   let selectedEntourage = $derived(floor?.entourage?.find(en => en.id === selId) ?? null);
+  let selectedConstraint = $derived(floor?.constraints?.find(c => c.id === selId) ?? null);
   let hasBgImage = $derived(!!floor?.backgroundImage);
   let selectedRoom = $derived(floor && selRoomId
     ? resolveRooms(floor, detectedRooms).find(r => r.id === selRoomId) ?? null
@@ -411,7 +413,7 @@
     { label: '🧶 Carpet', ids: ['carpet-beige', 'carpet-gray'] },
   ];
 
-  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || (!is3D && hasBgImage));
+  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || !!selectedConstraint || (!is3D && hasBgImage));
 </script>
 
 <!-- Right sidebar on md+; slides up as a bottom sheet on phones -->
@@ -1084,6 +1086,8 @@
         </label>
       {/if}
     </div>
+  {:else if selectedConstraint}
+    <ConstraintProperties constraint={selectedConstraint} />
   {:else if selectedTextAnnotation}
     <div class="space-y-3">
       <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">

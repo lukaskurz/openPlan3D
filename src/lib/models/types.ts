@@ -203,6 +203,9 @@ export type Constraint = ConstraintBase & (
 );
 export type ConstraintKind = Constraint['kind'];
 export type DimensionConstraint = Extract<Constraint, { value: number }>;
+type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
+/** A constraint before the store gives it an id. */
+export type NewConstraint = WithoutId<Constraint>;
 
 export interface TextAnnotation {
   id: string;

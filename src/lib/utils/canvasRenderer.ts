@@ -155,6 +155,8 @@ export function drawWall(
   showDimensions: boolean,
   dimSettings: ProjectSettings,
   allWalls?: Wall[],
+  /** The wall has a parametric length dimension of its own, so skip the automatic label. */
+  hideDimension = false,
 ): void {
   const { ctx, zoom, width, height } = cs;
   const s = wts(cs, w.start.x, w.start.y);
@@ -294,6 +296,7 @@ export function drawWall(
   }
 
   // Dimension line with arrowheads
+  if (hideDimension) { if (selected) drawStraightWallHandles(ctx, s, e, dx, dy, len); return; }
   if (!showDimensions || !dimSettings.showExternalDimensions) return;
   const wlen = wallLength(w);
   if (wlen < 10) return;
@@ -375,46 +378,49 @@ export function drawWall(
   ctx.fillStyle = dimSettings.dimensionLineColor;
   ctx.fillText(dimLabel, dimMx, dimMy);
 
-  if (selected) {
-    const handleSize = 5;
-    for (const pt of [s, e]) {
-      ctx.fillStyle = '#ffffff';
-      ctx.strokeStyle = '#3b82f6';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.y, handleSize, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-    }
-    const midX = (s.x + e.x) / 2;
-    const midY = (s.y + e.y) / 2;
-    const sz = 5;
-    ctx.fillStyle = '#3b82f6';
-    ctx.strokeStyle = '#1d4ed8';
+  if (selected) drawStraightWallHandles(ctx, s, e, dx, dy, len);
+}
+
+/** Endpoint circles, midpoint square and move arrows of a selected straight wall. */
+function drawStraightWallHandles(ctx: CanvasRenderingContext2D, s: Point, e: Point, dx: number, dy: number, len: number) {
+  const handleSize = 5;
+  for (const pt of [s, e]) {
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#3b82f6';
     ctx.lineWidth = 1.5;
-    ctx.fillRect(midX - sz, midY - sz, sz * 2, sz * 2);
-    ctx.strokeRect(midX - sz, midY - sz, sz * 2, sz * 2);
-    const perpX = -(dy / len) * 12;
-    const perpY = (dx / len) * 12;
-    ctx.strokeStyle = '#3b82f680';
-    ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(midX - perpX, midY - perpY);
-    ctx.lineTo(midX + perpX, midY + perpY);
+    ctx.arc(pt.x, pt.y, handleSize, 0, Math.PI * 2);
+    ctx.fill();
     ctx.stroke();
-    const arrowSz = 3;
-    for (const sign of [1, -1]) {
-      const ax = midX + perpX * sign;
-      const ay = midY + perpY * sign;
-      const adx = perpX / 12 * arrowSz * sign;
-      const ady = perpY / 12 * arrowSz * sign;
-      ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(ax - adx + ady * 0.5, ay - ady - adx * 0.5);
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(ax - adx - ady * 0.5, ay - ady + adx * 0.5);
-      ctx.stroke();
-    }
+  }
+  const midX = (s.x + e.x) / 2;
+  const midY = (s.y + e.y) / 2;
+  const sz = 5;
+  ctx.fillStyle = '#3b82f6';
+  ctx.strokeStyle = '#1d4ed8';
+  ctx.lineWidth = 1.5;
+  ctx.fillRect(midX - sz, midY - sz, sz * 2, sz * 2);
+  ctx.strokeRect(midX - sz, midY - sz, sz * 2, sz * 2);
+  const perpX = -(dy / len) * 12;
+  const perpY = (dx / len) * 12;
+  ctx.strokeStyle = '#3b82f680';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(midX - perpX, midY - perpY);
+  ctx.lineTo(midX + perpX, midY + perpY);
+  ctx.stroke();
+  const arrowSz = 3;
+  for (const sign of [1, -1]) {
+    const ax = midX + perpX * sign;
+    const ay = midY + perpY * sign;
+    const adx = perpX / 12 * arrowSz * sign;
+    const ady = perpY / 12 * arrowSz * sign;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - adx + ady * 0.5, ay - ady - adx * 0.5);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(ax - adx - ady * 0.5, ay - ady + adx * 0.5);
+    ctx.stroke();
   }
 }
 

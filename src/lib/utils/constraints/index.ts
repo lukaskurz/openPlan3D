@@ -232,17 +232,31 @@ export function checkNewConstraint(walls: Wall[], constraints: Constraint[], c: 
   const configs: Float64Array[] = [sketch.pos];
   const random = mulberry32(0x5eed);
   const { coords } = componentColumns(sketch, component);
-  for (let i = 0; i < 2; i++) {
+  // Perturb by ~10% of the walls' size so the witnesses sit well away from special angles.
+  const inComponent = new Set(component.corners);
+  const lengths = walls.filter(w => inComponent.has(sketch.cornerOf.get(endpointKey(w.id, 'start'))!))
+    .map(w => Math.hypot(w.end.x - w.start.x, w.end.y - w.start.y)).sort((a, b) => a - b);
+  const scale = Math.max(10, 0.1 * (lengths[lengths.length >> 1] ?? 100));
+  // Over-constraint is structural, not about particular numbers: a rectangle's width equals its
+  // top wall's length, which pins it at a singular right angle. Witnesses therefore also nudge
+  // the existing dimensions' values a few percent (zero targets like parallel/H/V stay exact).
+  const nudged = (rows: Row[]) => rows.map(row => row.target === 0 || row.implied || row.constraintId === null ? row
+    : { ...row, target: row.target + (random() - 0.5) * 2 * (row.wrap ? 0.03 : Math.max(1, Math.abs(row.target) * 0.03)) });
+  for (let i = 0; i < 3; i++) {
     const x0 = new Float64Array(sketch.pos);
-    for (const d of coords) x0[d] += (random() - 0.5) * 6;
-    const projected = solveRows(sketch, baseRows, { x0, maxIterations: 60 });
+    for (const d of coords) x0[d] += (random() - 0.5) * 2 * scale;
+    const projected = solveRows(sketch, nudged(baseRows), { x0, maxIterations: 80 });
     if (projected.ok) configs.push(projected.pos);
   }
   const primary = added.filter(row => !row.implied), implied = added.filter(row => row.implied);
   let primaryIndependent = false;
   const impliedDependentEverywhere = implied.map(() => true);
-  for (const pos of configs) {
-    const { basis, column, coords: cols } = componentBasis(sketch, component, baseRows, pos);
+  // A configuration where the existing rows lose rank (a right angle can make a width and a
+  // length momentarily equivalent) says nothing about the new row: only trust full-rank ones.
+  const bases = configs.map(pos => ({ pos, ...componentBasis(sketch, component, baseRows, pos) }));
+  const fullRank = Math.max(...bases.map(b => b.basis.vectors.length));
+  for (const { pos, basis, column, coords: cols } of bases) {
+    if (basis.vectors.length < fullRank) continue;
     const grads = jacobian(added, new Float64Array(pos), column, cols.length);
     const allPrimary = primary.every(row => basis.add(grads[added.indexOf(row)]));
     if (allPrimary) primaryIndependent = true;

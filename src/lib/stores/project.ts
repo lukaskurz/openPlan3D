@@ -12,7 +12,7 @@ import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight 
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
-import type { Constraint } from '$lib/models/types';
+import type { Constraint, NewConstraint } from '$lib/models/types';
 import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
 import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
 
@@ -741,8 +741,7 @@ export function showPlanNotice(text: string, tone: 'info' | 'error' = 'info') {
   planNotice.set({ text, tone, at: Date.now() });
 }
 
-type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
-export type NewConstraint = WithoutId<Constraint>;
+export type { NewConstraint } from '$lib/models/types';
 export type AddConstraintResult = { id: string; driven: boolean } | { error: string };
 
 /**
@@ -1461,8 +1460,8 @@ export function moveTextAnnotation(id: string, position: { x: number; y: number 
 
 // Layer visibility store (used by LayersPanel and FloorPlanCanvas)
 /** `floorBelow` is the dimmed reference underlay of the storey beneath the active one. */
-export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean }>({
-  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true,
+export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean; constraints: boolean }>({
+  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, constraints: true,
 });
 
 // --- Lock ---

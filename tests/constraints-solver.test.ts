@@ -155,6 +155,18 @@ describe('over-constraint detection', () => {
     expect(checkNewConstraint(walls, constraints, width).status).toBe('overConstrained');
   });
 
+  it('sees through a right angle that momentarily makes a width and a length equivalent', () => {
+    // Width between parallel side walls, plus the length of the wall joining them, fix the angle.
+    const walls = rectangle();
+    const constraints: Constraint[] = [
+      { id: 'w', kind: 'lineDistance', wallA: 'l', sideA: 1, wallB: 'r', sideB: 1, value: 385 },
+      length('lb', 'b', 400),
+    ];
+    const angle: Constraint = { id: 'a', kind: 'angle', wallA: 'b', wallB: 'r', flipB: false, value: measureConstraint({ id: 'x', kind: 'angle', wallA: 'b', wallB: 'r', flipB: false, value: 0 }, buildSketch(walls))! };
+    expect(checkNewConstraint(walls, constraints, angle).status).toBe('overConstrained');
+    expect(checkNewConstraint(walls, [constraints[0]], length('lb', 'b', 400)).status).toBe('ok');
+  });
+
   it('does not mistake collinear corners for redundancy', () => {
     const walls = [wall('a', 0, 0, 100, 0), wall('b', 100, 0, 200, 0)];
     const constraints = [length('la', 'a', 100), length('lb', 'b', 100)];

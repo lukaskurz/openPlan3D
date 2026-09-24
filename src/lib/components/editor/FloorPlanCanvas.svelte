@@ -25,6 +25,12 @@
   import { handleGlobalShortcut, isEditingField, isControlKey } from '$lib/utils/shortcuts';
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
+  import DimensionEditor from './DimensionEditor.svelte';
+  import { addConstraint, planNotice, showPlanNotice, updateConstraint } from '$lib/stores/project';
+  import { analyzeConstraints, buildSketch, type ConstraintAnalysis, type Sketch } from '$lib/utils/constraints';
+  import { dimensionFromPicks, dimensionOffset, pickAt, samePick, type DimensionPick } from '$lib/utils/constraints/picking';
+  import { constraintLabelPosition, drawConstraintPreview, drawConstraints, drawPickHighlight, hitTestConstraint } from '$lib/utils/constraintRenderer';
+  import type { Constraint } from '$lib/models/types';
   import { roomPresets, placePreset } from '$lib/utils/roomPresets';
   import { roomTemplates, placeRoomTemplate } from '$lib/utils/roomTemplates';
   import { openingDropTarget } from '$lib/utils/openingDrop';
@@ -117,6 +123,111 @@
   let editingDimensionId: string | null = $state(null);
   let dimensionLabel = $state('');
 
+  // Parametric dimensions: picks made so far (corners / walls), what's under the pointer,
+  // and the dimension whose inline value editor is open.
+  let dimensionPicks: DimensionPick[] = $state([]);
+  let dimensionHover: DimensionPick | null = null;
+  let editingConstraintId: string | null = $state(null);
+  let editingConstraintPos = $state({ x: 0, y: 0 });
+  let draggingConstraintId: string | null = null;
+  let constraintDragStarted = false;
+  let notice: { text: string; tone: 'info' | 'error'; at: number } | null = $state(null);
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(planNotice.subscribe(value => {
+    notice = value;
+    clearTimeout(noticeTimer);
+    if (value) noticeTimer = setTimeout(() => { if (notice?.at === value.at) planNotice.set(null); }, value.tone === 'error' ? 6000 : 4000);
+  }));
+
+  // Constraint analysis is cached until the floor's walls or constraints change.
+  let constraintCache: { key: string; sketch: Sketch; analysis: ConstraintAnalysis } | null = null;
+  function constraintInfo(floor: Floor): { sketch: Sketch; analysis: ConstraintAnalysis } | null {
+    if (!floor.constraints?.length) return null;
+    const key = JSON.stringify([floor.id, floor.constraints, floor.walls.map(w => [w.id, w.start.x, w.start.y, w.end.x, w.end.y, w.thickness, !!w.curvePoint])]);
+    if (constraintCache?.key !== key) constraintCache = { key, sketch: buildSketch(floor.walls, floor.constraints), analysis: analyzeConstraints(floor.walls, floor.constraints) };
+    return constraintCache;
+  }
+  function constraintAt(sx: number, sy: number): string | null {
+    if (!currentFloor || !layerVis.constraints) return null;
+    const info = constraintInfo(currentFloor);
+    if (!info) return null;
+    return hitTestConstraint(getCS(), { x: sx, y: sy }, { walls: currentFloor.walls, constraints: currentFloor.constraints!, measures: info.analysis.measures, units: dimSettings.units }, info.sketch);
+  }
+  function isConstraintId(id: string | null): boolean {
+    return !!id && !!currentFloor?.constraints?.some(c => c.id === id);
+  }
+  function selectConstraint(id: string) {
+    clearAuxiliarySelection();
+    selectedElementIds.set(new Set());
+    selectedRoomId.set(null);
+    selectedElementId.set(id);
+  }
+  function openConstraintEditor(id: string) {
+    editingConstraintId = id;
+    selectConstraint(id);
+    updateConstraintEditorPosition();
+  }
+  function updateConstraintEditorPosition() {
+    const c = editingConstraintId ? currentFloor?.constraints?.find(c => c.id === editingConstraintId) : null;
+    if (!c || !currentFloor) { editingConstraintId = null; return; }
+    const p = constraintLabelPosition(getCS(), c, currentFloor.walls, dimSettings.units);
+    if (p && (Math.abs(p.x - editingConstraintPos.x) > 0.5 || Math.abs(p.y - editingConstraintPos.y) > 0.5)) editingConstraintPos = p;
+  }
+  /** Surfaces between two walls; otherwise the Dimensions setting (centreline or edge). */
+  function dimensionSurface(picks: DimensionPick[]) {
+    return (picks.length === 2 && picks.every(p => p.kind === 'wall')) || dimSettings.wallMeasureMode === 'edge';
+  }
+  function resetDimensionTool() {
+    dimensionPicks = [];
+    dimensionHover = null;
+    annotationStart = null;
+  }
+  /** One click of the Dimension tool. Returns true when the click was used. */
+  function dimensionToolClick(wp: Point, sx: number, sy: number, e: MouseEvent): boolean {
+    if (!currentFloor) return false;
+    const pick = e.altKey ? null : pickAt(currentFloor.walls, wp, zoom);
+    const [first, second] = dimensionPicks;
+    if (!first) {
+      // Clicking a dimension selects it (double click edits); clicking plan geometry starts one.
+      const hit = !pick || pick.kind === 'wall' ? constraintAt(sx, sy) : null;
+      if (hit) { if (e.detail >= 2) openConstraintEditor(hit); else selectConstraint(hit); return true; }
+      if (pick) { dimensionPicks = [pick]; return true; }
+      return false; // free point: plain annotation
+    }
+    if (!second && pick && !samePick(pick, first) && !(first.kind === 'corner' && pick.kind === 'corner' && pick.ref.wallId === first.ref.wallId && false)) {
+      dimensionPicks = [first, pick];
+      return true;
+    }
+    if (!second && first.kind === 'corner') {
+      // A corner then empty space: a plain annotation from the corner.
+      annotationStart = { ...first.point };
+      dimensionPicks = [];
+      return false;
+    }
+    placeDimension(dimensionPicks, wp, e);
+    return true;
+  }
+  function placeDimension(picks: DimensionPick[], place: Point, e: MouseEvent) {
+    if (!currentFloor) return;
+    const input = dimensionFromPicks(currentFloor.walls, picks, place, dimensionSurface(picks));
+    dimensionPicks = [];
+    if (!input) return;
+    const result = addConstraint(input);
+    if ('error' in result) { showPlanNotice(result.error, 'error'); return; }
+    if (result.driven) showPlanNotice($t('dimensionEditor.addedDriven'));
+    // Keep the canvas's default mousedown focus from blurring the editor that is about to open.
+    e.preventDefault();
+    openConstraintEditor(result.id);
+  }
+  /** The dimension the current picks would create if placed at the pointer. */
+  function dimensionPreview(): Constraint | null {
+    if (!currentFloor || !dimensionPicks.length) return null;
+    const [first] = dimensionPicks;
+    if (dimensionPicks.length === 1 && (first.kind === 'corner' || (dimensionHover && !samePick(dimensionHover, first)))) return null;
+    const input = dimensionFromPicks(currentFloor.walls, dimensionPicks, mousePos, dimensionSurface(dimensionPicks));
+    return input ? { ...input, id: '__preview' } as Constraint : null;
+  }
+
   function finishDimensionLabel() {
     if (editingDimensionId && dimensionLabel.trim()) {
       updateAnnotation(editingDimensionId, { label: dimensionLabel.trim() });
@@ -149,7 +260,7 @@
   let showRulers = $state(true);
 
   // Layer visibility toggles
-  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true });
+  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, constraints: true });
   // Sync showFurnitureStore ↔ layerVisibility.furniture
   let showFurniture = $derived(layerVis.furniture);
   $effect(() => { showFurnitureStore.set(layerVis.furniture); });
@@ -545,7 +656,8 @@
   }
 
   function drawWall(w: Wall, selected: boolean) {
-    _drawWall(getCS(), w, selected, showDimensions, dimSettings, currentFloor?.walls);
+    const dimensioned = layerVis.constraints && !!currentFloor?.constraints?.some(c => c.kind === 'length' && c.wallId === w.id);
+    _drawWall(getCS(), w, selected, showDimensions, dimSettings, currentFloor?.walls, dimensioned);
   }
 
   function drawDoorOnWall(wall: Wall, door: Door) {
@@ -1719,6 +1831,27 @@
     if (layerVis.annotations && floor) drawAnnotations(floor);
     // Annotation preview
     if (annotating && annotationStart) drawAnnotationPreview();
+    // Parametric dimensions and constraint badges
+    const constraintData = floor && layerVis.constraints ? constraintInfo(floor) : null;
+    if (floor && constraintData) {
+      drawConstraints(getCS(), {
+        walls: floor.walls, constraints: floor.constraints!, measures: constraintData.analysis.measures,
+        conflicts: constraintData.analysis.conflicts, units: dimSettings.units,
+        selectedId: isConstraintId(currentSelectedId) ? currentSelectedId : null,
+      }, constraintData.sketch);
+    }
+    if (annotating && floor) {
+      for (const pick of dimensionPicks) drawPickHighlight(getCS(), pick, floor.walls, '#4f46e5');
+      if (dimensionHover) drawPickHighlight(getCS(), dimensionHover, floor.walls);
+      const preview = dimensionPreview();
+      if (preview) drawConstraintPreview(getCS(), preview, floor.walls, dimSettings.units);
+      else if (dimensionPicks.length === 1 && dimensionPicks[0].kind === 'corner') {
+        const a = worldToScreen(dimensionPicks[0].point.x, dimensionPicks[0].point.y), b = worldToScreen(mousePos.x, mousePos.y);
+        ctx.save(); ctx.strokeStyle = '#0ea5e9'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
+      }
+    }
+    if (editingConstraintId) updateConstraintEditorPosition();
     // Text annotations
     if (layerVis.textAnnotations && floor) drawTextAnnotations(floor);
 
@@ -1816,6 +1949,8 @@
         measureEnd = null;
         annotationStart = null;
         editingDimensionId = null;
+        dimensionPicks = [];
+        dimensionHover = null;
         wallStart = null;
         wallSequenceFirst = null;
         typedWallLength = '';
@@ -1875,7 +2010,9 @@
         ...(!v.textAnnotations ? currentFloor?.textAnnotations ?? [] : []),
         ...(!v.measurements ? currentFloor?.measurements ?? [] : []),
         ...(!v.annotations ? currentFloor?.annotations ?? [] : []),
+        ...(!v.constraints ? currentFloor?.constraints ?? [] : []),
       ].map(item => item.id));
+      if (!v.constraints) editingConstraintId = null;
       if (hiddenIds.size) {
         if (hiddenIds.has(selectedTextAnnotationId ?? '')) selectedTextAnnotationId = null;
         if (hiddenIds.has(selectedMeasurementId ?? '')) selectedMeasurementId = null;
@@ -2258,7 +2395,8 @@
     if (e.button !== 0) return;
 
     const rect = canvas.getBoundingClientRect();
-    const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const wp = screenToWorld(sx, sy);
     const tool = currentTool;
     if (tool === 'select' && currentFloor && e.detail === 1) {
       selectionPress = { floorId: currentFloor.id, x: e.clientX, y: e.clientY, world: wp };
@@ -2315,7 +2453,8 @@
       return;
     }
 
-    // Annotation tool: click first point, then second point
+    // Dimension tool: corners and walls make parametric dimensions; free points make plain annotations.
+    if (annotating && !annotationStart && dimensionToolClick(wp, sx, sy, e)) return;
     if (annotating) {
       const snapped = magneticSnap(wp);
       if (!annotationStart) {
@@ -2400,6 +2539,17 @@
         return;
       }
       selectedTextAnnotationId = null;
+    }
+
+    // Parametric dimension / constraint badge click (select); dragging moves the dimension line.
+    if (tool === 'select' && currentFloor) {
+      const hitId = constraintAt(sx, sy);
+      if (hitId) {
+        selectConstraint(hitId);
+        draggingConstraintId = hitId;
+        constraintDragStarted = false;
+        return;
+      }
     }
 
     // Annotation click detection (select)
@@ -2699,6 +2849,14 @@
       return;
     }
 
+    // Double-click on a dimension to edit its value
+    if ((currentTool === 'select' || currentTool === 'annotate') && currentFloor) {
+      // The first click may have opened Properties and resized the canvas: use the press's world point.
+      const press = worldToScreen(selectionPoint.x, selectionPoint.y);
+      const hit = constraintAt(press.x, press.y);
+      if (hit) { openConstraintEditor(hit); return; }
+    }
+
     // Double-click on a text annotation to edit it
     if (currentTool === 'select' && currentFloor) {
       const wp = selectionPoint;
@@ -2766,6 +2924,23 @@
     lastPointer = { clientX: e.clientX, clientY: e.clientY };
     const rect = canvas.getBoundingClientRect();
     mousePos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+
+    if (annotating && currentFloor && !annotationStart) {
+      dimensionHover = e.altKey ? null : pickAt(currentFloor.walls, mousePos, zoom);
+      markDirty();
+    }
+    if (draggingConstraintId && currentFloor) {
+      if (!constraintDragStarted) {
+        if (Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) < 3) return;
+        beginUndoGroup();
+        constraintDragStarted = true;
+      }
+      const c = currentFloor.constraints?.find(c => c.id === draggingConstraintId);
+      const offset = c ? dimensionOffset(c, currentFloor.walls, mousePos) : undefined;
+      if (offset !== undefined) updateConstraint(draggingConstraintId, { offset });
+      markDirty();
+      return;
+    }
 
     if ((draggingFurnitureId || draggingHandle) && !furnitureGestureStarted) {
       // Treat small pointer movement during a click as selection, not a snapped move.
@@ -3058,6 +3233,12 @@
     canvasGestureActive = false;
     isPanning = false;
     draggingGuideId = null;
+
+    if (draggingConstraintId) {
+      if (constraintDragStarted) endUndoGroup('Edited constraint');
+      draggingConstraintId = null;
+      constraintDragStarted = false;
+    }
 
     // Finalize only actual label movement, never a selection click.
     if (draggingRoomLabelId) {
@@ -3388,6 +3569,7 @@
 
   function onKeyDown(e: KeyboardEvent) {
     if (hasOpenModal()) return;
+    markDirty(); // key handlers change tool state (Escape, typed lengths) that the next frame must show
     if (e.key === 'Meta' || e.key === 'Control') setSnapBypass(true);
     if (e.target === canvas && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
       e.preventDefault();
@@ -3489,6 +3671,9 @@
       measureStart = null;
       measureEnd = null;
       annotationStart = null;
+      dimensionPicks = [];
+      dimensionHover = null;
+      editingConstraintId = null;
       marqueeStart = null;
       marqueeEnd = null;
     }
@@ -4040,6 +4225,15 @@
       />
     </div>
   {/if}
+  {#if editingConstraintId}
+    <DimensionEditor id={editingConstraintId} x={Math.max(136, Math.min(width - 136, editingConstraintPos.x))} y={Math.min(editingConstraintPos.y, height - 150)} onclose={() => { editingConstraintId = null; canvas.focus(); }} />
+  {/if}
+  {#if notice}
+    <div class="pointer-events-auto absolute top-24 left-1/2 z-30 flex max-w-md -translate-x-1/2 items-start gap-2 rounded-lg border px-3 py-2 text-sm shadow-lg {notice.tone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-indigo-200 bg-white text-gray-700'}" role={notice.tone === 'error' ? 'alert' : 'status'} data-plan-notice>
+      <span>{notice.text}</span>
+      <button class="text-gray-400 hover:text-gray-600" aria-label={$t('editorRecovery.dismiss')} onclick={() => planNotice.set(null)}>✕</button>
+    </div>
+  {/if}
   <!-- Inline text annotation editor -->
   {#if editingTextAnnotationId}
     <input
@@ -4159,7 +4353,7 @@
   {#if showLayerPanel}
     <div style:--visible-bottom={`${zoomControlsBottom}px`} class="absolute bottom-12 right-2 max-md:bottom-[calc(var(--visible-bottom)+6rem)] z-20 bg-white rounded-lg shadow-lg border border-gray-200 p-3 text-xs min-w-[160px]">
       <div class="font-semibold text-gray-700 mb-2">{$t('layers.title')}</div>
-      {#each [['walls',$t('layers.walls')],['doors',$t('layers.doors')],['windows',$t('layers.windows')],['furniture',$t('layers.furniture')],['stairs',$t('layers.stairs')],['columns',$t('layers.columns')],['guides',$t('layers.guides')],['measurements',$t('layers.measurements')],['annotations',$t('layerVisibility.dimensions')],['textAnnotations',$t('layers.textAnnotations')]] as [key, label]}
+      {#each [['walls',$t('layers.walls')],['doors',$t('layers.doors')],['windows',$t('layers.windows')],['furniture',$t('layers.furniture')],['stairs',$t('layers.stairs')],['columns',$t('layers.columns')],['guides',$t('layers.guides')],['measurements',$t('layers.measurements')],['annotations',$t('layerVisibility.dimensions')],['constraints',$t('layers.constraints')],['textAnnotations',$t('layers.textAnnotations')]] as [key, label]}
         <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
           <input type="checkbox" checked={(layerVis as Record<string, boolean>)[key]} onchange={() => layerVisibility.update(v => ({ ...v, [key]: !(v as Record<string, boolean>)[key] }))} class="accent-blue-500" />
           <span>{label}</span>
