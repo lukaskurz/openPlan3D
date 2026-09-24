@@ -342,13 +342,25 @@
    * Returns adjusted position and rotation, or null if no wall is close enough.
    */
   function snapFurnitureToWall(pos: Point, furniture: FurnitureItem | FurnitureDef): { position: Point; rotation: number; wallId: string; side: 'normal' | 'anti'; wallAngle: number } | null {
-    if (!currentFloor || !currentSnapToWalls) return null;
+    if (!currentFloor || !currentSnapToWalls || snapBypass) return null;
 
     return snapFurnitureToWalls(pos, furniture, currentFloor.walls, snap);
   }
 
+  // Holding ⌘ (macOS) or Ctrl while dragging moves freely: no grid, wall, guide or endpoint snapping.
+  let snapBypass = false;
+  let lastPointer: { clientX: number; clientY: number } | null = null;
+  function setSnapBypass(on: boolean) {
+    if (on === snapBypass) return;
+    snapBypass = on;
+    // Re-apply the active drag at the same pointer so the item moves as soon as the key changes.
+    if (canvasGestureActive && lastPointer) {
+      onMouseMove(new MouseEvent('mousemove', { ...lastPointer, buttons: 1, metaKey: on, ctrlKey: on }));
+    }
+  }
+
   function snap(v: number): number {
-    if (!currentSnapEnabled) return v;
+    if (!currentSnapEnabled || snapBypass) return v;
     const step = currentSnapToGrid ? currentGridSize : SNAP;
     return Math.round(v / step) * step;
   }
@@ -367,7 +379,7 @@
   }
 
   function magneticSnap(p: Point, excludeWallIds?: Set<string>): Point & { snappedToEndpoint?: boolean; snappedToWall?: boolean; snappedWallId?: string } {
-    if (!currentFloor) return { x: snap(p.x), y: snap(p.y) };
+    if (!currentFloor || snapBypass) return { x: snap(p.x), y: snap(p.y) };
     let best: Point & { snappedToEndpoint?: boolean; snappedToWall?: boolean; snappedWallId?: string } = { x: snap(p.x), y: snap(p.y) };
     let bestDist = MAGNETIC_SNAP / zoom;
     // First pass: snap to endpoints (highest priority)
@@ -407,7 +419,7 @@
   }
 
   function angleSnap(start: Point, end: Point): Point {
-    if (!currentSnapEnabled) return end;
+    if (!currentSnapEnabled || snapBypass) return end;
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const len = Math.hypot(dx, dy);
@@ -2192,6 +2204,7 @@
     finishCanvasGesture();
     spaceDown = false;
     shiftDown = false;
+    snapBypass = false;
   }
 
   // A press that starts on the canvas can end somewhere else: the selection toolbar appears
@@ -2749,6 +2762,8 @@
     // Recover if a release outside the window was never delivered to this page.
     if (canvasGestureActive && e.buttons === 0) finishCanvasGesture();
     markDirty();
+    snapBypass = e.metaKey || e.ctrlKey;
+    lastPointer = { clientX: e.clientX, clientY: e.clientY };
     const rect = canvas.getBoundingClientRect();
     mousePos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
 
@@ -2977,7 +2992,7 @@
           const snapped = { x: snap(basePos.x), y: snap(basePos.y) };
           // Snap to guide lines
           const GUIDE_SNAP = 10; // world units
-          if (currentFloor?.guides) {
+          if (currentFloor?.guides && !snapBypass) {
             for (const g of currentFloor.guides) {
               if (g.orientation === 'horizontal' && Math.abs(snapped.y - g.position) < GUIDE_SNAP) {
                 snapped.y = g.position;
@@ -3373,6 +3388,7 @@
 
   function onKeyDown(e: KeyboardEvent) {
     if (hasOpenModal()) return;
+    if (e.key === 'Meta' || e.key === 'Control') setSnapBypass(true);
     if (e.target === canvas && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
       e.preventDefault();
       openKeyboardContextMenu();
@@ -3592,6 +3608,7 @@
   }
 
   function onKeyUp(e: KeyboardEvent) {
+    if (e.key === 'Meta' || e.key === 'Control') setSnapBypass(e.metaKey || e.ctrlKey);
     shiftDown = e.shiftKey;
     if (e.code === 'Space') spaceDown = false;
   }

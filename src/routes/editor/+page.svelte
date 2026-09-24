@@ -343,6 +343,7 @@
                   "N          " + $t('shortcuts.annotate'),
                   "T          " + $t('shortcuts.text'),
                   "S          " + $t('shortcuts.snap'),
+                  "⌘/Ctrl     " + $t('shortcuts.freeMove'),
                   '',
                   '── ' + $t('shortcuts.edit') + ' ──',
                   "Ctrl+Z     " + $t('shortcuts.undo'),
@@ -412,6 +413,7 @@
                 <div class="flex justify-between"><span class="text-gray-600">{$t('shortcuts.annotate')}</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">N</kbd></div>
                 <div class="flex justify-between"><span class="text-gray-600">{$t('shortcuts.text')}</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">T</kbd></div>
                 <div class="flex justify-between"><span class="text-gray-600">{$t('shortcuts.snap')}</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200">S</kbd></div>
+                <div class="flex justify-between gap-2"><span class="text-gray-600">{$t('shortcuts.freeMove')}</span><kbd class="px-1.5 py-0.5 bg-gray-100 rounded text-xs font-mono text-slate-700 border border-gray-200 whitespace-nowrap">⌘/Ctrl</kbd></div>
               </div>
 
               <!-- Edit -->
