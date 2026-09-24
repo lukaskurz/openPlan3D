@@ -173,6 +173,37 @@ export interface Annotation {
   offset: number; // perpendicular offset for dimension line (default 40)
 }
 
+/** A wall corner, referenced through one of the endpoints that meet there. */
+export interface CornerRef { wallId: string; end: 'start' | 'end' }
+/** 0 = wall centreline; ±1 = the face on the ±normal side of start→end, normal = (-dy, dx). */
+export type FaceSide = 0 | 1 | -1;
+
+interface ConstraintBase {
+  id: string;
+  /** A driven (reference) dimension only reports its value; it never moves geometry. */
+  driven?: boolean;
+  /** Dimension line offset from the measured geometry, cm. */
+  offset?: number;
+}
+
+/**
+ * Parametric wall constraints. Values are signed where a sign keeps the configuration the
+ * user created (the UI shows magnitudes): distances along an axis or normal, and angles
+ * in degrees counter-clockwise with plan Y pointing up (like wallAngle), from A to B.
+ */
+export type Constraint = ConstraintBase & (
+  | { kind: 'length'; wallId: string; side: FaceSide; value: number }
+  | { kind: 'pointDistance'; a: CornerRef; b: CornerRef; axis: 'aligned' | 'x' | 'y'; value: number }
+  | { kind: 'pointLine'; point: CornerRef; wallId: string; side: FaceSide; value: number }
+  | { kind: 'lineDistance'; wallA: string; sideA: FaceSide; wallB: string; sideB: FaceSide; value: number }
+  | { kind: 'angle'; wallA: string; wallB: string; flipB: boolean; value: number }
+  | { kind: 'horizontal' | 'vertical'; wallId: string }
+  | { kind: 'parallel' | 'perpendicular'; wallA: string; wallB: string }
+  | { kind: 'fix'; target: CornerRef | { wallId: string }; at: Point[] }
+);
+export type ConstraintKind = Constraint['kind'];
+export type DimensionConstraint = Extract<Constraint, { value: number }>;
+
 export interface TextAnnotation {
   id: string;
   x: number;
@@ -239,6 +270,8 @@ export interface Floor {
   textAnnotations: TextAnnotation[];
   groups: ElementGroup[];
   entourage?: EntourageItem[];
+  /** Parametric dimensions and geometric constraints on this floor's walls. */
+  constraints?: Constraint[];
 }
 
 export interface CustomModelDef {

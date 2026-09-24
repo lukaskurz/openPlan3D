@@ -77,7 +77,7 @@ export function wallSkew(wall: Wall): number {
   return Math.min(angle, 90 - angle);
 }
 
-function planChecked(walls: Wall[], changes: Map<string, Partial<Wall>>, message: string) {
+export function planChecked(walls: Wall[], changes: Map<string, Partial<Wall>>, message: string) {
   for (const [wallId, updates] of changes) {
     const original = walls.find(w => w.id === wallId)!;
     const changed = { ...original, ...updates };
