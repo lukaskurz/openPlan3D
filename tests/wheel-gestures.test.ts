@@ -34,7 +34,7 @@ describe('wheel gestures', () => {
   it('zooms smoothly on pinch, in proportion to the gesture', () => {
     const interpret = createWheelInterpreter();
     const small = interpret(wheel(-2, { ctrlKey: true })), large = interpret(wheel(-10, { ctrlKey: true }));
-    expect(small.kind === 'zoom' && small.factor).toBeCloseTo(Math.exp(0.02 * 0.3), 12);
+    expect(small.kind === 'zoom' && small.factor).toBeCloseTo(pinchFactor(Math.exp(0.02)), 12);
     expect(large.kind === 'zoom' && large.factor).toBeGreaterThan(small.kind === 'zoom' ? small.factor : 0);
     expect(interpret(wheel(4, { ctrlKey: true }))).toMatchObject({ kind: 'zoom' });
     expect((interpret(wheel(4, { ctrlKey: true })) as { factor: number }).factor).toBeLessThan(1);
@@ -44,7 +44,7 @@ describe('wheel gestures', () => {
     const interpret = createWheelInterpreter();
     for (const wheelDeltaY of [undefined, 0, -3, 9, 10]) {
       const action = interpret(wheel(-3.2, { ctrlKey: true, ...(wheelDeltaY === undefined ? {} : { wheelDeltaY }) })) as { factor: number };
-      expect(action.factor).toBeCloseTo(Math.exp(0.032 * 0.3), 12);
+      expect(action.factor).toBeCloseTo(pinchFactor(Math.exp(0.032)), 12);
     }
     expect(interpret(wheel(-4.000244140625, { ctrlKey: true, wheelDeltaY: 120 }))).toEqual({ kind: 'zoom', factor: wheelStep(3) });
     expect(interpret(wheel(100, { ctrlKey: true, wheelDeltaY: -120 }))).toEqual({ kind: 'zoom', factor: 1 / wheelStep(3) });
@@ -55,10 +55,11 @@ describe('wheel gestures', () => {
     const interpret = createWheelInterpreter(() => speed);
     const at = (s: number) => { speed = s; return (interpret(wheel(-5, { ctrlKey: true })) as { factor: number }).factor; };
     expect(at(1)).toBeLessThan(at(3));
-    expect(at(10)).toBeCloseTo(Math.exp(0.05), 12); // 10 follows the fingers 1:1
+    expect(at(1)).toBeCloseTo(Math.exp(0.05 * 0.02), 12);  // slowest: 2% of the fingers
+    expect(at(10)).toBeCloseTo(Math.exp(0.05 * 0.5), 12);  // fastest: 50%
     expect(wheelStep(3)).toBeCloseTo(1.1);
     expect(wheelStep(10)).toBeGreaterThan(wheelStep(1));
-    expect(pinchFactor(2, 10)).toBeCloseTo(2);
+    expect(pinchFactor(2, 10)).toBeCloseTo(Math.SQRT2);
     expect(pinchFactor(2, Number.NaN)).toBeCloseTo(pinchFactor(2, 3));
   });
 

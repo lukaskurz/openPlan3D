@@ -44,9 +44,12 @@ export function wheelStep(speed = DEFAULT_ZOOM_SPEED): number {
   return 1 + validSpeed(speed) / 30;
 }
 
-/** Scales a pinch's native scale change; the default follows the fingers at 30%. */
+/**
+ * Scales a pinch's native scale change. Speeds map geometrically from following
+ * the fingers at 2% (speed 1) to 50% (speed 10); the default is about 4%.
+ */
 export function pinchFactor(scaleChange: number, speed = DEFAULT_ZOOM_SPEED): number {
-  return Math.pow(scaleChange, validSpeed(speed) / 10);
+  return Math.pow(scaleChange, 0.02 * Math.pow(25, (validSpeed(speed) - 1) / 9));
 }
 
 function validSpeed(speed: number) {
