@@ -464,8 +464,16 @@ export function drawDoorOnWall(cs: CanvasState, wall: Wall, door: Door): void {
   }
 
   const doorType = door.type || 'single';
+  // Glass leaves: a light glass line inside the dark leaf stroke.
+  const glazed = doorType === 'balcony' || doorType === 'french';
+  const glassLine = (x1: number, y1: number, x2: number, y2: number) => {
+    if (!glazed) return;
+    ctx.strokeStyle = '#8ecae6';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  };
 
-  if (doorType === 'single' || doorType === 'pocket') {
+  if (doorType === 'single' || doorType === 'balcony' || doorType === 'pocket') {
     const r = door.width * zoom;
     const hingeX = s.x + ux * halfDoor * swingDir;
     const hingeY = s.y + uy * halfDoor * swingDir;
@@ -496,6 +504,7 @@ export function drawDoorOnWall(cs: CanvasState, wall: Wall, door: Door): void {
     const panelAngle = doorType === 'pocket' ? startAngle : endAngle;
     ctx.lineTo(hingeX + r * Math.cos(panelAngle), hingeY + r * Math.sin(panelAngle));
     ctx.stroke();
+    glassLine(hingeX, hingeY, hingeX + r * Math.cos(panelAngle), hingeY + r * Math.sin(panelAngle));
 
     ctx.fillStyle = '#444';
     ctx.beginPath();
@@ -523,15 +532,12 @@ export function drawDoorOnWall(cs: CanvasState, wall: Wall, door: Door): void {
       ctx.moveTo(hx, hy);
       ctx.lineTo(hx + r * Math.cos(ea), hy + r * Math.sin(ea));
       ctx.stroke();
+      glassLine(hx, hy, hx + r * Math.cos(ea), hy + r * Math.sin(ea));
 
       ctx.fillStyle = '#444';
       ctx.beginPath();
       ctx.arc(hx, hy, 2, 0, Math.PI * 2);
       ctx.fill();
-    }
-    if (doorType === 'french') {
-      ctx.strokeStyle = '#aaa';
-      ctx.lineWidth = 0.5;
     }
 
   } else if (doorType === 'sliding') {

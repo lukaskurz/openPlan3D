@@ -102,7 +102,8 @@ export function readProject(value: unknown): Project {
       defaults(opening, kind === 'doors' ? { height: 210, type: 'single', swingDirection: 'left', flipSide: false } : { height: 120, type: 'standard', sillHeight: 90 });
       positive(opening.height, `${path}.height`);
       if (kind === 'doors') {
-        choice(opening.type, ['single', 'double', 'sliding', 'french', 'pocket', 'bifold', 'opening', 'garage'], `${path}.type`);
+        choice(opening.type, ['single', 'double', 'sliding', 'french', 'balcony', 'pocket', 'bifold', 'opening', 'garage'], `${path}.type`);
+        if (opening.glassPanes !== undefined && (!Number.isSafeInteger(opening.glassPanes) || opening.glassPanes < 1 || opening.glassPanes > 8)) fail(`${path}.glassPanes`, 'must be a whole number from 1 to 8');
         choice(opening.swingDirection, ['left', 'right'], `${path}.swingDirection`);
         booleans(opening, ['flipSide'], path);
       } else {

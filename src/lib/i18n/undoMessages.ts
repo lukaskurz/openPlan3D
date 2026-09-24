@@ -50,7 +50,7 @@ const messages = new Map(keys.map(key => [translate('en', key), key]));
 
 const doorTypes = {
   single: 'openingCatalog.single', double: 'openingCatalog.double',
-  sliding: 'openingCatalog.sliding', french: 'openingCatalog.french',
+  sliding: 'openingCatalog.sliding', french: 'openingCatalog.french', balcony: 'openingCatalog.balcony',
   pocket: 'openingCatalog.pocket', bifold: 'openingCatalog.bifold',
   opening: 'openingCatalog.doorway', garage: 'openingCatalog.garage',
 } satisfies Record<Door['type'], TranslationKey>;

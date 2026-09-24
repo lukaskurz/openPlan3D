@@ -191,6 +191,24 @@
     if (!selectedDoor) return;
     updateDoor(selectedDoor.id, { type: (e.target as HTMLSelectElement).value as Door['type'] });
   }
+  // Swing doors are one of four combinations of material and leaf count.
+  const SWING_DOORS: Record<string, { glass: boolean; leaves: 1 | 2 }> = {
+    single: { glass: false, leaves: 1 }, double: { glass: false, leaves: 2 },
+    balcony: { glass: true, leaves: 1 }, french: { glass: true, leaves: 2 },
+  };
+  function swingDoorType(glass: boolean, leaves: 1 | 2): Door['type'] {
+    return glass ? (leaves === 2 ? 'french' : 'balcony') : (leaves === 2 ? 'double' : 'single');
+  }
+  function setDoorStyle(change: Partial<{ glass: boolean; leaves: 1 | 2 }>) {
+    if (!selectedDoor) return;
+    const current = SWING_DOORS[selectedDoor.type];
+    if (!current) return;
+    const next = { ...current, ...change };
+    const type = swingDoorType(next.glass, next.leaves);
+    // Keep a sensible leaf width when switching between one and two leaves.
+    const width = next.leaves !== current.leaves ? Math.round(selectedDoor.width * (next.leaves === 2 ? 5 / 3 : 3 / 5)) : selectedDoor.width;
+    updateDoor(selectedDoor.id, { type, width });
+  }
   function onDoorSwing(e: Event) {
     if (!selectedDoor) return;
     updateDoor(selectedDoor.id, { swingDirection: (e.target as HTMLSelectElement).value as 'left' | 'right' });
@@ -615,12 +633,38 @@
           <option value="double">{$t('openingCatalog.double')}</option>
           <option value="sliding">{$t('openingCatalog.sliding')}</option>
           <option value="french">{$t('openingCatalog.french')}</option>
+          <option value="balcony">{$t('openingCatalog.balcony')}</option>
           <option value="pocket">{$t('openingCatalog.pocket')}</option>
           <option value="bifold">{$t('openingCatalog.bifold')}</option>
           <option value="opening">{$t('openingProperties.doorway')}</option>
           <option value="garage">{$t('openingCatalog.garage')}</option>
         </select>
       </label>
+      {#if SWING_DOORS[selectedDoor.type]}
+      {@const style = SWING_DOORS[selectedDoor.type]}
+      <div role="group" aria-label={$t('openingProperties.material')}>
+        <span class="text-xs text-gray-500">{$t('openingProperties.material')}</span>
+        <div class="flex gap-2">
+          <button data-door-wood aria-pressed={!style.glass} onclick={() => setDoorStyle({ glass: false })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {!style.glass ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.wood')}</button>
+          <button data-door-glass aria-pressed={style.glass} onclick={() => setDoorStyle({ glass: true })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.glass ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.glass')}</button>
+        </div>
+      </div>
+      <div role="group" aria-label={$t('openingProperties.leaves')}>
+        <span class="text-xs text-gray-500">{$t('openingProperties.leaves')}</span>
+        <div class="flex gap-2">
+          <button data-door-one-leaf aria-pressed={style.leaves === 1} onclick={() => setDoorStyle({ leaves: 1 })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.leaves === 1 ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.oneLeaf')}</button>
+          <button data-door-two-leaves aria-pressed={style.leaves === 2} onclick={() => setDoorStyle({ leaves: 2 })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.leaves === 2 ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.twoLeaves')}</button>
+        </div>
+      </div>
+      {/if}
+      {#if selectedDoor.type === 'balcony' || selectedDoor.type === 'french' || selectedDoor.type === 'sliding'}
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('openingProperties.glassPanes')}</span>
+        <select data-door-panes value={String(selectedDoor.glassPanes ?? 1)} onchange={(e) => { if (selectedDoor) updateDoor(selectedDoor.id, { glassPanes: Number(e.currentTarget.value) }); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm">
+          {#each [1, 2, 3, 4, 5, 6] as panes}<option value={String(panes)}>{panes === 1 ? $t('openingProperties.panesOne') : $t('openingProperties.panes', { count: panes })}</option>{/each}
+        </select>
+      </label>
+      {/if}
       {#if selectedDoor.type !== 'opening' && selectedDoor.type !== 'garage'}
       <div role="group" aria-label={$t('openingProperties.hinge')}>
         <span class="text-xs text-gray-500">{$t('openingProperties.hinge')}</span>

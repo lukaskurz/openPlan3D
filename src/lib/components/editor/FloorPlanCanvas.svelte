@@ -616,7 +616,7 @@
     const nx = -uy, ny = ux;
     const isDoor = placementPreview.type === 'door';
     const doorWidths: Record<string, number> = {
-      single: 90, double: 150, sliding: 180, french: 150,
+      single: 90, double: 150, sliding: 180, french: 150, balcony: 90,
       pocket: 90, bifold: 180, opening: 100, garage: 240,
     };
     const itemWidth = isDoor ? (doorWidths[currentDoorType] ?? 90) : 120;

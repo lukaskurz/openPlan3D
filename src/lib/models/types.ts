@@ -86,7 +86,10 @@ export interface Door {
   position: number; // 0-1 along wall
   width: number;
   height: number;
-  type: 'single' | 'double' | 'sliding' | 'french' | 'pocket' | 'bifold' | 'opening' | 'garage';
+  /** french and balcony are full-height glass doors with two and one leaves. */
+  type: 'single' | 'double' | 'sliding' | 'french' | 'balcony' | 'pocket' | 'bifold' | 'opening' | 'garage';
+  /** Glass doors: equal panes per leaf separated by glazing bars (1 = one sheet). */
+  glassPanes?: number;
   swingDirection: 'left' | 'right';
   flipSide: boolean; // flip which side of wall the door opens to (vertical flip)
 }

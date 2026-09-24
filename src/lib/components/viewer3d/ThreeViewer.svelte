@@ -19,7 +19,7 @@
   import { createRoomSlabGeometry } from '$lib/utils/roomSlabGeometry';
   import { roomHoles } from '$lib/utils/roomNesting';
   import { createSlopedBoxGeometry } from '$lib/utils/slopedWallGeometry';
-  import { buildWallSegments, roomCeilingHeight, wallProfileSpans, wallPathProfile, pathOpening, doorPanelPose } from '$lib/utils/wallProfiles';
+  import { buildWallSegments, roomCeilingHeight, wallProfileSpans, wallPathProfile, pathOpening } from '$lib/utils/wallProfiles';
   import { assembleFloorStack } from '$lib/utils/floorStack';
   import { setFloorCameraPose } from '$lib/utils/floorCamera';
   import { frameScene } from '$lib/utils/frameScene';
@@ -33,6 +33,7 @@
   import type { FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { createWallHighlight } from '$lib/utils/wallHighlight';
   import { disposeModel, ownTexture } from '$lib/utils/furnitureModelResources';
+  import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { createFurnitureModelWithGLB, createPlacedFurnitureModel } from '$lib/utils/furnitureModelLoader';
   import { addFurniture } from '$lib/stores/project';
   import { detectRooms, resolveRoomGeometry, getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
@@ -1393,7 +1394,7 @@
       const angle = Math.atan2(right.y - left.y, right.x - left.x);
       const wt = Math.max(wall.thickness, WALL_THICKNESS);
 
-      const frameMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.6 });
+      const frameMat = new THREE.MeshStandardMaterial({ color: doorUsesWhiteFrame(door.type) ? 0xf2f2ef : 0x6b4423, roughness: 0.6 });
       const doorHeight = opening.top;
       const jamb = 5; // jamb thickness
 
@@ -1419,32 +1420,13 @@
           wallGroup.add(secMesh);
         }
       } else {
-        // Door panel — honor the saved hinge and opening side, slightly ajar (15°)
-        const panelMat = new THREE.MeshStandardMaterial({ color: 0x8B6914, roughness: 0.5 });
-        const panelGeo = new THREE.BoxGeometry(door.width - 2, doorHeight - 4, 4);
-        // Shift geometry so pivot is at left edge
-        panelGeo.translate(door.width / 2 - 1, 0, 0);
-        const panelMesh = new THREE.Mesh(panelGeo, panelMat);
-        const pose = doorPanelPose({ ...wall, start: left, end: right, curvePoint: undefined }, { ...door, position: 0.5 });
-        panelMesh.position.set(pose.x, doorHeight / 2 - 2, pose.z);
-        panelMesh.rotation.y = -pose.yaw;
-        panelMesh.castShadow = true;
-        wallGroup.add(panelMesh);
-
-        // Door handle (small sphere)
-        const handleMat = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 });
-        const handleGeo = new THREE.SphereGeometry(3, 8, 8);
-        const handleMesh = new THREE.Mesh(handleGeo, handleMat);
-        // Place on the door panel's right side at handle height
-        const handleLocalX = door.width - 12;
-        const handleCos = Math.cos(pose.yaw);
-        const handleSin = Math.sin(pose.yaw);
-        handleMesh.position.set(
-          panelMesh.position.x + handleLocalX * handleCos,
-          Math.min(100, doorHeight * 0.5),
-          panelMesh.position.z + handleLocalX * handleSin
-        );
-        wallGroup.add(handleMesh);
+        // Leaves by type: wood, glass (balcony/French), sliding, pocket and bifold
+        const model = createDoorModel(door, door.width, doorHeight, wt);
+        if (model) {
+          model.position.set(px, 0, py);
+          model.rotation.y = -angle;
+          wallGroup.add(model);
+        }
       }
     }
 

@@ -252,7 +252,7 @@ export function webToNative(project: Project, original: ObjectMap | undefined, p
     }
     for (const kind of ['doors', 'windows'] as const) for (const item of floor[kind]) {
       const id = identity(kind, item.id, floor.id), old = nativeOriginal('openings', id), o: any = item;
-      const style = kind === 'doors' ? ['single', 'double', 'sliding'].includes(o.type) ? o.type : 'single' : o.type === 'sliding' ? 'sliding' : 'fixed';
+      const style = kind === 'doors' ? ['single', 'double', 'sliding'].includes(o.type) ? o.type : o.type === 'french' ? 'double' : 'single' : o.type === 'sliding' ? 'sliding' : 'fixed';
       plan.openings.push({ ...old, id, wallID: walls.get(item.wallId), position: item.position, width: meters(item.width), height: meters(item.height), kind: kind === 'doors' ? 'door' : 'window', style: old.style === 'patio' && style === 'sliding' ? 'patio' : style,
         ...(kind === 'doors' ? { hingeLeft: o.swingDirection === 'right', opensInward: !o.flipSide } : { sillHeight: meters(o.sillHeight) }) });
     }

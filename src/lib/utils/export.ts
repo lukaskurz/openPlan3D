@@ -452,7 +452,11 @@ export function exportAsSVG(project: Project, language: Locale = 'en') {
       };
     };
 
-    if (doorType === 'single' || doorType === 'pocket') {
+    const glazed = doorType === 'balcony' || doorType === 'french';
+    // Glass leaves carry a light glass line inside the leaf stroke, as on the canvas.
+    const glassLine = (x1: number, y1: number, x2: number, y2: number) => glazed
+      ? `  <line x1="${n2(x1)}" y1="${n2(y1)}" x2="${n2(x2)}" y2="${n2(y2)}" stroke="#8ecae6" stroke-width="1"/>\n` : '';
+    if (doorType === 'single' || doorType === 'balcony' || doorType === 'pocket') {
       const r = d.width;
       const hx = px + ux * hw * swingDir;
       const hy = py + uy * hw * swingDir;
@@ -466,6 +470,7 @@ export function exportAsSVG(project: Project, language: Locale = 'en') {
       }
       const panelAngle = doorType === 'pocket' ? sa : ea;
       paths += `  <line x1="${n2(hx)}" y1="${n2(hy)}" x2="${n2(hx + r * Math.cos(panelAngle))}" y2="${n2(hy + r * Math.sin(panelAngle))}" stroke="#444" stroke-width="2.5"/>\n`;
+      paths += glassLine(hx, hy, hx + r * Math.cos(panelAngle), hy + r * Math.sin(panelAngle));
       paths += `  <circle cx="${n2(hx)}" cy="${n2(hy)}" r="2.5" fill="#444"/>\n`;
     } else if (doorType === 'double' || doorType === 'french') {
       const r = hw;
@@ -478,6 +483,7 @@ export function exportAsSVG(project: Project, language: Locale = 'en') {
         const arc = svgArc(hx, hy, r, sa, ea);
         paths += `  <path d="${arc.path}" fill="none" stroke="#666" stroke-width="1"/>\n`;
         paths += `  <line x1="${n2(hx)}" y1="${n2(hy)}" x2="${n2(hx + r * Math.cos(ea))}" y2="${n2(hy + r * Math.sin(ea))}" stroke="#444" stroke-width="2.5"/>\n`;
+        paths += glassLine(hx, hy, hx + r * Math.cos(ea), hy + r * Math.sin(ea));
         paths += `  <circle cx="${n2(hx)}" cy="${n2(hy)}" r="2" fill="#444"/>\n`;
       }
     } else if (doorType === 'sliding') {
