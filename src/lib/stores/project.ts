@@ -662,6 +662,19 @@ export function moveWallGeometryDuringDrag(id: string, geometry: Pick<Wall, 'sta
   currentProject.set({ ...project });
 }
 
+/** Apply a solved drag step to several walls at once; the canvas owns the Undo group. */
+export function moveWallsDuringDrag(changes: Map<string, Partial<Wall>>) {
+  const project = get(currentProject);
+  const floor = project?.floors.find(f => f.id === project.activeFloorId);
+  if (!project || !floor || !changes.size) return;
+  for (const wall of floor.walls) {
+    const updates = changes.get(wall.id);
+    if (updates) Object.assign(wall, updates);
+  }
+  project.updatedAt = new Date();
+  currentProject.set({ ...project });
+}
+
 /** Resize joined corners atomically. Openings keep their normalized wall positions. */
 export function resizeWallLength(id: string, length: number, fixed: WallEndpoint = 'start'): string | null {
   const floor = get(activeFloor);

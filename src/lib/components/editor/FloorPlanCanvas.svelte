@@ -26,8 +26,8 @@
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
   import DimensionEditor from './DimensionEditor.svelte';
-  import { addConstraint, addGeometricConstraint, constraintPickMode, planNotice, showPlanNotice, updateConstraint, type GeometricConstraintKind } from '$lib/stores/project';
-  import { analyzeConstraints, buildSketch, type ConstraintAnalysis, type Sketch } from '$lib/utils/constraints';
+  import { moveWallsDuringDrag, addConstraint, addGeometricConstraint, constraintPickMode, planNotice, showPlanNotice, updateConstraint, type GeometricConstraintKind } from '$lib/stores/project';
+  import { analyzeConstraints, buildSketch, endpointKey, planConstrainedDrag, type ConstraintAnalysis, type Sketch } from '$lib/utils/constraints';
   import { dimensionFromPicks, dimensionOffset, pickAt, samePick, type DimensionPick } from '$lib/utils/constraints/picking';
   import { constraintLabelPosition, drawConstraintPreview, drawConstraints, drawPickHighlight, hitTestConstraint } from '$lib/utils/constraintRenderer';
   import type { Constraint } from '$lib/models/types';
@@ -189,6 +189,20 @@
       constraintPickWalls = [];
     } else result = addGeometricConstraint(constraintPick, [pick.wallId]);
     if ('error' in result) showPlanNotice(result.error, 'error');
+  }
+
+  // Constrained dragging: the solver moves walls in constrained parts of the plan, with the
+  // corner topology frozen at drag start so corners passing close by don't weld mid-drag.
+  let dragSketch: Sketch | null = null;
+  /** Drag endpoints towards targets through the constraints; returns the endpoints it took care of. */
+  function constrainedDragTo(targets: Map<string, Point>): Set<string> {
+    const floor = currentFloor;
+    if (!floor?.constraints?.length) return new Set();
+    dragSketch ??= buildSketch(floor.walls, floor.constraints);
+    const plan = planConstrainedDrag(floor.walls, floor.constraints, targets, dragSketch);
+    if (!plan) return new Set();
+    moveWallsDuringDrag(plan.changes);
+    return plan.handled;
   }
 
   /** Surfaces between two walls; otherwise the Dimensions setting (centreline or edge). */
@@ -3023,10 +3037,13 @@
           pt = angleSnap(other, pt);
         }
       }
-      moveWallEndpoint(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint, pt);
-      // Move all connected endpoints together
-      for (const conn of draggingConnectedEndpoints) {
-        moveWallEndpoint(conn.wallId, conn.endpoint, pt);
+      const handled = constrainedDragTo(new Map([[endpointKey(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint), pt]]));
+      if (!handled.has(endpointKey(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint))) {
+        moveWallEndpoint(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint, pt);
+        // Move all connected endpoints together
+        for (const conn of draggingConnectedEndpoints) {
+          moveWallEndpoint(conn.wallId, conn.endpoint, pt);
+        }
       }
     }
     if (draggingWallParallel && currentFloor) {
@@ -3049,14 +3066,17 @@
             x: draggingWallParallel.origEnd.x + dx,
             y: draggingWallParallel.origEnd.y + dy,
           };
-          moveWallEndpoint(draggingWallParallel.wallId, 'start', newStart);
-          moveWallEndpoint(draggingWallParallel.wallId, 'end', newEnd);
-          // Move connected walls' shared endpoints so adjacent walls stretch to stay connected
-          for (const conn of draggingWallParallel.connectedStart) {
-            moveWallEndpoint(conn.wallId, conn.endpoint, newStart);
-          }
-          for (const conn of draggingWallParallel.connectedEnd) {
-            moveWallEndpoint(conn.wallId, conn.endpoint, newEnd);
+          const handled = constrainedDragTo(new Map([[endpointKey(wall.id, 'start'), newStart], [endpointKey(wall.id, 'end'), newEnd]]));
+          if (!handled.has(endpointKey(wall.id, 'start'))) {
+            moveWallEndpoint(draggingWallParallel.wallId, 'start', newStart);
+            moveWallEndpoint(draggingWallParallel.wallId, 'end', newEnd);
+            // Move connected walls' shared endpoints so adjacent walls stretch to stay connected
+            for (const conn of draggingWallParallel.connectedStart) {
+              moveWallEndpoint(conn.wallId, conn.endpoint, newStart);
+            }
+            for (const conn of draggingWallParallel.connectedEnd) {
+              moveWallEndpoint(conn.wallId, conn.endpoint, newEnd);
+            }
           }
         }
       }
@@ -3065,7 +3085,17 @@
       const mSnapStep = currentSnapToGrid ? currentGridSize : SNAP;
       const dx = Math.round((mousePos.x - draggingMultiSelect.startMousePos.x) / mSnapStep) * mSnapStep;
       const dy = Math.round((mousePos.y - draggingMultiSelect.startMousePos.y) / mSnapStep) * mSnapStep;
+      // Selected walls in constrained parts of the plan move through the solver.
+      const wallTargets = new Map<string, Point>();
       for (const [id, orig] of draggingMultiSelect.origPositions) {
+        if (orig.start && orig.end && !orig.curvePoint && currentFloor.walls.some(w => w.id === id)) {
+          wallTargets.set(endpointKey(id, 'start'), { x: orig.start.x + dx, y: orig.start.y + dy });
+          wallTargets.set(endpointKey(id, 'end'), { x: orig.end.x + dx, y: orig.end.y + dy });
+        }
+      }
+      const solvedWalls = constrainedDragTo(wallTargets);
+      for (const [id, orig] of draggingMultiSelect.origPositions) {
+        if (solvedWalls.has(endpointKey(id, 'start'))) continue;
         if (orig.opening) {
           const wall=currentFloor.walls.find(item => item.id === orig.opening!.wallId);
           if (wall) {
@@ -3098,7 +3128,14 @@
       const rSnapStep = currentSnapToGrid ? currentGridSize : SNAP;
       const dx = Math.round((mousePos.x - roomDragStartMouse.x) / rSnapStep) * rSnapStep;
       const dy = Math.round((mousePos.y - roomDragStartMouse.y) / rSnapStep) * rSnapStep;
+      const targets = new Map<string, Point>();
       for (const [wid, orig] of roomDragStartPositions) {
+        targets.set(endpointKey(wid, 'start'), { x: orig.start.x + dx, y: orig.start.y + dy });
+        targets.set(endpointKey(wid, 'end'), { x: orig.end.x + dx, y: orig.end.y + dy });
+      }
+      const handled = constrainedDragTo(targets);
+      for (const [wid, orig] of roomDragStartPositions) {
+        if (handled.has(endpointKey(wid, 'start'))) continue;
         moveWallEndpoint(wid, 'start', { x: orig.start.x + dx, y: orig.start.y + dy });
         moveWallEndpoint(wid, 'end', { x: orig.end.x + dx, y: orig.end.y + dy });
       }
@@ -3379,6 +3416,7 @@
     draggingWindowId = null;
     draggingHandle = null;
     draggingWallEndpoint = null;
+    dragSketch = null;
     draggingConnectedEndpoints = [];
     wallSnapInfo = null;
   }
