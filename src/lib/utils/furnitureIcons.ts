@@ -375,6 +375,37 @@ const drawFridge: DrawFn = (ctx, w, d) => {
   ctx.stroke();
 };
 
+/** Wine fridge from above: cabinet, glass door along the front (+y) with a grip strip, and a bottle mark. */
+const drawWineFridge: DrawFn = (ctx, w, d, color) => {
+  const door = d * 0.08;
+  roundRect(ctx, -w/2, -d/2, w, d - door, 2);
+  ctx.fill(); ctx.stroke();
+  // Glass door
+  ctx.fillStyle = color + '90';
+  roundRect(ctx, -w/2, d/2 - door, w, door, 1);
+  ctx.fill(); ctx.stroke();
+  // Grip strip on the opening side
+  ctx.beginPath();
+  ctx.moveTo(-w/2 + w * 0.06, d/2 - door * 0.5);
+  ctx.lineTo(-w/2 + w * 0.3, d/2 - door * 0.5);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // A bottle lying front to back
+  const r = Math.min(w, d) * 0.1, top = -d * 0.3, bottom = d * 0.3 - door;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.35, top);
+  ctx.lineTo(-r * 0.35, top + (bottom - top) * 0.3);
+  ctx.quadraticCurveTo(-r, top + (bottom - top) * 0.38, -r, top + (bottom - top) * 0.5);
+  ctx.lineTo(-r, bottom);
+  ctx.lineTo(r, bottom);
+  ctx.lineTo(r, top + (bottom - top) * 0.5);
+  ctx.quadraticCurveTo(r, top + (bottom - top) * 0.38, r * 0.35, top + (bottom - top) * 0.3);
+  ctx.lineTo(r * 0.35, top);
+  ctx.closePath();
+  ctx.lineWidth = 1;
+  ctx.stroke();
+};
+
 const drawCounter: DrawFn = (ctx, w, d) => {
   roundRect(ctx, -w/2, -d/2, w, d, 1);
   ctx.fill(); ctx.stroke();
@@ -1044,6 +1075,7 @@ const iconDrawers: Record<string, DrawFn> = {
   potted_plant: drawPlant,
   floor_plant: drawPlant,
   hanging_plant: drawPlant,
+  wine_fridge: drawWineFridge,
   curtain: drawCurtain,
   sheer_curtain: drawCurtain,
   wall_art: drawWallArt,

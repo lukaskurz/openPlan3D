@@ -504,6 +504,19 @@
       "model": "toilet"
     },
     {
+      "id": "wine_fridge",
+      "name": "Wine Fridge",
+      "category": "Kitchen",
+      "dimensionsCm": {
+        "width": 48,
+        "depth": 56.5,
+        "height": 83.8
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
       "id": "bathtub",
       "name": "Bathtub",
       "category": "Bathroom",

@@ -41,6 +41,7 @@ export const furnitureCatalog: FurnitureDef[] = [
   // Bathroom
   { id: 'toilet', name: 'Toilet', category: 'Bathroom', icon: '🚽', color: '#e5e7eb', width: 40, depth: 65, height: 40 },
   { id: 'bathtub', name: 'Bathtub', category: 'Bathroom', icon: '🛁', color: '#93c5fd', width: 170, depth: 75, height: 60 },
+  { id: 'wine_fridge', name: 'Wine Fridge', category: 'Kitchen', icon: '🍷', color: '#18181b', width: 48, depth: 56.5, height: 83.8 },
   { id: 'shower', name: 'Shower', category: 'Bathroom', icon: '🚿', color: '#bae6fd', width: 90, depth: 90, height: 210 },
   { id: 'sink_b', name: 'Sink', category: 'Bathroom', icon: '🪥', color: '#cbd5e1', width: 60, depth: 45, height: 85 },
   { id: 'washer_dryer', name: 'Washer/Dryer', category: 'Bathroom', icon: '👕', color: '#e2e8f0', width: 60, depth: 65, height: 85 },

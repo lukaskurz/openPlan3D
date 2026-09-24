@@ -21,6 +21,7 @@ export const portugueseFurnitureNames: Readonly<Record<string, string>> = {
   "stove": "Fogão",
   "fridge": "Geladeira",
   "sink_k": "Pia de cozinha",
+  "wine_fridge": "Adega climatizada",
   "counter": "Bancada",
   "dishwasher": "Lava-louças",
   "oven": "Forno",

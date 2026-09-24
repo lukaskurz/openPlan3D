@@ -23,7 +23,7 @@ function createMaterial(color: string, roughness = 0.7, metalness = 0.1): THREE.
 function enableShadows(group: THREE.Group): void {
   group.traverse((child) => {
     if (child instanceof THREE.Mesh) {
-      child.castShadow = true;
+      child.castShadow = child.userData.castShadow ?? true;
       child.receiveShadow = true;
     }
   });
@@ -100,6 +100,9 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
       break;
     case 'sink_k':
       createKitchenSink(group, w, d, h, color);
+      break;
+    case 'wine_fridge':
+      createWineFridge(group, w, d, h, color);
       break;
     case 'counter':
       createCounter(group, w, d, h, color);
@@ -799,6 +802,92 @@ function createCounter(group: THREE.Group, w: number, d: number, h: number, colo
 function createDishwasher(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const bodyColor = createMaterial(color, 0.4, 0.3);
   const handleColor = createMaterial('#333333', 0.3, 0.8);
+
+/**
+ * Dual-zone wine fridge modelled on a 48 × 56.5 × 83.8 cm cabinet: a tinted glass door with the
+ * controls along its top and a grip strip on the opening side, beech shelves of lying bottles,
+ * and a black band between the two temperature zones. The door is at the front (+Z).
+ */
+function createWineFridge(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const body = createMaterial(color, 0.45, 0.2);
+  const trim = createMaterial('#0a0a0b', 0.2, 0.4);
+  const liner = createMaterial('#27272a', 0.8, 0.1);
+  const beech = createMaterial('#d9b98f', 0.75, 0);
+  const label = createMaterial('#d4d4d8', 0.6, 0);
+  const glass = new THREE.MeshStandardMaterial({ color: '#0f172a', roughness: 0.05, metalness: 0.4, transparent: true, opacity: 0.3, depthWrite: false });
+  const light = new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#f1f5f9', emissiveIntensity: 0.8 });
+  const box = (sx: number, sy: number, sz: number, x: number, y: number, z: number, material: THREE.Material) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(sx, 0.1), Math.max(sy, 0.1), Math.max(sz, 0.1)), material);
+    mesh.position.set(x, y, z);
+    group.add(mesh);
+    return mesh;
+  };
+
+  const foot = Math.min(2.5, h * 0.03), doorT = Math.min(4, d * 0.07), wall = Math.min(3, w * 0.06);
+  const zBack = -d / 2, zFront = d / 2 - doorT, zMid = (zBack + zFront) / 2, bodyD = zFront - zBack;
+  const plinth = h * 0.08, floor = foot + plinth, ceiling = h - wall;
+  const iw = w - 2 * wall, innerBack = zBack + wall, innerD = zFront - innerBack;
+  // Feet and cabinet shell; the plinth hides the compressor
+  for (const fx of [-w / 2 + 4, w / 2 - 4]) for (const fz of [zBack + 4, zFront - 4]) box(4, foot, 4, fx, foot / 2, fz, trim);
+  for (const side of [-1, 1]) box(wall, h - foot, bodyD, side * (w - wall) / 2, (foot + h) / 2, zMid, body);
+  box(iw, wall, bodyD, 0, h - wall / 2, zMid, body);
+  box(iw, plinth, bodyD, 0, foot + plinth / 2, zMid, body);
+  box(iw, ceiling - floor, wall, 0, (floor + ceiling) / 2, zBack + wall / 2, liner);
+  box(iw * 0.5, 0.4, 1.5, 0, ceiling - 0.2, zFront - 6, light);
+
+  // Shelf levels as fractions of the cavity; the zone band sits under the upper zone
+  const cavity = ceiling - floor, at = (f: number) => floor + cavity * f;
+  const shelves = [0.02, 0.3, 0.59, 0.8], band = [0.5, 0.545];
+  const bandY = (at(band[0]) + at(band[1])) / 2;
+  box(iw, at(band[1]) - at(band[0]), innerD, 0, bandY, innerBack + innerD / 2, trim);
+  for (const side of [-1, 1]) box(iw * 0.28, 0.5, 0.2, side * iw * 0.28, bandY, zFront - 0.1, label);
+
+  // Bottles lie front to back: bases out in the upper zone, capsules out in the lower one
+  const r = 3.65, length = Math.min(30, innerD - 3), neck = 1.4;
+  const profile = [[0, 0], [r, 0], [r, 0.64], [r * 0.93, 0.7], [r * 0.6, 0.76], [neck, 0.82], [neck, 1]]
+    .map(([x, y]) => new THREE.Vector2(x, y * length));
+  const bottleGeo = new THREE.LatheGeometry(profile, 16);
+  const capsuleGeo = new THREE.CylinderGeometry(neck + 0.15, neck + 0.15, length * 0.15, 12).translate(0, length * 0.93, 0);
+  const glassColors = ['#1f3b2c', '#3b1c1c', '#26301d', '#c9938a', '#1c2a24', '#4a2323'].map(c => createMaterial(c, 0.25, 0.3));
+  const capsules = ['#c8a24a', '#6b1f2a', '#2f5d3a', '#e5e7eb', '#c8a24a'].map(c => createMaterial(c, 0.35, 0.6));
+  const addBottle = (x: number, y: number, capsuleOut: boolean, seed: number) => {
+    const bottle = new THREE.Group();
+    bottle.add(new THREE.Mesh(bottleGeo, glassColors[seed % glassColors.length]));
+    bottle.add(new THREE.Mesh(capsuleGeo, capsules[(seed * 3) % capsules.length]));
+    const zOut = zFront - 1.5;
+    bottle.rotation.x = capsuleOut ? Math.PI / 2 : -Math.PI / 2;
+    bottle.position.set(x, y, capsuleOut ? zOut - length : zOut);
+    group.add(bottle);
+  };
+  const perRow = Math.max(1, Math.floor((iw - 1) / (2 * r + 0.4)));
+  const pitch = (iw - 1) / perRow, lift = Math.sqrt(Math.max(0, 4 * r * r - pitch * pitch / 4));
+  shelves.forEach((f, i) => {
+    const top = at(f);
+    const space = Math.min(ceiling, ...[...shelves, band[0]].map(at).filter(y => y > top)) - 1.2 - top;
+    // Pull-out beech shelf with a thicker front rail
+    box(iw - 0.5, 1.2, innerD - 2, 0, top - 0.6, innerBack + innerD / 2 - 1, beech);
+    box(iw - 0.5, 2.2, 1.5, 0, top - 1.1, zFront - 2.5, beech);
+    const capsuleOut = f < band[0];
+    for (let n = 0; n < perRow; n++) addBottle(-iw / 2 + 0.5 + pitch * (n + 0.5), top + r, capsuleOut, i * 5 + n * 7);
+    if (2 * r + lift <= space) {
+      for (let n = 1; n < perRow; n++) addBottle(-iw / 2 + 0.5 + pitch * n, top + r + lift, capsuleOut, i * 5 + n * 7 + 2);
+    }
+  });
+
+  // Door: a black frame behind one sheet of tinted glass, a grip strip on the opening (left) side
+  const frameD = doorT - 1, frameZ = zFront + frameD / 2, border = Math.min(2.5, w * 0.05);
+  const doorBottom = foot, topBorder = h * 0.09, bottomBorder = plinth;
+  box(w, topBorder, frameD, 0, h - topBorder / 2, frameZ, trim);
+  box(w, bottomBorder, frameD, 0, doorBottom + bottomBorder / 2, frameZ, trim);
+  for (const side of [-1, 1]) box(border, h - doorBottom, frameD, side * (w - border) / 2, (doorBottom + h) / 2, frameZ, trim);
+  const pane = box(w, h - doorBottom, 0.5, 0, (doorBottom + h) / 2, d / 2 - 0.75, glass);
+  pane.userData.castShadow = false;
+  box(1, (h - doorBottom) * 0.45, 1, -w / 2 + 1.2, doorBottom + (h - doorBottom) * 0.55, d / 2 - 0.5, trim);
+  // Touch controls and the two zone displays along the top border
+  const panelY = h - topBorder / 2, panelZ = d / 2 - 0.45;
+  for (const x of [-0.3, -0.22, -0.14, 0.14, 0.22, 0.3]) box(0.8, 0.8, 0.1, x * w, panelY, panelZ, light);
+  for (const x of [-0.05, 0.05]) box(w * 0.06, 1.4, 0.1, x * w, panelY, panelZ, light);
+}
 
   // Main body
   const bodyGeo = new THREE.BoxGeometry(w, h, d);
