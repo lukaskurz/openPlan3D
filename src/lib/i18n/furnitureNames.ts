@@ -6,6 +6,7 @@ import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 export const portugueseFurnitureNames: Readonly<Record<string, string>> = {
   "sofa": "Sofá",
   "sofa_l": "Sofá em L",
+  "sofa_chaise": "Sofá de canto com chaise",
   "loveseat": "Sofá de dois lugares",
   "chair": "Poltrona",
   "coffee_table": "Mesa de centro",

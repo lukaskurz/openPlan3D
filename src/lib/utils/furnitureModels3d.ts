@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { FurnitureDef } from './furnitureCatalog';
-import { lSofaLayout } from './furnitureIcons';
+import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { chaiseSofaLayout, lSofaLayout } from './furnitureIcons';
 
 // Helper to darken/lighten colors
 function adjustColor(color: string, factor: number): number {
@@ -51,6 +52,9 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
     }
     case 'sofa':
       createSofa(group, w, d, h, color);
+      break;
+    case 'sofa_chaise':
+      createChaiseSofa(group, w, d, h, color);
       break;
     case 'sofa_l':
       createSofaL(group, w, d, h, color);
@@ -342,6 +346,63 @@ function createSofa(group: THREE.Group, w: number, d: number, h: number, color: 
   const rightArm = new THREE.Mesh(armGeo, darkColor);
   rightArm.position.set(w * 0.425, h * 0.4, 0);
   group.add(rightArm);
+}
+
+/** Big corner sofa with a chaise on the left, modelled on a 300 × 225 × 86 cm quilted sofa. */
+function createChaiseSofa(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const fabric = createMaterial(color, 0.95, 0);
+  const body = createMaterial(color, 0.95, 0);
+  body.color.multiplyScalar(0.9);
+  const metal = createMaterial('#d4d4d8', 0.25, 0.9);
+  const L = chaiseSofaLayout(w, d);
+  const x0 = -w / 2, z0 = -d / 2, x1 = w / 2, z1 = d / 2;
+  // Heights from the reference: 5 cm feet, 41 cm seat, ~62 cm arms, 86 cm to the cushion tops.
+  const foot = h * 0.058, baseTop = h * 0.33, seatTop = h * 0.477, armTop = h * 0.72, backTop = h * 0.7;
+  const soft = (xa: number, za: number, xb: number, zb: number, ya: number, yb: number, material: THREE.Material, radius: number, gap = 0) => {
+    const sx = Math.max(xb - xa - gap, 0.5), sy = Math.max(yb - ya, 0.5), sz = Math.max(zb - za - gap, 0.5);
+    const r = Math.min(radius, sx / 2, sy / 2, sz / 2) * 0.99;
+    const mesh = new THREE.Mesh(new RoundedBoxGeometry(sx, sy, sz, 3, r), material);
+    mesh.position.set((xa + xb) / 2, (ya + yb) / 2, (za + zb) / 2);
+    group.add(mesh);
+    return mesh;
+  };
+  const inset = L.arm * 0.15;
+  // Plinth on metal feet
+  soft(x0 + inset, z0 + inset, x0 + L.chaise, z1 - inset, foot, baseTop, body, 3);
+  soft(x0 + L.chaise - 5, z0 + inset, x1 - inset, z0 + L.main - inset, foot, baseTop, body, 3);
+  const feet: [number, number][] = [[x0 + 6, z0 + 6], [x1 - 6, z0 + 6], [x0 + 6, z1 - 6], [x0 + L.chaise - 6, z1 - 6], [x1 - 6, z0 + L.main - 6], [x0 + L.chaise - 6, z0 + L.main - 6]];
+  for (const [fx, fz] of feet) {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(8, foot, 5), metal);
+    mesh.position.set(fx, foot / 2, fz);
+    group.add(mesh);
+  }
+  // Arms: a long one down the chaise, a shorter rounded one on the right
+  soft(x0, z0, x0 + L.arm, z1, foot, armTop, body, L.arm * 0.45);
+  soft(x1 - L.arm, z0, x1, z0 + L.main, foot, armTop, body, L.arm * 0.45);
+  // Back frame
+  soft(x0 + L.arm, z0, x1 - L.arm, z0 + L.backFrame, baseTop, backTop, body, 4);
+  // Channel-quilted seat cushions
+  const channels = (xa: number, xb: number, za: number, zb: number) => {
+    const n = Math.max(1, Math.round((xb - xa) / L.channel));
+    for (let i = 0; i < n; i++) {
+      soft(xa + (xb - xa) * i / n, za, xa + (xb - xa) * (i + 1) / n, zb, baseTop, seatTop, fabric, (seatTop - baseTop) * 0.45, 1);
+    }
+  };
+  channels(x0 + L.arm, x0 + L.chaise, z0 + L.backFrame, z1);
+  channels(x0 + L.chaise, x1 - L.arm, z0 + L.backFrame, z0 + L.main);
+  // Four large loose back cushions, leaning slightly back
+  const span = w - 2 * L.arm, count = 4;
+  for (let i = 0; i < count; i++) {
+    const xa = x0 + L.arm + span * i / count;
+    const cushion = soft(xa, z0 + L.backFrame * 0.6, xa + span / count, z0 + L.backFrame + L.backCushion * 0.9, seatTop - 2, h, fabric, L.backCushion * 0.45, 2);
+    cushion.rotation.x = -0.12;
+  }
+  // Scatter cushions: two on the chaise, two on the main section
+  const scatter = Math.min(45, span / 7), front = z0 + L.backFrame + L.backCushion;
+  for (const cx of [x0 + L.arm + scatter * 0.7, x0 + L.arm + scatter * 1.8, x1 - L.arm - scatter * 1.8, x1 - L.arm - scatter * 0.7]) {
+    const cushion = soft(cx - scatter / 2, front - scatter * 0.3, cx + scatter / 2, front, seatTop, seatTop + scatter, fabric, scatter * 0.3);
+    cushion.rotation.set(-0.25, (cx < 0 ? 0.2 : -0.2), 0);
+  }
 }
 
 /** Corner sectional: backs along the rear (-Z) and right (+X) sides, arms at both open ends. */

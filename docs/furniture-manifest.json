@@ -257,6 +257,19 @@
       "model": null
     },
     {
+      "id": "sofa_chaise",
+      "name": "Corner Sofa with Chaise",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 300,
+        "depth": 225,
+        "height": 86
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
       "id": "loveseat",
       "name": "Loveseat",
       "category": "Living Room",

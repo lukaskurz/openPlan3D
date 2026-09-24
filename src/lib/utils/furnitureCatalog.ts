@@ -18,6 +18,7 @@ export const furnitureCatalog: FurnitureDef[] = [
   // Living Room
   { id: 'sofa', name: 'Sofa', category: 'Living Room', icon: '🛋️', color: '#a78bfa', width: 200, depth: 90, height: 80 },
   { id: 'sofa_l', name: 'L-Shaped Sofa', category: 'Living Room', icon: '🛋️', color: '#a78bfa', width: 280, depth: 180, height: 80 },
+  { id: 'sofa_chaise', name: 'Corner Sofa with Chaise', category: 'Living Room', icon: '🛋️', color: '#a8a29e', width: 300, depth: 225, height: 86 },
   { id: 'loveseat', name: 'Loveseat', category: 'Living Room', icon: '🛋️', color: '#8b5cf6', width: 140, depth: 85, height: 80 },
   { id: 'chair', name: 'Armchair', category: 'Living Room', icon: '💺', color: '#c084fc', width: 80, depth: 80, height: 90 },
   { id: 'coffee_table', name: 'Coffee Table', category: 'Living Room', icon: '☕', color: '#92400e', width: 120, depth: 60, height: 45 },

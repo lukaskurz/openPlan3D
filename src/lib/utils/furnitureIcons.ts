@@ -91,6 +91,56 @@ const drawSofaL: DrawFn = (ctx, w, d, color) => {
   ctx.stroke();
 };
 
+/**
+ * Big corner sofa with a chaise on the left (−x): a full-length arm along the chaise,
+ * a shorter main section on the right, loose back cushions and channel-quilted seats.
+ * Proportions follow a 300 × 225 cm (main section 135 cm deep) model.
+ */
+export function chaiseSofaLayout(w: number, d: number) {
+  const main = d * 0.6;
+  return {
+    arm: w / 12,                 // 25 cm
+    chaise: w * 0.5,             // arm + 125 cm seat
+    main,                        // 135 cm
+    backFrame: main * 0.16,      // ~22 cm
+    backCushion: main * 0.22,    // ~30 cm
+    channel: w / 12,             // quilting channel width
+  };
+}
+
+const drawChaiseSofa: DrawFn = (ctx, w, d, color) => {
+  const L = chaiseSofaLayout(w, d);
+  const x0 = -w / 2, y0 = -d / 2, x1 = w / 2, y1 = d / 2;
+  const seatY = y0 + L.backFrame;
+  // Frame: back and arms
+  ctx.fillStyle = color + '80';
+  roundRect(ctx, x0 + L.arm, y0, w - 2 * L.arm, L.backFrame, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x0, y0, L.arm, d, L.arm / 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - L.arm, y0, L.arm, L.main, L.arm / 2); ctx.fill(); ctx.stroke();
+  // Seats: chaise and main section
+  ctx.fillStyle = color + '40';
+  roundRect(ctx, x0 + L.arm, seatY, L.chaise - L.arm, y1 - seatY, 3); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x0 + L.chaise, seatY, x1 - L.arm - (x0 + L.chaise), y0 + L.main - seatY, 3); ctx.fill(); ctx.stroke();
+  // Loose back cushions
+  ctx.fillStyle = color + '70';
+  const cushions = 4, span = w - 2 * L.arm;
+  for (let i = 0; i < cushions; i++) {
+    roundRect(ctx, x0 + L.arm + span * i / cushions + 1, seatY, span / cushions - 2, L.backCushion, L.backCushion / 3);
+    ctx.fill(); ctx.stroke();
+  }
+  // Quilting channels
+  ctx.beginPath();
+  const channels = (from: number, to: number, top: number, bottom: number) => {
+    const n = Math.max(1, Math.round((to - from) / L.channel));
+    for (let i = 1; i < n; i++) { const x = from + (to - from) * i / n; ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
+  };
+  channels(x0 + L.arm, x0 + L.chaise, seatY + L.backCushion, y1 - 2);
+  channels(x0 + L.chaise, x1 - L.arm, seatY + L.backCushion, y0 + L.main - 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+};
+
 const drawLoveseat: DrawFn = (ctx, w, d, color) => {
   // Same as sofa but 2 cushions
   const armW = w * 0.14;
@@ -956,6 +1006,7 @@ const iconDrawers: Record<string, DrawFn> = {
   },
   sofa: drawSofa,
   sofa_l: drawSofaL,
+  sofa_chaise: drawChaiseSofa,
   loveseat: drawLoveseat,
   chair: drawChair,
   coffee_table: drawTable,
