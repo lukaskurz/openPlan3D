@@ -19,7 +19,8 @@ const GESTURE_GAP_MS = 250;
  */
 export function looksLikeMouseWheel(e: WheelLike): boolean {
   if (e.deltaMode !== 0) return true;
-  if (e.deltaX !== 0) return false;
+  // Sideways movement and sub-notch deltas (a macOS notch is at least ~4 px) are a trackpad.
+  if (e.deltaX !== 0 || Math.abs(e.deltaY) < 4) return false;
   if (typeof e.wheelDeltaY === 'number' && e.wheelDeltaY !== 0) {
     return Math.abs(e.wheelDeltaY + 3 * e.deltaY) > 1.5; // wheelDelta is rounded to whole numbers
   }
@@ -28,28 +29,29 @@ export function looksLikeMouseWheel(e: WheelLike): boolean {
 }
 
 /**
- * Pinch events are ctrl+wheel with small fractional deltas and arbitrary wheelDelta values,
- * so a zoom event only counts as a notched wheel on unmistakable evidence.
+ * macOS Chromium pinch events are ctrl+wheel with small fractional deltas and
+ * wheelDeltaY = ±120 on every event, so wheelDelta says nothing here. Only line/page
+ * modes and large steps (Ctrl+wheel on Windows/Linux, ~100 px) count as a notch.
  */
 function looksLikeCtrlMouseWheel(e: WheelLike): boolean {
-  if (e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50) return true;
-  const w = e.wheelDeltaY;
-  return typeof w === 'number' && w !== 0 && Math.abs(w) % 120 === 0 && Math.abs(w + 3 * e.deltaY) > 1.5;
+  return e.deltaMode !== 0 || Math.abs(e.deltaY) >= 50;
 }
 
-export const DEFAULT_ZOOM_SPEED = 3;
+export const DEFAULT_ZOOM_SPEED = 5;
+
+/** 1 at the default speed, where a pinch follows the fingers exactly; 0.4× … ~3.2×. */
+function speedExponent(speed: number) {
+  return Math.pow(2, (validSpeed(speed) - DEFAULT_ZOOM_SPEED) / 3);
+}
 
 /** Zoom factor for one mouse-wheel notch (1.1 at the default speed). */
 export function wheelStep(speed = DEFAULT_ZOOM_SPEED): number {
-  return 1 + validSpeed(speed) / 30;
+  return Math.pow(1.1, speedExponent(speed));
 }
 
-/**
- * Scales a pinch's native scale change. Speeds map geometrically from following
- * the fingers at 2% (speed 1) to 50% (speed 10); the default is about 4%.
- */
+/** Scales a pinch's native scale change; the default follows the fingers 1:1 like native zoom. */
 export function pinchFactor(scaleChange: number, speed = DEFAULT_ZOOM_SPEED): number {
-  return Math.pow(scaleChange, 0.02 * Math.pow(25, (validSpeed(speed) - 1) / 9));
+  return Math.pow(scaleChange, speedExponent(speed));
 }
 
 function validSpeed(speed: number) {

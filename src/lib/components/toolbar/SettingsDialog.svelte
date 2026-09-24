@@ -78,7 +78,7 @@
     snapToGrid: true,
     snapToWalls: true,
     gridSize: 25,
-    zoomSpeed: 3,
+    zoomSpeed: 5,
   });
 
   onDestroy(projectSettings.subscribe((s) => { settings = { ...s }; }));

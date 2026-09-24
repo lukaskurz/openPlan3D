@@ -27,7 +27,7 @@ const defaultSettings: ProjectSettings = {
   snapToGrid: true,
   snapToWalls: true,
   gridSize: 25,
-  zoomSpeed: 3,
+  zoomSpeed: 5,
 };
 
 // Load from localStorage if available
