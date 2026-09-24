@@ -12,6 +12,7 @@ export interface ProjectSettings {
   snapToGrid: boolean;                   // snap elements to grid when dragging
   snapToWalls: boolean;                  // snap furniture to nearby walls when dragging
   gridSize: number;                      // grid snap size in cm (default 25)
+  zoomSpeed: number;                     // 1 (slow) – 10 (fast) for pinch and wheel zoom
 }
 
 const defaultSettings: ProjectSettings = {
@@ -26,6 +27,7 @@ const defaultSettings: ProjectSettings = {
   snapToGrid: true,
   snapToWalls: true,
   gridSize: 25,
+  zoomSpeed: 3,
 };
 
 // Load from localStorage if available

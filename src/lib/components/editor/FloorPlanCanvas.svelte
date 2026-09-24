@@ -21,7 +21,7 @@
   import { getCatalogItem, getFurnitureSize, type FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
   import { byElevation } from '$lib/utils/furnitureStacking';
-  import { createWheelInterpreter } from '$lib/utils/wheelGestures';
+  import { createWheelInterpreter, pinchFactor, wheelStep } from '$lib/utils/wheelGestures';
   import { handleGlobalShortcut, isEditingField, isControlKey } from '$lib/utils/shortcuts';
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import ContextMenu from './ContextMenu.svelte';
@@ -161,7 +161,7 @@
     units: 'metric', showDimensions: true, showExternalDimensions: true,
     showInternalDimensions: false, showExtensionLines: true,
     showObjectDistance: true, dimensionLineColor: '#1e293b',
-    wallMeasureMode: 'centerline', snapToGrid: true, snapToWalls: true, gridSize: 25,
+    wallMeasureMode: 'centerline', snapToGrid: true, snapToWalls: true, gridSize: 25, zoomSpeed: 3,
   });
   onDestroy(projectSettings.subscribe((s) => {
     dimSettings = s;
@@ -3172,7 +3172,7 @@
     zoom = newZoom;
   }
 
-  const interpretWheel = createWheelInterpreter();
+  const interpretWheel = createWheelInterpreter(() => get(projectSettings).zoomSpeed);
   function onWheel(e: WheelEvent) {
     markDirty();
     e.preventDefault();
@@ -3188,7 +3188,8 @@
       // Mouse wheel rotates the furniture preview
       placingRotation.update(r => (r + action.direction * 15) % 360);
     } else {
-      zoomAt(e.clientX, e.clientY, action.direction > 0 ? 0.9 : 1.1);
+      const step = wheelStep(get(projectSettings).zoomSpeed);
+      zoomAt(e.clientX, e.clientY, action.direction > 0 ? 1 / step : step);
     }
   }
 
@@ -3203,7 +3204,7 @@
     e.preventDefault();
     const g = e as SafariGestureEvent;
     if (!safariGesture || !g.scale) return;
-    zoomAt(g.clientX, g.clientY, g.scale / safariGesture.scale);
+    zoomAt(g.clientX, g.clientY, pinchFactor(g.scale / safariGesture.scale, get(projectSettings).zoomSpeed));
     safariGesture.scale = g.scale;
     markDirty();
   }

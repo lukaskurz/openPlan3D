@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createWheelInterpreter, looksLikeMouseWheel } from '$lib/utils/wheelGestures';
+import { createWheelInterpreter, looksLikeMouseWheel, pinchFactor, wheelStep } from '$lib/utils/wheelGestures';
 
 const wheel = (deltaY: number, extra: Record<string, number | boolean> = {}) =>
   ({ deltaX: 0, deltaY, deltaMode: 0, ctrlKey: false, metaKey: false, timeStamp: 0, ...extra });
@@ -34,15 +34,37 @@ describe('wheel gestures', () => {
   it('zooms smoothly on pinch, in proportion to the gesture', () => {
     const interpret = createWheelInterpreter();
     const small = interpret(wheel(-2, { ctrlKey: true })), large = interpret(wheel(-10, { ctrlKey: true }));
-    expect(small).toEqual({ kind: 'zoom', factor: Math.exp(0.02) });
+    expect(small.kind === 'zoom' && small.factor).toBeCloseTo(Math.exp(0.02 * 0.3), 12);
     expect(large.kind === 'zoom' && large.factor).toBeGreaterThan(small.kind === 'zoom' ? small.factor : 0);
     expect(interpret(wheel(4, { ctrlKey: true }))).toMatchObject({ kind: 'zoom' });
     expect((interpret(wheel(4, { ctrlKey: true })) as { factor: number }).factor).toBeLessThan(1);
   });
 
+  it('never mistakes pinch events for wheel notches, whatever their wheelDelta', () => {
+    const interpret = createWheelInterpreter();
+    for (const wheelDeltaY of [undefined, 0, -3, 9, 10]) {
+      const action = interpret(wheel(-3.2, { ctrlKey: true, ...(wheelDeltaY === undefined ? {} : { wheelDeltaY }) })) as { factor: number };
+      expect(action.factor).toBeCloseTo(Math.exp(0.032 * 0.3), 12);
+    }
+    expect(interpret(wheel(-4.000244140625, { ctrlKey: true, wheelDeltaY: 120 }))).toEqual({ kind: 'zoom', factor: wheelStep(3) });
+    expect(interpret(wheel(100, { ctrlKey: true, wheelDeltaY: -120 }))).toEqual({ kind: 'zoom', factor: 1 / wheelStep(3) });
+  });
+
+  it('follows the zoom speed setting', () => {
+    let speed = 3;
+    const interpret = createWheelInterpreter(() => speed);
+    const at = (s: number) => { speed = s; return (interpret(wheel(-5, { ctrlKey: true })) as { factor: number }).factor; };
+    expect(at(1)).toBeLessThan(at(3));
+    expect(at(10)).toBeCloseTo(Math.exp(0.05), 12); // 10 follows the fingers 1:1
+    expect(wheelStep(3)).toBeCloseTo(1.1);
+    expect(wheelStep(10)).toBeGreaterThan(wheelStep(1));
+    expect(pinchFactor(2, 10)).toBeCloseTo(2);
+    expect(pinchFactor(2, Number.NaN)).toBeCloseTo(pinchFactor(2, 3));
+  });
+
   it('zooms in fixed steps for a mouse wheel, with or without Ctrl/Cmd', () => {
     const interpret = createWheelInterpreter();
     expect(interpret(wheel(100, { wheelDeltaY: -120 }))).toEqual({ kind: 'wheel', direction: 1 });
-    expect(interpret(wheel(-100, { wheelDeltaY: 120, metaKey: true }))).toEqual({ kind: 'zoom', factor: 1.1 });
+    expect(interpret(wheel(-100, { wheelDeltaY: 120, metaKey: true }))).toEqual({ kind: 'zoom', factor: wheelStep(3) });
   });
 });
