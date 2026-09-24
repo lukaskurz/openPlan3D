@@ -14,7 +14,7 @@ it('ignores project metadata, item details and 2D payloads without serializing p
     for (const key of ['walls', 'rooms', 'doors', 'windows', 'furniture'] as const)
       for (const item of floor[key]) item.details = { note: 'New note', price: 45, material: 'Metadata only', ceilingHeight: 240, photos: ['assets/photo.jpg'] };
     Object.assign(floor, { backgroundImage: unread, guides: unread, measurements: unread,
-      annotations: unread, textAnnotations: unread, groups: unread, entourage: unread });
+      annotations: unread, textAnnotations: unread, groups: unread, entourage: unread, constraints: unread });
   }
   expect(signature(project, true)).toBe(before);
 });

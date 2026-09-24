@@ -12,6 +12,9 @@ import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight 
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
+import type { Constraint } from '$lib/models/types';
+import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
+import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
 
 
 function uid(): string {
@@ -269,6 +272,7 @@ export function removeWall(id: string) {
     f.walls = f.walls.filter((w) => w.id !== id);
     f.doors = f.doors.filter((d) => d.wallId !== id);
     f.windows = f.windows.filter((w) => w.wallId !== id);
+    if (f.constraints) f.constraints = constraintsWithoutWalls(f.constraints, new Set([id]));
   }, 'Deleted wall');
 }
 
@@ -622,6 +626,10 @@ export function removeElement(id: string) {
     if (f.measurements) f.measurements = f.measurements.filter(item => item.id !== id);
     if (f.annotations) f.annotations = f.annotations.filter(item => item.id !== id);
     if (f.entourage) f.entourage = f.entourage.filter((e) => e.id !== id);
+    if (f.constraints) {
+      f.constraints = f.constraints.filter(c => c.id !== id);
+      if (isWall) f.constraints = constraintsWithoutWalls(f.constraints, new Set([id]));
+    }
     if (f.groups) f.groups = f.groups.map(group => ({ ...group, elementIds: group.elementIds.filter(itemId => !removedIds.has(itemId)) })).filter(group => group.elementIds.length >= 2);
   }, 'Deleted element');
 }
@@ -658,16 +666,19 @@ export function moveWallGeometryDuringDrag(id: string, geometry: Pick<Wall, 'sta
 export function resizeWallLength(id: string, length: number, fixed: WallEndpoint = 'start'): string | null {
   const floor = get(activeFloor);
   if (!floor) return 'Select a floor first.';
+  // A wall with a length dimension changes through that dimension.
+  const dimension = floor.constraints?.find(c => c.kind === 'length' && c.wallId === id && !c.driven);
+  if (dimension?.kind === 'length') {
+    const wall = floor.walls.find(w => w.id === id);
+    if (!wall || !Number.isFinite(length)) return 'Enter a length.';
+    const value = dimension.side === 0 ? length : dimension.value + length - Math.hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+    return updateConstraintValue(dimension.id, value, fixed);
+  }
   let changes: Map<string, Partial<Wall>>;
-  try { changes = planWallResize(floor.walls, id, length, fixed); }
+  try { changes = settleWallChanges(floor, planWallResize(floor.walls, id, length, fixed)); }
   catch (error) { return error instanceof Error ? error.message : 'The wall could not be resized.'; }
   if (!changes.size) return null;
-  mutate(f => {
-    for (const wall of f.walls) {
-      const updates = changes.get(wall.id);
-      if (updates) Object.assign(wall, updates);
-    }
-  }, 'Resized connected wall', `wall-length:${id}:${fixed}`);
+  applyWallChanges(changes, 'Resized connected wall', `wall-length:${id}:${fixed}`);
   return null;
 }
 
@@ -680,11 +691,32 @@ function applyWallChanges(changes: Map<string, Partial<Wall>>, description: stri
   }, description, coalesceKey);
 }
 
+const withWallChanges = (walls: Wall[], changes: Map<string, Partial<Wall>>) => walls.map(w => changes.has(w.id) ? { ...w, ...changes.get(w.id) } : w);
+
+/**
+ * Re-solve the floor's constraints around planned wall changes: the endpoints the edit
+ * placed stay put and everything else moves as little as possible. Throws with a
+ * user-facing message when the constraints can't accept the edit. Unconstrained floors
+ * pass through unchanged.
+ */
+function settleWallChanges(floor: Floor, changes: Map<string, Partial<Wall>>, walls: Wall[] = floor.walls): Map<string, Partial<Wall>> {
+  if (!floor.constraints?.some(isActiveConstraint) || !changes.size) return changes;
+  const pinned = new Map<string, Point>();
+  for (const [id, updates] of changes) {
+    if (updates.start) pinned.set(endpointKey(id, 'start'), updates.start);
+    if (updates.end) pinned.set(endpointKey(id, 'end'), updates.end);
+  }
+  const solved = planConstraintSolve(withWallChanges(walls, changes), floor.constraints, { pinned });
+  const merged = new Map(changes);
+  for (const [id, updates] of solved) merged.set(id, { ...merged.get(id), ...updates });
+  return merged;
+}
+
 export function setWallAngle(id: string, angle: number, fixed: WallEndpoint = 'start'): string | null {
   const floor = get(activeFloor);
   if (!floor) return 'Select a floor first.';
   let changes: Map<string, Partial<Wall>>;
-  try { changes = planWallAngle(floor.walls, id, angle, fixed); }
+  try { changes = settleWallChanges(floor, planWallAngle(floor.walls, id, angle, fixed)); }
   catch (error) { return error instanceof Error ? error.message : 'The wall could not be rotated.'; }
   if (changes.size) applyWallChanges(changes, 'Rotated wall', `wall-angle:${id}:${fixed}`);
   return null;
@@ -695,10 +727,109 @@ export function straightenWalls(tolerance?: number): number | string {
   const floor = get(activeFloor);
   if (!floor) return 'Select a floor first.';
   let changes: Map<string, Partial<Wall>>;
-  try { changes = planStraightenWalls(floor.walls, tolerance); }
+  try { changes = settleWallChanges(floor, planStraightenWalls(floor.walls, tolerance)); }
   catch (error) { return error instanceof Error ? error.message : 'The walls could not be straightened.'; }
   if (changes.size) applyWallChanges(changes, 'Straightened walls');
   return changes.size;
+}
+
+// --- Constraints ---
+
+/** A short message about the plan (e.g. a dimension that became driven), shown by the canvas. */
+export const planNotice = writable<{ text: string; tone: 'info' | 'error'; at: number } | null>(null);
+export function showPlanNotice(text: string, tone: 'info' | 'error' = 'info') {
+  planNotice.set({ text, tone, at: Date.now() });
+}
+
+type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
+export type NewConstraint = WithoutId<Constraint>;
+export type AddConstraintResult = { id: string; driven: boolean } | { error: string };
+
+/**
+ * Add a dimension or geometric constraint. A dimension that would over-constrain the
+ * plan is added as a driven (reference) dimension instead; an over-constraining
+ * geometric constraint is refused.
+ */
+export function addConstraint(input: NewConstraint): AddConstraintResult {
+  const floor = get(activeFloor);
+  if (!floor) return { error: 'Select a floor first.' };
+  const id = uid();
+  let constraint = { ...input, id } as Constraint;
+  const check = checkNewConstraint(floor.walls, floor.constraints ?? [], constraint);
+  if (check.status === 'unsatisfiable') return { error: check.message };
+  let changes = check.status === 'ok' ? check.changes : new Map<string, Partial<Wall>>();
+  if (check.status === 'overConstrained') {
+    if (!isDimension(constraint)) return { error: 'This would over-constrain the plan: the walls are already held this way.' };
+    constraint = { ...constraint, driven: true };
+    changes = new Map();
+  }
+  mutate(f => {
+    for (const wall of f.walls) { const updates = changes.get(wall.id); if (updates) Object.assign(wall, updates); }
+    (f.constraints ??= []).push(constraint);
+  }, isDimension(constraint) ? 'Added dimension' : 'Added constraint');
+  return { id, driven: !!constraint.driven };
+}
+
+/** Change a dimension's value and move the plan to match. Returns an error message, or null. */
+export function updateConstraintValue(id: string, value: number, fixedEnd: WallEndpoint = 'start'): string | null {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint || !isDimension(constraint)) return 'Select a dimension to change.';
+  if (Object.is(constraint.value, value)) return null;
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = planConstraintValue(floor.walls, floor.constraints!, id, value, fixedEnd); }
+  catch (error) { return error instanceof Error ? error.message : 'The dimension could not be changed.'; }
+  mutate(f => {
+    for (const wall of f.walls) { const updates = changes.get(wall.id); if (updates) Object.assign(wall, updates); }
+    const c = f.constraints?.find(c => c.id === id);
+    if (c && isDimension(c)) c.value = value;
+  }, 'Changed dimension', `constraint-value:${id}`);
+  return null;
+}
+
+/** Current measured value of a dimension on the active floor (cm or degrees). */
+export function measuredConstraintValue(c: Constraint, walls = get(activeFloor)?.walls ?? []): number | null {
+  return measureConstraint(c, buildSketch(walls));
+}
+
+/** Switch a dimension between driving (moves the plan) and driven (reports only). */
+export function setConstraintDriven(id: string, driven: boolean): string | null {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint || !isDimension(constraint)) return 'Select a dimension.';
+  if (!!constraint.driven === driven) return null;
+  const value = measuredConstraintValue(constraint, floor.walls) ?? constraint.value;
+  if (!driven) {
+    const others = floor.constraints!.filter(c => c.id !== id);
+    const check = checkNewConstraint(floor.walls, others, { ...constraint, driven: false, value } as Constraint);
+    if (check.status === 'overConstrained') return 'This dimension would over-constrain the plan. Remove another constraint first.';
+    if (check.status === 'unsatisfiable') return check.message;
+  }
+  mutate(f => {
+    const c = f.constraints?.find(c => c.id === id);
+    if (c && isDimension(c)) { c.value = value; if (driven) c.driven = true; else delete c.driven; }
+  }, 'Edited constraint');
+  return null;
+}
+
+/** Edit how a dimension measures (faces, axis) or where its line sits, without moving walls. */
+export function updateConstraint(id: string, updates: Partial<{ side: 0 | 1 | -1; sideA: 0 | 1 | -1; sideB: 0 | 1 | -1; axis: 'aligned' | 'x' | 'y'; offset: number }>) {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint) return;
+  const next = { ...constraint, ...updates } as Constraint;
+  if (isDimension(next) && Object.keys(updates).some(key => key !== 'offset')) {
+    const value = measuredConstraintValue(next, floor.walls);
+    if (value !== null) next.value = value;
+  }
+  mutate(f => {
+    const index = f.constraints?.findIndex(c => c.id === id) ?? -1;
+    if (index >= 0) f.constraints![index] = next;
+  }, 'Edited constraint', coalesceKeyFor('constraint', id, updates));
+}
+
+export function removeConstraint(id: string) {
+  removeElement(id);
 }
 
 function unchangedFields(current: object, updates: object): boolean {
@@ -722,10 +853,26 @@ export function updateWall(id: string, updates: Partial<Wall>) {
   if (['start', 'end'].some(key => key in updates && !finitePoint(updates[key as 'start' | 'end']))) return;
   if (updates.curvePoint !== undefined && !finitePoint(updates.curvePoint)) return;
   if (['height', 'startHeight', 'endHeight'].some(key => key in updates && !validWallHeight(updates[key as keyof Wall]))) return;
+  // Constraints: curving a constrained wall releases it; geometry and thickness edits re-solve.
+  const floor = get(activeFloor)!;
+  let settled = new Map<string, Partial<Wall>>(), releaseConstraints = false;
+  if (floor.constraints?.length) {
+    if (updates.curvePoint && !wall.curvePoint && floor.constraints.some(c => constraintMentionsWall(c, id))) releaseConstraints = true;
+    else if (['start', 'end', 'thickness', 'curvePoint'].some(key => key in updates)) {
+      try { settled = settleWallChanges(floor, new Map([[id, updates]])); }
+      catch (error) { showPlanNotice(error instanceof Error ? error.message : 'The constraints can’t accept this change.', 'error'); return; }
+    }
+  }
   mutate((f) => {
+    if (releaseConstraints) {
+      f.constraints = f.constraints?.filter(c => !constraintMentionsWall(c, id));
+      showPlanNotice('Curved walls can’t be constrained, so this wall’s constraints were removed.');
+    }
+    for (const other of f.walls) if (other.id !== id && settled.has(other.id)) Object.assign(other, settled.get(other.id));
     const w = f.walls.find((w) => w.id === id);
     if (w) {
       Object.assign(w, updates);
+      if (settled.has(id)) Object.assign(w, settled.get(id));
       if (updates.height !== undefined && updates.startHeight === undefined && updates.endHeight === undefined) {
         w.startHeight = updates.height;
         w.endHeight = updates.height;
@@ -768,6 +915,7 @@ export function reverseWall(id: string) {
         win.position = 1 - win.position;
       }
     }
+    if (f.constraints) f.constraints = reverseWallConstraints(f.constraints, id);
   }, 'Reversed wall direction');
 }
 
@@ -1154,6 +1302,11 @@ export function splitWall(id: string, t: number): string | null {
     if (group.elementIds.includes(id)) {
       group.elementIds = group.elementIds.flatMap(member => member === id ? [id, newId] : [member]);
     }
+  }
+  if (floor.constraints?.length) {
+    const split = splitWallConstraints(floor.constraints, id, newId, midPt, uid);
+    floor.constraints = split.constraints;
+    if (split.dropped) showPlanNotice(`Removed ${split.dropped} face dimension${split.dropped === 1 ? '' : 's'} on the split wall.`);
   }
   w.end = { ...midPt };
   if (geometry.first.curvePoint) w.curvePoint = geometry.first.curvePoint;

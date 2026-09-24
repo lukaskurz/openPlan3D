@@ -3,6 +3,12 @@ import { validateItemDetails, validateRetainedDetailState } from './itemDetails'
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
 
+/** Wall ids a stored constraint mentions (tolerant of malformed input; validation reports that). */
+function constraintWallIds(item: Record<string, any>): string[] {
+  const ids = [item.wallId, item.wallA, item.wallB, item.a?.wallId, item.b?.wallId, item.point?.wallId, item.target?.wallId];
+  return ids.filter((id): id is string => typeof id === 'string');
+}
+
 /** Read untrusted native files without mutating their input or the active editor. */
 export function readProject(value: unknown): Project {
   const fail = (path: string, reason: string): never => { throw new Error(`Invalid project: ${path} ${reason}.`); };
@@ -157,6 +163,34 @@ export function readProject(value: unknown): Project {
       if (item.opacity !== undefined) number(item.opacity, `${path}.opacity`, 0, 1);
       booleans(item, ['locked'], path);
     });
+    if (floor.constraints !== undefined) {
+      // Constraints left pointing at deleted walls are dropped (on this copy), not rejected.
+      floor.constraints = list(floor, 'constraints', path).filter((item: any) =>
+        !item || typeof item !== 'object' || constraintWallIds(item).every(id => walls.has(id)));
+      const corner = (value: any, path: string) => { record(value, path); text(value.wallId, `${path}.wallId`, true); choice(value.end, ['start', 'end'], `${path}.end`); };
+      const side = (value: any, path: string) => choice(value, [0, 1, -1] as any, path);
+      elements('constraints', (item, path) => {
+        booleans(item, ['driven'], path);
+        if (item.offset !== undefined) number(item.offset, `${path}.offset`);
+        choice(item.kind, ['length', 'pointDistance', 'pointLine', 'lineDistance', 'angle', 'horizontal', 'vertical', 'parallel', 'perpendicular', 'fix'], `${path}.kind`);
+        if ('value' in item || !['horizontal', 'vertical', 'parallel', 'perpendicular', 'fix'].includes(item.kind)) number(item.value, `${path}.value`);
+        switch (item.kind) {
+          case 'length': text(item.wallId, `${path}.wallId`, true); side(item.side, `${path}.side`); break;
+          case 'horizontal': case 'vertical': text(item.wallId, `${path}.wallId`, true); break;
+          case 'pointDistance': corner(item.a, `${path}.a`); corner(item.b, `${path}.b`); choice(item.axis, ['aligned', 'x', 'y'], `${path}.axis`); break;
+          case 'pointLine': corner(item.point, `${path}.point`); text(item.wallId, `${path}.wallId`, true); side(item.side, `${path}.side`); break;
+          case 'lineDistance': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); side(item.sideA, `${path}.sideA`); side(item.sideB, `${path}.sideB`); break;
+          case 'angle': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); booleans(item, ['flipB'], path); if (typeof item.flipB !== 'boolean') fail(`${path}.flipB`, 'must be a boolean'); break;
+          case 'parallel': case 'perpendicular': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); break;
+          case 'fix': {
+            record(item.target, `${path}.target`); text(item.target.wallId, `${path}.target.wallId`, true);
+            if (item.target.end !== undefined) choice(item.target.end, ['start', 'end'], `${path}.target.end`);
+            if (!Array.isArray(item.at) || item.at.length !== (item.target.end === undefined ? 2 : 1)) fail(`${path}.at`, 'must list the fixed points');
+            item.at.forEach((p: any, i: number) => point(p, `${path}.at[${i}]`));
+          }
+        }
+      });
+    }
     if (floor.backgroundImage !== undefined) {
       const bg = record(floor.backgroundImage, `${path}.backgroundImage`), bgPath = `${path}.backgroundImage`;
       text(bg.dataUrl, `${bgPath}.dataUrl`, true); positioned(bg, bgPath); positive(bg.scale, `${bgPath}.scale`);

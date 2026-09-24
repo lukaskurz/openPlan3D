@@ -45,6 +45,10 @@ const keys: Extract<TranslationKey, `undoAction.${string}`>[] = [
   'undoAction.deleteAttachment',
   'undoAction.lock',
   'undoAction.unlock',
+  'undoAction.addDimension',
+  'undoAction.addConstraint',
+  'undoAction.changeDimension',
+  'undoAction.editConstraint',
 ];
 const messages = new Map(keys.map(key => [translate('en', key), key]));
 
