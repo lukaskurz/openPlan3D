@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getModelFile } from '$lib/utils/furnitureModelFiles';
+  import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 
   let { catalogId, name, color }: { catalogId: string; name: string; color: string } = $props();
   let element: HTMLDivElement;
@@ -14,12 +15,14 @@
     const load = async () => {
       if (started) return;
       started = true;
-      if (!file) return;
+      const def = getCatalogItem(catalogId);
+      // 2D-only symbols have no 3D model to preview.
+      if (!file && (!def || def.symbol)) return;
       try {
         // Three.js and model bytes are needed only for visible catalog previews.
-        const { generateThumbnail } = await import('$lib/utils/furnitureThumbnails');
+        const { generateThumbnail, generateProceduralThumbnail } = await import('$lib/utils/furnitureThumbnails');
         if (disposed) return;
-        const result = await generateThumbnail(file);
+        const result = file ? await generateThumbnail(file) : await generateProceduralThumbnail(def!);
         if (!disposed) src = result;
       } catch { /* Keep the usable color placeholder if a preview cannot load. */ }
     };

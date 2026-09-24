@@ -1,10 +1,13 @@
 /**
  * Furniture Thumbnail Generator
- * Renders GLB models to small preview images using an offscreen Three.js renderer.
+ * Renders GLB models, or the procedural model for catalog items without one,
+ * to small preview images using an offscreen Three.js renderer.
  * Cached as data URLs after first render.
  */
 import * as THREE from 'three';
 import { disposeModel, loadCatalogModel } from './furnitureModelResources';
+import { createFurnitureModel } from './furnitureModels3d';
+import type { FurnitureDef } from './furnitureCatalog';
 
 const SIZE = 128;
 const cache = new Map<string, string>();
@@ -40,15 +43,24 @@ export function getThumbnail(file: string): string | null {
   return cache.get(file) ?? null;
 }
 
-export async function generateThumbnail(file: string): Promise<string | null> {
-  if (cache.has(file)) return cache.get(file)!;
-  if (pending.has(file)) return pending.get(file)!;
+export function generateThumbnail(file: string): Promise<string | null> {
+  return renderThumbnail(file, () => loadCatalogModel(file));
+}
+
+/** Preview for catalog items drawn in code, such as the L-shaped and chaise sofas. */
+export function generateProceduralThumbnail(def: FurnitureDef): Promise<string | null> {
+  return renderThumbnail(`procedural:${def.id}`, async () => createFurnitureModel(def.id, def));
+}
+
+async function renderThumbnail(key: string, load: () => Promise<THREE.Group | null>): Promise<string | null> {
+  if (cache.has(key)) return cache.get(key)!;
+  if (pending.has(key)) return pending.get(key)!;
 
   const promise = (async () => {
     let model: THREE.Group | null = null;
     try {
       ensureRenderer();
-      model = await loadCatalogModel(file);
+      model = await load();
       if (!model) return null;
 
       // Clear scene of previous models (keep lights)
@@ -91,16 +103,16 @@ export async function generateThumbnail(file: string): Promise<string | null> {
       const dataUrl = renderer!.domElement.toDataURL('image/png');
 
       scene!.remove(model);
-      cache.set(file, dataUrl);
+      cache.set(key, dataUrl);
       return dataUrl;
     } catch {
       return null;
     } finally {
       if (model) { scene?.remove(model); disposeModel(model); }
-      pending.delete(file);
+      pending.delete(key);
     }
   })();
 
-  pending.set(file, promise);
+  pending.set(key, promise);
   return promise;
 }
