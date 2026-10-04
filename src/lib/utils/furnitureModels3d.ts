@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import type { FurnitureDef } from './furnitureCatalog';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
-import { chaiseSofaLayout, lSofaLayout } from './furnitureIcons';
+import { chaiseSofaLayout, lSofaLayout, dividerLayout, DIVIDER_FOOT_RADIUS, DIVIDER_SLAT, SHELF_DIVIDER_RODS, SLAT_DIVIDER_RODS } from './furnitureIcons';
 
 // Helper to darken/lighten colors
 function adjustColor(color: string, factor: number): number {
@@ -71,8 +71,20 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
     case 'tv_stand':
       createTVStand(group, w, d, h, color);
       break;
+    case 'tv_lowboard':
+      createTVLowboard(group, w, d, h, color);
+      break;
+    case 'ceiling_projector':
+      createCeilingProjector(group, w, d, h, color);
+      break;
     case 'bookshelf':
       createBookshelf(group, w, d, h, color);
+      break;
+    case 'slat_divider':
+      createSlatDivider(group, w, d, h, color);
+      break;
+    case 'shelf_divider':
+      createShelfDivider(group, w, d, h, color);
       break;
     case 'side_table':
       createSideTable(group, w, d, h, color);
@@ -98,11 +110,11 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
     case 'fridge':
       createFridge(group, w, d, h, color);
       break;
-    case 'sink_k':
-      createKitchenSink(group, w, d, h, color);
-      break;
     case 'wine_fridge':
       createWineFridge(group, w, d, h, color);
+      break;
+    case 'sink_k':
+      createKitchenSink(group, w, d, h, color);
       break;
     case 'counter':
       createCounter(group, w, d, h, color);
@@ -560,6 +572,88 @@ function createTVStand(group: THREE.Group, w: number, d: number, h: number, colo
   group.add(screenMesh);
 }
 
+/** Wall-hung lowboard: a top board over handleless push-to-open flaps, and a warm LED strip underneath. */
+function createTVLowboard(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const board = createMaterial(color, 0.6, 0);
+  const carcass = createMaterial(color, 0.7, 0);
+  carcass.color.multiplyScalar(0.72);
+  const led = new THREE.MeshStandardMaterial({ color: '#fff4e0', emissive: '#ffc978', emissiveIntensity: 1.2 });
+  const box = (sx: number, sy: number, sz: number, x: number, y: number, z: number, material: THREE.Material) => {
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(Math.max(sx, 0.1), Math.max(sy, 0.1), Math.max(sz, 0.1)), material);
+    mesh.position.set(x, y, z);
+    group.add(mesh);
+    return mesh;
+  };
+
+  // 16 mm boards; the fronts hang a little below the carcass and hide the LED strip
+  const t = Math.min(1.6, h * 0.1, d * 0.1), gap = 0.3, lip = Math.min(1.5, h * 0.05);
+  const zBack = -d / 2, zFront = d / 2 - t, bodyD = zFront - zBack, zMid = (zBack + zFront) / 2;
+  const top = h - t, bottom = lip;
+  box(w, t, d, 0, h - t / 2, 0, board);
+  box(w - 2 * t, t, bodyD, 0, bottom + t / 2, zMid, carcass);
+  for (const side of [-1, 1]) box(t, top - bottom, bodyD, side * (w - t) / 2, (top + bottom) / 2, zMid, carcass);
+  box(w - 2 * t, top - bottom - 2 * t, t / 2, 0, (top + bottom) / 2, zBack + t / 4, carcass);
+
+  // Four flaps over four compartments; the wide unit is two elements, so the middle divider is doubled
+  const flaps = w >= 120 ? 4 : 2, flapW = (w - (flaps - 1) * gap) / flaps, flapH = top - gap;
+  for (let i = 0; i < flaps; i++) {
+    box(flapW, flapH, t, -w / 2 + flapW / 2 + i * (flapW + gap), flapH / 2, zFront + t / 2, board);
+  }
+  for (let i = 1; i < flaps; i++) {
+    const x = -w / 2 + i * (flapW + gap) - gap / 2;
+    box(i === flaps / 2 ? 2 * t : t, top - bottom, bodyD, x, (top + bottom) / 2, zMid, carcass);
+  }
+
+  // Warm LED strip under the front edge, behind the lip of the flaps
+  const strip = box(w - 4 * t, 0.3, 1, 0, bottom - 0.15, zFront - 1.5, led);
+  strip.userData.castShadow = false;
+}
+
+/**
+ * Compact laser projector (Hisense M2 size: 19.3 × 21.8 cm, 23 cm with its gimbal) hung upside
+ * down from the ceiling: a ceiling plate and drop pole at the top, the gimbal cradle, and the body
+ * below with the lens at the front (+Z), where the beam leaves.
+ */
+function createCeilingProjector(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const shell = createMaterial(color, 0.45, 0.15);
+  const metal = createMaterial('#a8a29e', 0.3, 0.7);
+  const dark = createMaterial('#1c1917', 0.5, 0.2);
+  const lensGlass = new THREE.MeshStandardMaterial({ color: '#0c1a2a', roughness: 0.05, metalness: 0.6 });
+  const add = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number, z: number) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, z);
+    group.add(mesh);
+    return mesh;
+  };
+
+  // Ceiling plate and drop pole; the pole takes whatever height the body and cradle leave
+  const arm = Math.min(1.4, w * 0.08), bodyW = w - 2 * arm - 0.6, bodyD = d, bodyH = Math.min(17, h * 0.55);
+  const cradleT = 1.5, plateT = 0.8, pole = Math.max(1, h - plateT - cradleT - bodyH - 2);
+  const plateR = Math.min(6, w * 0.35);
+  add(new THREE.CylinderGeometry(plateR, plateR, plateT, 24), metal, 0, h - plateT / 2, 0);
+  add(new THREE.CylinderGeometry(1.2, 1.2, pole, 12), metal, 0, h - plateT - pole / 2, 0);
+
+  // Gimbal cradle upside down: a round base under the pole and two arms down to the pivots
+  const cradleTop = h - plateT - pole, cradleY = cradleTop - cradleT / 2;
+  add(new THREE.CylinderGeometry(Math.min(7, w * 0.36), Math.min(7, w * 0.36), cradleT, 32), metal, 0, cradleY, 0);
+  const bodyTop = cradleTop - cradleT - 2, bodyY = bodyTop - bodyH / 2;
+  const armH = cradleTop - bodyY;
+  for (const side of [-1, 1]) {
+    add(new THREE.BoxGeometry(arm, armH, Math.min(6, d * 0.3)), metal, side * (w - arm) / 2, cradleTop - armH / 2, 0);
+    add(new THREE.CylinderGeometry(2, 2, 0.6, 20).rotateZ(Math.PI / 2), metal, side * (bodyW / 2 + 0.3), bodyY, 0);
+  }
+
+  // Body with softened edges, a dark front panel and the lens a little off-centre
+  add(new RoundedBoxGeometry(bodyW, bodyH, bodyD, 4, Math.min(2.5, bodyH * 0.15)), shell, 0, bodyY, 0);
+  add(new THREE.BoxGeometry(bodyW - 2, bodyH - 2, 0.3), dark, 0, bodyY, bodyD / 2 + 0.05);
+  const lensR = Math.min(3.2, bodyH * 0.2), lensX = -bodyW * 0.12, lensY = bodyY - bodyH * 0.08;
+  add(new THREE.CylinderGeometry(lensR + 0.8, lensR + 0.8, 1.2, 32).rotateX(Math.PI / 2), metal, lensX, lensY, bodyD / 2 + 0.6);
+  add(new THREE.CylinderGeometry(lensR, lensR, 0.4, 32).rotateX(Math.PI / 2), lensGlass, lensX, lensY, bodyD / 2 + 1.1);
+
+  // Vent slots on the back
+  for (let i = -2; i <= 2; i++) add(new THREE.BoxGeometry(bodyW * 0.6, 0.5, 0.3), dark, 0, bodyY + i * bodyH * 0.12, -bodyD / 2 - 0.1);
+}
+
 function createBookshelf(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const shelfColor = createMaterial(color);
   const darkColor = createMaterial(color, 0.7, 0.1);
@@ -578,6 +672,66 @@ function createBookshelf(group: THREE.Group, w: number, d: number, h: number, co
     const shelf = new THREE.Mesh(shelfGeo, darkColor);
     shelf.position.set(0, (i + 0.5) * (h / 5), 0);
     group.add(shelf);
+  }
+}
+
+/**
+ * Oak profiles (2.8 × 8 cm, 230 cm long) on brushed steel rods, following WoodUpp's Embrace drawings.
+ * Each module's end profiles are the posts: a steel pin with an adjusting nut runs from each end to a
+ * round foot on the floor and a rosette on the ceiling. `z` is the profiles' centre plane.
+ */
+function addDividerFrame(group: THREE.Group, w: number, h: number, color: string, profilesPerModule: number, rods: number[], z: number) {
+  const wood = createMaterial(color, 0.75, 0.0);
+  const steel = createMaterial('#b8bcc2', 0.35, 0.85);
+  const L = dividerLayout(w, h, profilesPerModule);
+  const profile = new THREE.BoxGeometry(DIVIDER_SLAT, L.block, 8);
+  for (const x of L.profiles) {
+    const mesh = new THREE.Mesh(profile, wood);
+    mesh.position.set(x, L.gap + L.block / 2, z);
+    group.add(mesh);
+  }
+  const plate = new THREE.CylinderGeometry(DIVIDER_FOOT_RADIUS, DIVIDER_FOOT_RADIUS, 0.8, 32);
+  const pin = new THREE.CylinderGeometry(0.7, 0.7, L.gap, 12);
+  const nut = new THREE.CylinderGeometry(1.4, 1.4, 1.2, 6);
+  for (const [a, b] of L.posts) {
+    // Rods run through every profile and end in small caps just outside the posts.
+    const span = b - a + DIVIDER_SLAT + 1;
+    for (const rod of rods) {
+      const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, span, 12), steel);
+      bar.rotation.z = Math.PI / 2;
+      bar.position.set((a + b) / 2, L.rodHeight(rod), z);
+      group.add(bar);
+    }
+    for (const x of [a, b]) {
+      for (const [pinY, plateY, nutY] of [[L.gap / 2, 0.4, L.gap * 0.6], [h - L.gap / 2, h - 0.4, h - L.gap * 0.6]]) {
+        const p = new THREE.Mesh(pin, steel); p.position.set(x, pinY, z);
+        const disc = new THREE.Mesh(plate, steel); disc.position.set(x, plateY, z);
+        const n = new THREE.Mesh(nut, steel); n.position.set(x, nutY, z);
+        group.add(p, disc, n);
+      }
+    }
+  }
+  return L;
+}
+
+/** Embrace BM1: a floor-to-ceiling wall of 7 oak slats per 71.6 cm module on 4 rods. */
+function createSlatDivider(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  addDividerFrame(group, w, h, color, 7, SLAT_DIVIDER_RODS, 0);
+}
+
+/** Embrace BM2: two posts per module on 6 rods, with 65.8 × 20 cm oak shelves hung towards the front. */
+function createShelfDivider(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const L = addDividerFrame(group, w, h, color, 2, SHELF_DIVIDER_RODS, -d / 2 + DIVIDER_FOOT_RADIUS);
+  const wood = createMaterial(color, 0.75, 0.0);
+  const shelf = new THREE.BoxGeometry(65.8, 1.8, d);
+  for (let m = 0; m < L.modules; m++) {
+    const x = -w / 2 + (m + 0.5) * L.moduleWidth;
+    // Shelves sit on the upper rods, clear of a sideboard or sofa in front.
+    for (const rod of [SHELF_DIVIDER_RODS[2], SHELF_DIVIDER_RODS[3], SHELF_DIVIDER_RODS[5]]) {
+      const mesh = new THREE.Mesh(shelf, wood);
+      mesh.position.set(x, L.rodHeight(rod) + 1.4, 0);
+      group.add(mesh);
+    }
   }
 }
 
@@ -763,46 +917,6 @@ function createFridge(group: THREE.Group, w: number, d: number, h: number, color
   group.add(handleMesh);
 }
 
-function createKitchenSink(group: THREE.Group, w: number, d: number, h: number, color: string): void {
-  const counterColor = createMaterial(color, 0.6, 0.2);
-  const basinColor = createMaterial('#e5e7eb', 0.2, 0.7);
-
-  // Counter base
-  const counterGeo = new THREE.BoxGeometry(w, h, d);
-  const counterMesh = new THREE.Mesh(counterGeo, counterColor);
-  counterMesh.position.set(0, h / 2, 0);
-  group.add(counterMesh);
-
-  // Basin (oval/elliptical)
-  const basinGeo = new THREE.CylinderGeometry(w * 0.3, w * 0.3, h * 0.2, 8);
-  basinGeo.scale(1, 1, 0.7); // Make it more oval
-  const basinMesh = new THREE.Mesh(basinGeo, basinColor);
-  basinMesh.position.set(0, h * 0.8, 0);
-  group.add(basinMesh);
-}
-
-function createCounter(group: THREE.Group, w: number, d: number, h: number, color: string): void {
-  const bodyColor = createMaterial(color);
-  const topColor = createMaterial(color, 0.5, 0.2);
-  topColor.color.multiplyScalar(1.1);
-
-  // Main body
-  const bodyGeo = new THREE.BoxGeometry(w, h * 0.9, d);
-  const bodyMesh = new THREE.Mesh(bodyGeo, bodyColor);
-  bodyMesh.position.set(0, h * 0.45, 0);
-  group.add(bodyMesh);
-
-  // Top surface
-  const topGeo = new THREE.BoxGeometry(w, h * 0.1, d);
-  const topMesh = new THREE.Mesh(topGeo, topColor);
-  topMesh.position.set(0, h * 0.95, 0);
-  group.add(topMesh);
-}
-
-function createDishwasher(group: THREE.Group, w: number, d: number, h: number, color: string): void {
-  const bodyColor = createMaterial(color, 0.4, 0.3);
-  const handleColor = createMaterial('#333333', 0.3, 0.8);
-
 /**
  * Dual-zone wine fridge modelled on a 48 × 56.5 × 83.8 cm cabinet: a tinted glass door with the
  * controls along its top and a grip strip on the opening side, beech shelves of lying bottles,
@@ -888,6 +1002,46 @@ function createWineFridge(group: THREE.Group, w: number, d: number, h: number, c
   for (const x of [-0.3, -0.22, -0.14, 0.14, 0.22, 0.3]) box(0.8, 0.8, 0.1, x * w, panelY, panelZ, light);
   for (const x of [-0.05, 0.05]) box(w * 0.06, 1.4, 0.1, x * w, panelY, panelZ, light);
 }
+
+function createKitchenSink(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const counterColor = createMaterial(color, 0.6, 0.2);
+  const basinColor = createMaterial('#e5e7eb', 0.2, 0.7);
+
+  // Counter base
+  const counterGeo = new THREE.BoxGeometry(w, h, d);
+  const counterMesh = new THREE.Mesh(counterGeo, counterColor);
+  counterMesh.position.set(0, h / 2, 0);
+  group.add(counterMesh);
+
+  // Basin (oval/elliptical)
+  const basinGeo = new THREE.CylinderGeometry(w * 0.3, w * 0.3, h * 0.2, 8);
+  basinGeo.scale(1, 1, 0.7); // Make it more oval
+  const basinMesh = new THREE.Mesh(basinGeo, basinColor);
+  basinMesh.position.set(0, h * 0.8, 0);
+  group.add(basinMesh);
+}
+
+function createCounter(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const bodyColor = createMaterial(color);
+  const topColor = createMaterial(color, 0.5, 0.2);
+  topColor.color.multiplyScalar(1.1);
+
+  // Main body
+  const bodyGeo = new THREE.BoxGeometry(w, h * 0.9, d);
+  const bodyMesh = new THREE.Mesh(bodyGeo, bodyColor);
+  bodyMesh.position.set(0, h * 0.45, 0);
+  group.add(bodyMesh);
+
+  // Top surface
+  const topGeo = new THREE.BoxGeometry(w, h * 0.1, d);
+  const topMesh = new THREE.Mesh(topGeo, topColor);
+  topMesh.position.set(0, h * 0.95, 0);
+  group.add(topMesh);
+}
+
+function createDishwasher(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const bodyColor = createMaterial(color, 0.4, 0.3);
+  const handleColor = createMaterial('#333333', 0.3, 0.8);
 
   // Main body
   const bodyGeo = new THREE.BoxGeometry(w, h, d);

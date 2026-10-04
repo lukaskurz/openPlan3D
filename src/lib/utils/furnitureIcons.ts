@@ -474,6 +474,68 @@ const drawBookshelf: DrawFn = (ctx, w, d) => {
   }
 };
 
+/** WoodUpp Embrace divider modules: 71.6 cm wide, 2.8 × 8 cm oak profiles on 8 cm steel feet and rosettes. */
+export const DIVIDER_MODULE_WIDTH = 71.6;
+export const DIVIDER_SLAT = 2.8;
+export const DIVIDER_FOOT_RADIUS = 4;
+/** Rod heights above the bottom of the 230 cm profiles, from the makers' measured drawings. */
+export const SLAT_DIVIDER_RODS = [27.5, 97.5, 132.5, 202.5];
+export const SHELF_DIVIDER_RODS = [27.5, 62.5, 97.5, 132.5, 167.5, 202.5];
+
+/**
+ * Where the profiles of a divider `w` cm wide go (x from -w/2), one module per 71.6 cm. Each module's end
+ * profiles carry the posts, sitting on the feet; the rest are spread evenly between them (7.8 cm gaps
+ * for a 7-slat module). The 230 cm profiles are centred between floor and ceiling.
+ */
+export function dividerLayout(w: number, h: number, profilesPerModule: number) {
+  const modules = Math.max(1, Math.round(w / DIVIDER_MODULE_WIDTH));
+  const moduleWidth = w / modules;
+  const posts: [number, number][] = [], profiles: number[] = [];
+  for (let m = 0; m < modules; m++) {
+    const a = -w / 2 + m * moduleWidth + DIVIDER_FOOT_RADIUS, b = a + moduleWidth - 2 * DIVIDER_FOOT_RADIUS;
+    posts.push([a, b]);
+    for (let i = 0; i < profilesPerModule; i++) profiles.push(a + (b - a) * i / (profilesPerModule - 1));
+  }
+  const block = Math.min(230, h - 6);
+  const gap = (h - block) / 2;
+  return { modules, moduleWidth, posts, profiles, block, gap, rodHeight: (rod: number) => gap + rod * block / 230 };
+}
+
+/** Slat divider from above: the slat ends in a row, with a steel foot under each module's end slats. */
+const drawSlatDivider: DrawFn = (ctx, w, d, color) => {
+  const s = d / 8, L = dividerLayout(w / s, 245, 7);
+  const stroke = ctx.strokeStyle;
+  ctx.strokeStyle = '#9ca3af';
+  ctx.beginPath();
+  for (const [a, b] of L.posts) { ctx.moveTo(a * s, 0); ctx.lineTo(b * s, 0); }
+  ctx.stroke();
+  ctx.strokeStyle = stroke;
+  ctx.fillStyle = color;
+  for (const x of L.profiles) {
+    ctx.fillRect((x - DIVIDER_SLAT / 2) * s, -d/2, DIVIDER_SLAT * s, d);
+    ctx.strokeRect((x - DIVIDER_SLAT / 2) * s, -d/2, DIVIDER_SLAT * s, d);
+  }
+  ctx.fillStyle = '#9ca3af';
+  for (const post of L.posts) for (const x of post) {
+    ctx.beginPath(); ctx.arc(x * s, 0, DIVIDER_FOOT_RADIUS * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+};
+
+/** Shelf divider from above: the shelves (front is +y), with the two posts along the back. */
+const drawShelfDivider: DrawFn = (ctx, w, d, color) => {
+  const s = d / 20, L = dividerLayout(w / s, 245, 2), postY = -d/2 + DIVIDER_FOOT_RADIUS * s;
+  ctx.fillStyle = color + '90';
+  for (let m = 0; m < L.modules; m++) {
+    const cx = (-w / s / 2 + (m + 0.5) * L.moduleWidth) * s;
+    roundRect(ctx, cx - 32.9 * s, -d/2, 65.8 * s, d, 1);
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.fillStyle = '#9ca3af';
+  for (const post of L.posts) for (const x of post) {
+    ctx.beginPath(); ctx.arc(x * s, postY, DIVIDER_FOOT_RADIUS * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+};
+
 const drawSideTable: DrawFn = (ctx, w, d) => {
   roundRect(ctx, -w/2, -d/2, w, d, 3);
   ctx.fill(); ctx.stroke();
@@ -487,6 +549,59 @@ const drawTvStand: DrawFn = (ctx, w, d) => {
   ctx.beginPath();
   ctx.moveTo(-w*0.4, -d*0.35);
   ctx.lineTo(w*0.4, -d*0.35);
+  ctx.stroke();
+};
+
+/** Wall-hung lowboard from above: the top board, with the flap seams marked along the front (+y). */
+const drawTvLowboard: DrawFn = (ctx, w, d, color) => {
+  // Light finishes vanish on wood floors in their own colour, so outline them darker (selection keeps its colour)
+  if (String(ctx.strokeStyle).toLowerCase() === color.toLowerCase() && /^#[0-9a-f]{6}$/i.test(color)) {
+    const dark = (i: number) => Math.round(parseInt(color.slice(i, i + 2), 16) * 0.55).toString(16).padStart(2, '0');
+    ctx.strokeStyle = '#' + dark(1) + dark(3) + dark(5);
+  }
+  ctx.fillStyle = color + 'c0';
+  roundRect(ctx, -w/2, -d/2, w, d, 1);
+  ctx.fill(); ctx.stroke();
+  const front = d/2 - Math.min(d * 0.12, 4);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-w/2, front);
+  ctx.lineTo(w/2, front);
+  const flaps = w >= 120 ? 4 : 2;
+  for (let i = 1; i < flaps; i++) {
+    ctx.moveTo(-w/2 + w * i / flaps, front);
+    ctx.lineTo(-w/2 + w * i / flaps, d/2);
+  }
+  ctx.stroke();
+};
+
+/** Ceiling projector from above, drawn dashed as ceiling-mounted items are, with the lens at the front (+y). */
+const drawCeilingProjector: DrawFn = (ctx, w, d, color) => {
+  ctx.fillStyle = color + 'c0';
+  ctx.fillRect(-w/2, -d/2, w, d);
+  // Dashes drawn as segments, since the SVG and DXF exports replay plain paths only
+  const dash = Math.max(w, d) * 0.12, gap = dash * 0.6;
+  const corners: [number, number][] = [[-w/2, -d/2], [w/2, -d/2], [w/2, d/2], [-w/2, d/2]];
+  ctx.beginPath();
+  corners.forEach(([x0, y0], i) => {
+    const [x1, y1] = corners[(i + 1) % 4], len = Math.hypot(x1 - x0, y1 - y0);
+    for (let t = 0; t < len; t += dash + gap) {
+      const a = t / len, b = Math.min(t + dash, len) / len;
+      ctx.moveTo(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a);
+      ctx.lineTo(x0 + (x1 - x0) * b, y0 + (y1 - y0) * b);
+    }
+  });
+  ctx.stroke();
+  // The lens on the front edge and a short wedge for the beam direction
+  const r = Math.min(w, d) * 0.17, lx = -w * 0.1;
+  ctx.beginPath();
+  ctx.arc(lx, d/2 - r * 1.3, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(lx - r * 0.8, d/2 - r * 0.4);
+  ctx.lineTo(lx - r * 1.8, d/2);
+  ctx.moveTo(lx + r * 0.8, d/2 - r * 0.4);
+  ctx.lineTo(lx + r * 1.8, d/2);
   ctx.stroke();
 };
 
@@ -1042,7 +1157,11 @@ const iconDrawers: Record<string, DrawFn> = {
   chair: drawChair,
   coffee_table: drawTable,
   tv_stand: drawTvStand,
+  tv_lowboard: drawTvLowboard,
+  ceiling_projector: drawCeilingProjector,
   bookshelf: drawBookshelf,
+  slat_divider: drawSlatDivider,
+  shelf_divider: drawShelfDivider,
   side_table: drawSideTable,
   bed_queen: drawBed,
   bed_twin: drawBed,
@@ -1051,6 +1170,7 @@ const iconDrawers: Record<string, DrawFn> = {
   wardrobe: drawWardrobe,
   stove: drawStove,
   fridge: drawFridge,
+  wine_fridge: drawWineFridge,
   sink_k: drawSink,
   counter: drawCounter,
   dishwasher: drawDishwasher,
@@ -1075,7 +1195,6 @@ const iconDrawers: Record<string, DrawFn> = {
   potted_plant: drawPlant,
   floor_plant: drawPlant,
   hanging_plant: drawPlant,
-  wine_fridge: drawWineFridge,
   curtain: drawCurtain,
   sheer_curtain: drawCurtain,
   wall_art: drawWallArt,

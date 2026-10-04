@@ -42,3 +42,28 @@ describe('furniture stacking', () => {
     expect(() => readProject(project)).toThrow();
   });
 });
+
+describe('wall-hung catalog items', () => {
+  it('places them at their mounting height, other items on the floor', async () => {
+    const { get } = await import('svelte/store');
+    const { activeFloor, addFurniture, createDefaultProject, currentProject } = await import('$lib/stores/project');
+    currentProject.set(createDefaultProject());
+    const lowboard = addFurniture('tv_lowboard', { x: 0, y: 0 });
+    const sofa = addFurniture('sofa', { x: 300, y: 0 });
+    const placed = (id: string) => get(activeFloor)!.furniture.find(f => f.id === id)!;
+    expect(placed(lowboard).elevation).toBe(25);
+    expect(placed(sofa)).not.toHaveProperty('elevation');
+  });
+
+  it('builds the lowboard model inside its catalog box', async () => {
+    const THREE = await import('three');
+    const { createFurnitureModel } = await import('$lib/utils/furnitureModels3d');
+    const { getCatalogItem } = await import('$lib/utils/furnitureCatalog');
+    const def = getCatalogItem('tv_lowboard')!;
+    const size = new THREE.Box3().setFromObject(createFurnitureModel('tv_lowboard', def));
+    expect(size.min.y).toBeGreaterThanOrEqual(0);
+    expect(size.max.y).toBeCloseTo(def.height);
+    expect(size.max.x - size.min.x).toBeCloseTo(def.width);
+    expect(size.max.z - size.min.z).toBeCloseTo(def.depth);
+  });
+});

@@ -7,6 +7,7 @@ import { writable, derived, get } from 'svelte/store';
 import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem } from '$lib/models/types';
 import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
+import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { nextFloorLevel, floorElevations, validFloorElevation, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
 import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight } from '$lib/models/types';
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
@@ -318,7 +319,8 @@ export function addWindow(wallId: string, position: number, windowType: import('
 export function addFurniture(catalogId: string, position: Point): string {
   const id = uid();
   mutate((f) => {
-    f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 } });
+    const elevation = getCatalogItem(catalogId)?.elevation;
+    f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...(elevation ? { elevation } : {}) });
   }, `Added ${catalogId}`);
   if (typeof window !== 'undefined') {
     import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-furniture', position.x + 20, position.y + 20)).catch(() => {});
