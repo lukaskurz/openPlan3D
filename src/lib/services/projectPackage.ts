@@ -1,5 +1,6 @@
 import type { Project } from '$lib/models/types';
 import { readProject } from '$lib/utils/projectValidation';
+import { allPlanFloors } from '$lib/utils/planAlternatives';
 import { PACKAGE_LIMIT, jsonBytes, packageJSON, packageError, readPackageZip, writePackageZip, safePackagePath, crc32 } from '$lib/utils/projectPackageZip';
 import { applyNativeEdits, nativeAssetNames, nativeToWeb, validatePackageMapping, validatePackagePlan, webToNative, type PackageMapping } from '$lib/utils/projectPackageBridge';
 import { planStatistics } from '$lib/utils/planStatistics';
@@ -11,7 +12,7 @@ type PackageState = { version: 1; furnitureCategoriesVersion?: 1; native: Record
 const docs = ['manifest.json', 'plan.json', 'web.json', 'baseline.json', 'mapping.json'];
 const reservedAssets = new Set(['plan.json', 'room.json', 'room.usdz', 'session.json', 'manifest.json', 'info.json', 'thumbnail.jpg']);
 function validateLocalImages(project: Project) {
-  const images = [...project.floors.flatMap(f => f.backgroundImage ? [f.backgroundImage.dataUrl] : []), ...(project.customEntourage ?? []).map(item => item.dataUrl)];
+  const images = [...allPlanFloors(project).flatMap(f => f.backgroundImage ? [f.backgroundImage.dataUrl] : []), ...(project.customEntourage ?? []).map(item => item.dataUrl)];
   if (images.some(url => !/^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/]*={0,2}$/.test(url))) {
     packageError('Project images must be embedded raster images. Download a JSON backup to preserve external image references.');
   }

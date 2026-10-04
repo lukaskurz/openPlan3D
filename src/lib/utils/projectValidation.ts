@@ -65,11 +65,12 @@ export function readProject(value: unknown): Project {
     record(project!.attachmentNames, 'attachmentNames');
     for (const [name, label] of Object.entries(project!.attachmentNames)) text(label, `attachmentNames.${name}`);
   }
-  const floors = list(project!, 'floors', 'document', false);
-  if (floors.length === 0) fail('floors', 'must contain at least one floor');
+  /** Validate one plan's floors in place; element ids only need to be unique per floor. */
+  const validateFloors = (floors: any[], base: string): Set<string> => {
+  if (floors.length === 0) fail(base, 'must contain at least one floor');
   const floorIds = new Set<string>();
   for (const [index, floor] of floors.entries()) {
-    const path = `floors[${index}]`;
+    const path = `${base}[${index}]`;
     record(floor, path); text(floor.id, `${path}.id`, true);
     if (floorIds.has(floor.id)) fail(`${path}.id`, 'duplicates another floor');
     floorIds.add(floor.id);
@@ -197,8 +198,31 @@ export function readProject(value: unknown): Project {
       defaults(bg, { opacity: 0.4, locked: false }); number(bg.opacity, `${bgPath}.opacity`, 0, 1); booleans(bg, ['locked'], bgPath);
     }
   }
+  return floorIds;
+  };
+  const floors = list(project!, 'floors', 'document', false);
+  const floorIds = validateFloors(floors, 'floors');
   if (project!.activeFloorId !== undefined) text(project!.activeFloorId, 'activeFloorId');
   if (!floorIds.has(project!.activeFloorId)) project!.activeFloorId = floors[0].id;
+  if (project!.alternatives !== undefined) {
+    const alternatives = list(project!, 'alternatives', 'document');
+    if (!alternatives.some(alt => alt?.id !== undefined && alt.id === project!.activeAlternativeId)) fail('activeAlternativeId', 'must refer to an alternative');
+    const seen = new Set<string>();
+    for (const [i, alt] of alternatives.entries()) {
+      const path = `alternatives[${i}]`;
+      record(alt, path); text(alt.id, `${path}.id`, true);
+      if (seen.has(alt.id)) fail(`${path}.id`, 'duplicates another alternative');
+      seen.add(alt.id); text(alt.name, `${path}.name`);
+      if (alt.thumbnail !== undefined && !(typeof alt.thumbnail === 'string' && /^data:image\/(?:png|jpeg|webp);base64,/.test(alt.thumbnail))) delete alt.thumbnail;
+      const date = new Date(alt.updatedAt ?? 0);
+      if (!Number.isFinite(date.getTime())) fail(`${path}.updatedAt`, 'must be a valid date');
+      alt.updatedAt = date;
+      // The active alternative's floors are the project's own floors.
+      if (alt.id === project!.activeAlternativeId) { alt.floors = []; alt.activeFloorId = project!.activeFloorId; continue; }
+      const ids = validateFloors(list(alt, 'floors', path, false), `${path}.floors`);
+      if (typeof alt.activeFloorId !== 'string' || !ids.has(alt.activeFloorId)) alt.activeFloorId = alt.floors[0].id;
+    }
+  } else delete project!.activeAlternativeId;
   if (project!.customEntourage !== undefined) {
     const seen = new Set<string>();
     for (const [i, item] of list(project!, 'customEntourage', 'document').entries()) {

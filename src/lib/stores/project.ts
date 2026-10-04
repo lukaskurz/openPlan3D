@@ -13,6 +13,7 @@ import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight 
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
+import { branchAlternative, deleteAlternative, renameAlternative, switchAlternative } from '$lib/utils/planAlternatives';
 import type { Constraint, CornerRef, NewConstraint } from '$lib/models/types';
 import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
 import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
@@ -178,6 +179,7 @@ function snapshot(description?: string, coalesceKey?: string) {
 function reviveDates(p: Project): Project {
   if (p.createdAt && !(p.createdAt instanceof Date)) p.createdAt = new Date(p.createdAt as any);
   if (p.updatedAt && !(p.updatedAt instanceof Date)) p.updatedAt = new Date(p.updatedAt as any);
+  for (const alt of p.alternatives ?? []) if (!(alt.updatedAt instanceof Date)) alt.updatedAt = new Date(alt.updatedAt as any);
   return p;
 }
 
@@ -200,7 +202,8 @@ function clearFloorContext() {
 
 function restoreHistoryProject(state: string) {
   const project = reviveDates(JSON.parse(state));
-  if (get(currentProject)?.activeFloorId !== project.activeFloorId) clearFloorContext();
+  const current = get(currentProject);
+  if (current?.activeFloorId !== project.activeFloorId || current?.activeAlternativeId !== project.activeAlternativeId) clearFloorContext();
   currentProject.set(project);
 }
 
@@ -1119,6 +1122,54 @@ export function setActiveFloor(floorId: string) {
     p.activeFloorId = floorId;
     currentProject.set({ ...p });
   }
+}
+
+// ── Plan alternatives ────────────────────────────────────────────────
+
+/** Default names for new alternatives, e.g. "Option B"; the UI passes its language's version. */
+export type AlternativeNamer = (letter: string) => string;
+const defaultAlternativeName: AlternativeNamer = letter => `Option ${letter}`;
+
+/** Keep the current plan and continue working in a copy of it. */
+export function createAlternative(options: { name?: string; thumbnail?: string; nameFor?: AlternativeNamer } = {}) {
+  const p = get(currentProject);
+  if (!p) return;
+  snapshot('Created alternative');
+  branchAlternative(p, { id: uid(), originalId: uid(), now: new Date(), thumbnail: options.thumbnail,
+    nameFor: options.nameFor ?? defaultAlternativeName, name: options.name });
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+/** Make another alternative the plan being edited. The thumbnail pictures the one being left. */
+export function switchPlanAlternative(id: string, thumbnail?: string) {
+  const p = get(currentProject);
+  if (!p?.alternatives?.some(alt => alt.id === id) || p.activeAlternativeId === id) return;
+  snapshot('Switched alternative');
+  clearFloorContext();
+  switchAlternative(p, id, new Date(), thumbnail);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+export function renamePlanAlternative(id: string, name: string) {
+  const p = get(currentProject);
+  const alt = p?.alternatives?.find(alt => alt.id === id);
+  if (!p || !alt || !name.trim() || alt.name === name.trim()) return;
+  snapshot('Renamed alternative');
+  renameAlternative(p, id, name);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+export function deletePlanAlternative(id: string) {
+  const p = get(currentProject);
+  if (!p?.alternatives || p.alternatives.length < 2 || !p.alternatives.some(alt => alt.id === id)) return;
+  snapshot('Deleted alternative');
+  if (id === p.activeAlternativeId) clearFloorContext();
+  deleteAlternative(p, id, new Date());
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
 }
 
 /** An omitted elevation restores the legacy level-based default. */

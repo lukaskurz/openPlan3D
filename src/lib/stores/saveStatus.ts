@@ -89,20 +89,24 @@ export function markDirty() {
   }, 1000);
 }
 
-function captureThumbnail(projectId: string) {
+/** A small JPEG of the editor's plan canvas, or undefined when there is none. */
+export function capturePlanThumbnail(size = 300, quality = 0.6): string | undefined {
   try {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    if (!canvas) return;
-    const size = 300;
+    if (!canvas || !canvas.width || !canvas.height) return;
     const tmp = document.createElement('canvas');
     tmp.width = size;
     tmp.height = Math.round(size * (canvas.height / canvas.width));
     const ctx = tmp.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
-    const dataUrl = tmp.toDataURL('image/jpeg', 0.6);
-    localStore.saveThumbnail(projectId, dataUrl);
-  } catch {}
+    return tmp.toDataURL('image/jpeg', quality);
+  } catch { return; }
+}
+
+function captureThumbnail(projectId: string) {
+  const dataUrl = capturePlanThumbnail();
+  if (dataUrl) localStore.saveThumbnail(projectId, dataUrl);
 }
 
 function scheduleThumbnail(project: Project) {

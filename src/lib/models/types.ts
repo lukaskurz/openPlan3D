@@ -292,6 +292,20 @@ export interface CustomModelDef {
   sourceUrl?: string;
 }
 
+/** One alternative arrangement of the whole plan (all floors). The active
+ * alternative's floors live in `Project.floors`, so its own `floors` is empty;
+ * the others keep their floors here until they are switched to. */
+export interface PlanAlternative {
+  id: string;
+  name: string;
+  floors: Floor[];
+  activeFloorId: string;
+  /** When this alternative was last worked on (set when switching away). */
+  updatedAt: Date;
+  /** Small JPEG data URL of the plan, captured when switching away. */
+  thumbnail?: string;
+}
+
 export interface Project {
   customModels?: CustomModelDef[];
   attachmentNames?: Record<string, string>;
@@ -304,4 +318,8 @@ export interface Project {
   createdAt: Date;
   updatedAt: Date;
   customEntourage?: CustomEntourageDef[];
+  /** Missing means the plan has no alternatives. When present it lists every
+   * alternative, including the active one named by `activeAlternativeId`. */
+  alternatives?: PlanAlternative[];
+  activeAlternativeId?: string;
 }

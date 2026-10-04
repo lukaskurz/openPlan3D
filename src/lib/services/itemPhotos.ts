@@ -4,6 +4,7 @@ import type { DetailTarget, Project, Room } from '$lib/models/types';
 import { detailItem, itemDetails } from '$lib/utils/itemDetails';
 import { nativeAssetNames, webToNative } from '$lib/utils/projectPackageBridge';
 import { readProject } from '$lib/utils/projectValidation';
+import { allPlanFloors, inactiveAlternatives } from '$lib/utils/planAlternatives';
 import { writeSnapshotStorage, type StoredSnapshot } from '$lib/utils/snapshotStorage';
 
 export const PHOTO_FILE_LIMIT = 8 * 1024 * 1024;
@@ -107,7 +108,13 @@ export function usedPhotoNames(project: Project): Set<string> {
   if (!state) return new Set();
   const names = new Set(nativeAssetNames(webToNative(project, state.native, state.mapping).plan));
   for (const model of project.customModels ?? []) names.add(model.assetName);
-  const embedded = new Set([...project.floors.map(f => f.backgroundImage?.dataUrl), ...(project.customEntourage ?? []).map(item => item.dataUrl)]
+  // Photos on items of plan alternatives that are not being edited right now.
+  for (const floor of inactiveAlternatives(project).flatMap(alt => alt.floors)) {
+    for (const item of [...floor.walls, ...floor.doors, ...floor.windows, ...floor.furniture, ...floor.rooms]) {
+      for (const photo of item.details?.photos ?? []) names.add(photo);
+    }
+  }
+  const embedded = new Set([...allPlanFloors(project).map(f => f.backgroundImage?.dataUrl), ...(project.customEntourage ?? []).map(item => item.dataUrl)]
     .filter((url): url is string => !!url).map(url => url.slice(url.indexOf(',') + 1)));
   const referencedBytes = new Set([...names].map(name => state.assets[`assets/${name}`]));
   for (const [path, bytes] of Object.entries(state.assets)) if (embedded.has(bytes) && !referencedBytes.has(bytes)) names.add(path.slice(7));
