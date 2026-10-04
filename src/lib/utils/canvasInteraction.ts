@@ -82,10 +82,15 @@ export interface FurnitureResizeInput {
   pointer: Point;
   preserveAspectRatio: boolean;
   minSize?: number;
+  /** Round the new size to this many cm (the anchored edge stays exact). */
+  step?: number;
 }
 
 export interface FurnitureResizeResult {
   position: Point;
+  /** The new plan size in cm, with any previous scale already applied. */
+  width: number;
+  depth: number;
   scale: { x: number; y: number };
 }
 
@@ -125,6 +130,12 @@ export function resizeFurnitureFromHandle(input: FurnitureResizeInput): Furnitur
     else newWidth = newDepth * originalRatio;
   }
 
+  if (input.step) {
+    const round = (v: number) => Math.max(minSize, Math.round(v / input.step!) * input.step!);
+    if (horizontal) newWidth = round(newWidth);
+    if (vertical) newDepth = round(newDepth);
+  }
+
   const edgeX = horizontal ? anchorX + handleSignX * newWidth : 0;
   const edgeY = vertical ? anchorY + handleSignY * newDepth : 0;
   const centerX = (anchorX + edgeX) / 2;
@@ -136,6 +147,8 @@ export function resizeFurnitureFromHandle(input: FurnitureResizeInput): Furnitur
       x: input.position.x + centerX * Math.cos(worldAngle) - centerY * Math.sin(worldAngle),
       y: input.position.y + centerX * Math.sin(worldAngle) + centerY * Math.cos(worldAngle),
     },
+    width: newWidth,
+    depth: newDepth,
     scale: {
       x: (input.scale.x < 0 ? -1 : 1) * newWidth / input.width,
       y: (input.scale.y < 0 ? -1 : 1) * newDepth / input.depth,

@@ -18,7 +18,7 @@
   import { openingOnWall } from '$lib/utils/wallProfiles';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { floorMaterials, wallColors } from '$lib/utils/materials';
-  import { getCatalogItem } from '$lib/utils/furnitureCatalog';
+  import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
   import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
     import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
@@ -61,7 +61,15 @@
     return settings.units === 'imperial' ? 'in' : 'cm';
   }
 
-  let { is3D = false }: { is3D?: boolean } = $props();
+  let { is3D = false, floating = false, showBackground = true, hasContent = $bindable(false) }: {
+    is3D?: boolean;
+    /** Inside the floating inspector: no sidebar frame of its own. */
+    floating?: boolean;
+    /** Whether the traced-image controls are listed under the selection. */
+    showBackground?: boolean;
+    /** True when the panel has something to show. */
+    hasContent?: boolean;
+  } = $props();
   let wallSideTab = $state<'interior' | 'exterior'>('interior');
   let selectedWall = $derived(floor?.walls?.find(w => w.id === selId) ?? null);
   let selectedDoor = $derived(floor?.doors?.find(d => d.id === selId) ?? null);
@@ -256,20 +264,16 @@
     if (!selectedFurniture) return;
     updateFurniture(selectedFurniture.id, { color });
   }
-  function onFurnitureWidth(e: Event) {
+  // Resizing on the canvas used to store a scale factor; show and edit the real size,
+  // folding any remaining scale into it so only the mirror sign stays in scale.
+  let furnitureSize = $derived(selectedFurniture ? getFurnitureSize(selectedFurniture) : { width: 0, depth: 0, height: 0 });
+  function onFurnitureSize(e: Event, key: 'width' | 'depth' | 'height') {
     if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.width ?? getCatalogItem(selectedFurniture.catalogId)?.width ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { width: value }));
-  }
-  function onFurnitureDepth(e: Event) {
-    if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.depth ?? getCatalogItem(selectedFurniture.catalogId)?.depth ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { depth: value }));
-  }
-  function onFurnitureHeight(e: Event) {
-    if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.height ?? getCatalogItem(selectedFurniture.catalogId)?.height ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { height: value }));
+    const axis = key === 'width' ? 'x' : key === 'depth' ? 'y' : 'z';
+    dimensionInput(e, furnitureSize[key], value => {
+      const s = selectedFurniture!.scale;
+      updateFurniture(selectedFurniture!.id, { [key]: value, scale: { ...s, [axis]: Math.sign(s[axis]) || 1 } });
+    });
   }
   let furnitureSurfaceBelow = $derived(selectedFurniture && floor ? surfaceBelow(selectedFurniture, floor.furniture) : 0);
   function onFurnitureElevation(e: Event) {
@@ -282,11 +286,13 @@
   }
   function onFurnitureRotation(e: Event) {
     if (!selectedFurniture) return;
-    scalarInput(e, selectedFurniture.rotation, value => updateFurniture(selectedFurniture!.id, { rotation: value }));
+    scalarInput(e, Math.round(selectedFurniture.rotation * 100) / 100, value => updateFurniture(selectedFurniture!.id, { rotation: value }));
   }
   function resetFurnitureDefaults() {
     if (!selectedFurniture) return;
-    updateFurniture(selectedFurniture.id, { color: undefined, width: undefined, depth: undefined, height: undefined, material: undefined });
+    const { x, y, z } = selectedFurniture.scale;
+    updateFurniture(selectedFurniture.id, { color: undefined, width: undefined, depth: undefined, height: undefined, material: undefined,
+      scale: { x: Math.sign(x) || 1, y: Math.sign(y) || 1, z: Math.sign(z) || 1 } });
   }
 
   // Door distance handlers
@@ -427,11 +433,12 @@
     { label: '🧶 Carpet', ids: ['carpet-beige', 'carpet-gray'] },
   ];
 
-  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || !!selectedConstraint || (!is3D && hasBgImage));
+  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || !!selectedConstraint || (!is3D && hasBgImage && showBackground));
+  $effect(() => { hasContent = hasSelection; });
 </script>
 
-<!-- Right sidebar on md+; slides up as a bottom sheet on phones -->
-<div data-plan-properties class="{is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed md:static right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl" class:hidden={!hasSelection}>
+<!-- Right sidebar on md+; slides up as a bottom sheet on phones. Inside the inspector it is just the content. -->
+<div data-plan-properties data-floating={floating || undefined} class={floating ? 'properties-floating flex flex-col p-4' : `${is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed md:static right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl`} class:hidden={!hasSelection}>
   {#if selectedWall}
     <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
       <span class="w-6 h-6 bg-gray-200 rounded flex items-center justify-center text-xs">▭</span>
@@ -806,8 +813,8 @@
         <span class="text-xs text-gray-500">{$t('openingProperties.width')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.width ?? getCatalogItem(selectedFurniture.catalogId)?.width ?? 50)}
-          oninput={onFurnitureWidth} onblur={onFurnitureWidth} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.width)}
+          oninput={e => onFurnitureSize(e, 'width')} onblur={e => onFurnitureSize(e, 'width')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
@@ -815,8 +822,8 @@
         <span class="text-xs text-gray-500">{$t('furnitureProperties.depth')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.depth ?? getCatalogItem(selectedFurniture.catalogId)?.depth ?? 50)}
-          oninput={onFurnitureDepth} onblur={onFurnitureDepth} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.depth)}
+          oninput={e => onFurnitureSize(e, 'depth')} onblur={e => onFurnitureSize(e, 'depth')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
@@ -824,8 +831,8 @@
         <span class="text-xs text-gray-500">{$t('openingProperties.height')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.height ?? getCatalogItem(selectedFurniture.catalogId)?.height ?? 50)}
-          oninput={onFurnitureHeight} onblur={onFurnitureHeight} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.height)}
+          oninput={e => onFurnitureSize(e, 'height')} onblur={e => onFurnitureSize(e, 'height')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
@@ -869,7 +876,7 @@
         <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
         <input 
           type="number" 
-          value={selectedFurniture.rotation}
+          value={Math.round(selectedFurniture.rotation * 100) / 100}
           oninput={onFurnitureRotation} onblur={onFurnitureRotation} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
@@ -1160,7 +1167,7 @@
   {/if}
 
   <!-- Background Image Controls (always show when bg image exists) -->
-  {#if hasBgImage && floor?.backgroundImage}
+  {#if hasBgImage && floor?.backgroundImage && showBackground}
     <div class="mt-4 pt-3 border-t border-gray-200">
       <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
         <span class="w-6 h-6 bg-blue-100 rounded flex items-center justify-center text-xs">🖼️</span>

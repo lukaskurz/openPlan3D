@@ -96,21 +96,37 @@ it('preserves both mirror axes when resizing', () => {
   const result = resizeFurnitureFromHandle({ position: { x: 0, y: 0 }, rotation: 0,
     width: 100, depth: 60, scale: { x: -1, y: -1 }, handle: 'resize-tl',
     pointer: { x: -80, y: -60 }, preserveAspectRatio: false });
-  expect(result).toEqual({ position: { x: -15, y: -15 }, scale: { x: -1.3, y: -1.5 } });
+  expect(result).toEqual({ position: { x: -15, y: -15 }, width: 130, depth: 90, scale: { x: -1.3, y: -1.5 } });
 });
 
 it('clamps at 10 cm when crossing the opposite edge', () => {
   const result = resizeFurnitureFromHandle({ position: { x: 0, y: 0 }, rotation: 0,
     width: 100, depth: 60, scale: { x: 1, y: 1 }, handle: 'resize-r',
     pointer: { x: -150, y: 0 }, preserveAspectRatio: false });
-  expect(result).toEqual({ position: { x: -45, y: 0 }, scale: { x: 0.1, y: 1 } });
+  expect(result).toEqual({ position: { x: -45, y: 0 }, width: 10, depth: 60, scale: { x: 0.1, y: 1 } });
 });
 
 it('preserves aspect ratio while growing from the top-left corner', () => {
   const result = resizeFurnitureFromHandle({ position: { x: 0, y: 0 }, rotation: 0,
     width: 100, depth: 60, scale: { x: 1, y: 1 }, handle: 'resize-tl',
     pointer: { x: -80, y: -60 }, preserveAspectRatio: true });
-  expect(result).toEqual({ position: { x: -25, y: -15 }, scale: { x: 1.5, y: 1.5 } });
+  expect(result).toEqual({ position: { x: -25, y: -15 }, width: 150, depth: 90, scale: { x: 1.5, y: 1.5 } });
+});
+
+it('rounds a dragged size to whole centimetres and keeps the opposite edge fixed', () => {
+  const result = resizeFurnitureFromHandle({ position: { x: 0, y: 0 }, rotation: 0,
+    width: 100, depth: 60, scale: { x: 1, y: 1 }, handle: 'resize-r',
+    pointer: { x: 87.4, y: 0 }, preserveAspectRatio: false, step: 1 });
+  expect(result.width).toBe(137);
+  expect(result.position.x - result.width / 2).toBeCloseTo(-50);
+});
+
+it('reports the real size of an item that was already scaled', () => {
+  const result = resizeFurnitureFromHandle({ position: { x: 0, y: 0 }, rotation: 0,
+    width: 100, depth: 60, scale: { x: 2, y: -0.5 }, handle: 'resize-r',
+    pointer: { x: 150, y: 0 }, preserveAspectRatio: false });
+  expect(result.width).toBeCloseTo(250);
+  expect(result.depth).toBeCloseTo(30);
 });
 
 it('uses overridden and mirrored sizes for furniture selection and handles', () => {

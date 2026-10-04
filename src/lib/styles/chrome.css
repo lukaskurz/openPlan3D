@@ -1,0 +1,663 @@
+/* ==========================================================================
+   Editor chrome: tokens and touch-first building blocks.
+   The editor's floating controls use these classes instead of Tailwind
+   palette classes, so the legacy `html.dark .bg-white { … !important }`
+   overrides in app.css never reach them and dark mode comes from the tokens.
+   ========================================================================== */
+
+:root {
+  --color-bg: #f9fafb;
+  --color-surface: #ffffff;
+  --color-surface-raised: #ffffff;
+  --color-surface-subtle: #f9fafb;
+  --color-surface-muted: #f3f4f6;
+  --color-surface-hover: #f3f4f6;
+  --color-surface-translucent: rgb(255 255 255 / 0.85);
+
+  --color-text-strong: #1d293d;
+  --color-text: #1e2939;
+  --color-text-secondary: #364153;
+  --color-text-tertiary: #4a5565;
+  --color-text-muted: #6a7282;
+  --color-text-subtle: #99a1af;
+  --color-text-disabled: #d1d5dc;
+
+  --color-border: #e5e7eb;
+  --color-border-subtle: #f3f4f6;
+  --color-border-strong: #d1d5dc;
+
+  --color-input-bg: #ffffff;
+  --color-input-text: #1e2939;
+  --color-input-border: #e5e7eb;
+
+  --color-accent: #155dfc;
+  --color-accent-hover: #1447e6;
+  --color-on-accent: #ffffff;
+  --color-accent-subtle: #eff6ff;
+  --color-accent-subtle-strong: #dbeafe;
+  --color-accent-text: #155dfc;
+  --color-accent-text-strong: #1447e6;
+  --color-accent-border: #51a2ff;
+  --color-accent-ring: #bedbff;
+
+  --color-constraint: #4f39f6;
+  --color-constraint-subtle: #eef2ff;
+  --color-constraint-text: #432dd7;
+
+  --color-danger: #e7000b;
+  --color-danger-text: #c10007;
+  --color-danger-subtle: #fef2f2;
+  --color-danger-border: #ffc9c9;
+  --color-warning: #fe9a00;
+  --color-warning-subtle: #fffbeb;
+  --color-warning-text: #973c00;
+  --color-warning-border: #ffd230;
+  --color-success: #00a63e;
+  --color-favorite: #f6339a;
+
+  --color-scrim: rgb(0 0 0 / 0.32);
+  --color-tooltip-bg: #1d293d;
+  --color-tooltip-text: #ffffff;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Distance of every floating cluster from the screen edge. */
+  --chrome-inset: 16px;
+}
+
+html.dark {
+  --color-bg: #111827;
+  --color-surface: #1f2937;
+  --color-surface-raised: #1f2937;
+  --color-surface-subtle: #172031;
+  --color-surface-muted: #111827;
+  --color-surface-hover: #2b3647;
+  --color-surface-translucent: rgb(31 41 55 / 0.88);
+
+  --color-text-strong: #f1f5f9;
+  --color-text: #e5e7eb;
+  --color-text-secondary: #d1d5db;
+  --color-text-tertiary: #b6bfcc;
+  --color-text-muted: #9ca3af;
+  --color-text-subtle: #6b7280;
+  --color-text-disabled: #4b5563;
+
+  --color-border: #374151;
+  --color-border-subtle: #2b3647;
+  --color-border-strong: #4b5563;
+
+  --color-input-bg: #111827;
+  --color-input-text: #f3f4f6;
+  --color-input-border: #4b5563;
+
+  --color-accent: #2b7fff;
+  --color-accent-hover: #155dfc;
+  --color-accent-subtle: #1e3a5f;
+  --color-accent-subtle-strong: #1e40af;
+  --color-accent-text: #60a5fa;
+  --color-accent-text-strong: #93c5fd;
+  --color-accent-border: #3b82f6;
+  --color-accent-ring: #1e40af;
+
+  --color-constraint-subtle: #262059;
+  --color-constraint-text: #a5b4fc;
+
+  --color-danger-text: #f87171;
+  --color-danger-subtle: #451a1a;
+  --color-danger-border: #7f1d1d;
+  --color-warning-subtle: #3a2a0c;
+  --color-warning-text: #fbbf24;
+  --color-warning-border: #92400e;
+
+  --color-scrim: rgb(0 0 0 / 0.5);
+  --color-tooltip-bg: #0f172a;
+
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.45), 0 4px 6px -4px rgb(0 0 0 / 0.45);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.5), 0 8px 10px -6px rgb(0 0 0 / 0.5);
+}
+
+@media (max-width: 640px) {
+  :root { --chrome-inset: 8px; }
+}
+
+/* ── Surfaces ──────────────────────────────────────────────── */
+
+/* A floating cluster: light card that hovers over the plan. */
+.op-float {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  color: var(--color-text);
+}
+.op-cluster {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+}
+.op-popover {
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-xl);
+  color: var(--color-text);
+}
+.op-divider-v { width: 1px; height: 28px; background: var(--color-border); margin: 0 4px; flex: none; }
+.op-divider { height: 1px; background: var(--color-border-subtle); margin: 4px 8px; }
+
+/* ── Buttons ───────────────────────────────────────────────── */
+
+.op-btn {
+  height: 44px;
+  min-width: 44px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms var(--ease-standard), color 120ms var(--ease-standard);
+}
+.op-btn:hover { background: var(--color-surface-hover); }
+.op-btn:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.op-btn:disabled { color: var(--color-text-disabled); cursor: default; background: transparent; }
+.op-btn.is-active,
+.op-btn[aria-pressed='true'],
+.op-btn[aria-expanded='true'] {
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-text-strong);
+}
+.op-btn.is-square { padding: 0; width: 44px; }
+.op-btn.is-big { height: 52px; min-width: 52px; }
+.op-btn.is-outline { border: 1px solid var(--color-border); background: var(--color-surface); }
+.op-btn.is-outline:hover { background: var(--color-surface-hover); }
+.op-btn.is-outline.is-active, .op-btn.is-outline[aria-expanded='true'] { background: var(--color-accent-subtle); color: var(--color-accent-text-strong); border-color: var(--color-accent-ring); }
+.op-btn.is-primary { background: var(--color-accent); color: var(--color-on-accent); padding: 0 18px; }
+.op-btn.is-primary:hover { background: var(--color-accent-hover); }
+.op-btn.is-primary:disabled { background: var(--color-surface-muted); color: var(--color-text-disabled); }
+.op-btn.is-danger { color: var(--color-danger-text); }
+.op-btn.is-danger:hover { background: var(--color-danger-subtle); }
+
+/* A standalone floating button (menu, alternatives, view options). */
+.op-float.op-btn { background: var(--color-surface-raised); color: var(--color-text-secondary); }
+.op-float.op-btn:hover { background: var(--color-surface-hover); }
+.op-float.op-btn[aria-expanded='true'] { background: var(--color-accent-subtle); color: var(--color-accent-text-strong); border-color: var(--color-accent-border); }
+
+/* Icon over a short label: used in the selection bar. */
+.op-action {
+  flex-shrink: 0;
+  position: relative;
+  min-width: 60px;
+  height: 52px;
+  padding: 0 8px;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.op-action:hover { background: var(--color-surface-hover); }
+.op-action:disabled { color: var(--color-text-disabled); cursor: default; background: transparent; }
+.op-action.is-active,
+.op-action[aria-expanded='true'],
+.op-action[aria-pressed='true'] { background: var(--color-accent-subtle); color: var(--color-accent-text-strong); }
+.op-action.is-danger { color: var(--color-danger-text); }
+.op-action.is-danger:hover { background: var(--color-danger-subtle); }
+.op-badge {
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--color-constraint);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+/* The value chip that leads the selection bar (length, size, name). */
+.op-value-chip {
+  flex-shrink: 0;
+  height: 52px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-accent-subtle);
+  color: var(--color-accent-text);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  max-width: 240px;
+}
+.op-value-chip > span { overflow: hidden; text-overflow: ellipsis; }
+.op-value-chip[aria-expanded='true'] { box-shadow: inset 0 0 0 2px var(--color-accent); }
+
+/* ── Segmented control ─────────────────────────────────────── */
+
+.op-seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--color-surface-muted);
+  border-radius: var(--radius-lg);
+}
+.op-seg > button {
+  flex: 1;
+  height: 38px;
+  min-width: 38px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.op-seg > button[aria-pressed='true'],
+.op-seg > button[aria-selected='true'] {
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-strong);
+  font-weight: 600;
+}
+.op-seg.is-small > button { height: 30px; font-size: 12px; }
+.op-seg.is-tall > button { height: 44px; }
+
+/* The Plan · Elevation · 3D switch uses an inverted active segment. */
+.op-mode > button {
+  height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.op-mode > button:hover { background: var(--color-surface-hover); }
+.op-mode > button[aria-pressed='true'] { background: var(--color-text-strong); color: var(--color-surface); font-weight: 600; }
+.op-mode > button.is-picking { background: var(--color-accent); color: var(--color-on-accent); }
+
+/* ── Switch ────────────────────────────────────────────────── */
+
+.op-switch {
+  flex: none;
+  width: 44px;
+  height: 26px;
+  padding: 3px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  transition: background-color 150ms var(--ease-standard);
+}
+.op-switch::after {
+  content: '';
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: var(--shadow-sm);
+  transition: transform 150ms var(--ease-standard);
+}
+.op-switch[aria-checked='true'] { background: var(--color-accent); }
+.op-switch[aria-checked='true']::after { transform: translateX(18px); }
+
+/* ── Menus ─────────────────────────────────────────────────── */
+
+.op-menu { display: flex; flex-direction: column; padding: 6px; }
+.op-menu-title { padding: 8px 12px 4px; font-size: 12px; font-weight: 600; color: var(--color-text-muted); }
+.op-menu-item {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+  touch-action: manipulation;
+}
+.op-menu-item:hover { background: var(--color-surface-hover); }
+.op-menu-item:disabled { color: var(--color-text-disabled); cursor: default; background: transparent; }
+.op-menu-item.is-active { background: var(--color-accent-subtle); color: var(--color-accent-text-strong); }
+.op-menu-item.is-danger { color: var(--color-danger-text); }
+.op-menu-item.is-danger:hover { background: var(--color-danger-subtle); }
+.op-menu-item .op-sub { display: block; font-size: 12px; font-weight: 400; color: var(--color-text-muted); }
+.op-menu-item > svg { flex: none; }
+.op-menu-row {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  font-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+/* ── Fields ────────────────────────────────────────────────── */
+
+.op-label { font-size: 12px; font-weight: 500; color: var(--color-text-muted); }
+.op-field {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+  border: 1px solid var(--color-input-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-input-bg);
+  color: var(--color-input-text);
+}
+.op-field:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-ring); }
+.op-field > input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  /* 16px stops iOS from zooming into the field. */
+  font: inherit;
+  font-size: 16px;
+}
+.op-field > .op-unit { color: var(--color-text-muted); font-size: 14px; }
+
+/* ── Status pill ───────────────────────────────────────────── */
+
+.op-pill {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 14px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-translucent);
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+
+/* Small dark label that names a snap or the item under the finger. */
+.op-tip {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  background: var(--color-tooltip-bg);
+  color: var(--color-tooltip-text);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.op-scrim { position: fixed; inset: 0; background: var(--color-scrim); }
+
+.op-scroll { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .op-enter { animation: op-enter 140ms var(--ease-standard); }
+  .op-slide-left { animation: op-slide-left 200ms var(--ease-standard); }
+  .op-slide-up { animation: op-slide-up 220ms var(--ease-standard); }
+}
+@keyframes op-enter { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes op-slide-left { from { transform: translateX(-24px); opacity: 0; } }
+@keyframes op-slide-up { from { transform: translateY(32px); opacity: 0; } }
+
+/* Ring that fills while a finger is held on the plan. */
+.op-hold-ring {
+  position: absolute;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 30;
+  background: conic-gradient(var(--color-accent) var(--op-hold, 0%), transparent 0);
+  -webkit-mask: radial-gradient(circle, transparent 23px, #000 24px);
+  mask: radial-gradient(circle, transparent 23px, #000 24px);
+  animation: op-hold 550ms linear forwards;
+  opacity: 0.9;
+}
+@property --op-hold { syntax: '<percentage>'; inherits: false; initial-value: 0%; }
+@keyframes op-hold { 0%, 25% { --op-hold: 0%; opacity: 0; } 100% { --op-hold: 100%; opacity: 0.9; } }
+
+/* ── Properties inside the floating inspector: touch-sized fields ── */
+.properties-floating { gap: 0; }
+.properties-floating :where(input:not([type='checkbox'], [type='radio'], [type='range'], [type='color']), select, textarea) {
+  min-height: 44px;
+  font-size: 16px;
+  border-radius: var(--radius-lg);
+  padding-left: 10px;
+  padding-right: 10px;
+}
+.properties-floating :where(button:not([style*='background'])) { min-height: 40px; border-radius: var(--radius-lg); }
+.properties-floating :where(input[type='checkbox'], input[type='radio']) { width: 20px; height: 20px; }
+.properties-floating :where(input[type='range']) { min-height: 32px; }
+.properties-floating > h3:first-child { display: none; }
+
+/* The elements list reuses the sidebar layers list inside a floating card. */
+.op-elements > div { width: auto !important; border: 0 !important; height: 100%; font-size: 14px; background: transparent !important; }
+.op-elements > div > div:first-child { display: none; }
+.op-elements button { min-height: 40px; }
+
+/* ── Layout of the floating clusters ───────────────────────── */
+.op-chrome { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+.op-chrome :where(.op-float, .op-popover, .op-pill, button, a, input) { pointer-events: auto; }
+.op-top {
+  position: absolute;
+  left: var(--chrome-inset);
+  right: var(--chrome-inset);
+  top: var(--chrome-inset);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-areas: 'left center right';
+  align-items: start;
+  gap: 10px;
+}
+.op-top > .op-left { grid-area: left; justify-self: start; min-width: 0; }
+.op-top > .op-center { grid-area: center; display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; max-width: 100%; }
+.op-top > .op-right { grid-area: right; justify-self: end; }
+/* Narrow screens: the tool strip gets its own row under the corners. */
+@media (max-width: 1150px) {
+  .op-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'left right' 'center center'; }
+}
+.op-left-rail { position: absolute; left: var(--chrome-inset); top: 50%; transform: translateY(-50%); }
+.op-bottom {
+  position: absolute;
+  left: var(--chrome-inset);
+  right: var(--chrome-inset);
+  bottom: var(--chrome-inset);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: 10px;
+}
+.op-bottom > :first-child { justify-self: start; display: flex; min-width: 0; max-width: 100%; }
+.op-bottom > :nth-child(2) { justify-self: center; margin-bottom: 8px; }
+.op-bottom > :last-child { justify-self: end; }
+.op-bottom.is-history { grid-template-columns: minmax(0, 1fr); }
+.op-bottom.is-history > :first-child { justify-self: stretch; }
+@media (max-width: 1000px) {
+  .op-bottom { grid-template-columns: auto minmax(0, 1fr); }
+  .op-bottom > :nth-child(2) { display: none; }
+}
+
+/* The inspector floats on the right; on narrow screens it becomes a sheet above the bottom bar. */
+.op-inspector { right: var(--chrome-inset); width: 340px; top: 150px; bottom: 92px; }
+@media (max-width: 1000px) {
+  .op-inspector { left: var(--chrome-inset); width: auto; top: auto; bottom: 84px; max-height: 46dvh; }
+}
+@media (max-width: 640px) {
+  .op-left-rail { top: auto; bottom: 76px; transform: none; }
+}
+
+/* ── Phones: smaller corner buttons, pinch replaces the zoom buttons ── */
+@media (max-width: 640px) {
+  .op-btn.is-big, .op-float.op-btn.is-big { height: 44px; min-width: 44px; }
+  .op-top .op-float.op-btn[style*='width'] { width: 44px !important; height: 44px !important; }
+  .op-mode > button { height: 36px; padding: 0 9px; font-size: 13px; }
+  [data-bottom-bar] .op-zoom { display: none; }
+  [data-selection-bar] > .op-float { max-width: calc(100vw - 16px); overflow-x: auto; }
+  .op-action { min-width: 52px; }
+}
+
+/* ── Assistant ─────────────────────────────────────────────── */
+.op-btn.is-outline { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-secondary); padding: 0 16px; }
+.op-btn.is-outline:hover { background: var(--color-surface-hover); }
+.op-assistant { right: var(--chrome-inset); top: 84px; bottom: var(--chrome-inset); width: 404px; box-shadow: var(--shadow-xl); }
+@media (max-width: 1150px) { .op-assistant { top: 146px; } }
+/* Wide: the bottom bar stops short of the panel. Narrow: the panel stops above the bottom bar. */
+@media (min-width: 1001px) {
+  .op-chrome.has-assistant .op-bottom { right: calc(var(--chrome-inset) * 2 + 404px); grid-template-columns: auto minmax(0, 1fr); }
+  .op-chrome.has-assistant .op-bottom > :nth-child(2) { display: none; }
+}
+@media (max-width: 1000px) { .op-assistant { bottom: 84px; } }
+@media (max-width: 640px) {
+  .op-assistant { left: var(--chrome-inset); width: auto; }
+  .op-chrome.has-assistant .op-left-rail { display: none; }
+  .op-assistant .op-chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -12px; padding: 0 12px; }
+  .op-assistant .op-chip { flex-shrink: 0; }
+}
+.op-assistant-thread {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 32px);
+  mask-image: linear-gradient(to bottom, transparent 0, black 32px);
+}
+.op-chip {
+  height: 44px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.op-chip:hover { background: var(--color-surface-hover); }
+.op-chat-input {
+  min-height: 48px;
+  max-height: 132px;
+  padding: 12px 16px;
+  border: 1px solid var(--color-input-border);
+  border-radius: 24px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 22px;
+  resize: none;
+  outline: none;
+}
+.op-chat-input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-subtle); }
+.op-chat-input::placeholder { color: var(--color-text-muted); }
+.op-send {
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+}
+.op-send:hover { background: var(--color-accent-hover); }
+.op-send:disabled { background: var(--color-surface-muted); color: var(--color-text-disabled); }
+.op-typing { display: inline-flex; gap: 3px; }
+.op-typing i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: op-typing 1.2s infinite ease-in-out; }
+.op-typing i:nth-child(2) { animation-delay: 0.15s; }
+.op-typing i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes op-typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+.op-tool-row { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
+.op-tool-row > [data-tool-strip] { min-width: 0; }
+.op-assistant-btn { position: relative; gap: 8px; padding: 0 14px; font-weight: 600; }
+.op-assistant-btn.is-open { background: var(--color-accent); color: var(--color-on-accent); }
+.op-assistant-btn.is-open:hover { background: var(--color-accent-hover); }
+.op-assistant-btn .op-dot { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-surface-raised); }
+.op-attach {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 2px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-full);
+  background: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+}
+.op-attach:hover { background: var(--color-surface-hover); }
+.op-attach:disabled { opacity: 0.5; }
+.op-check-bar { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 12px; max-width: 100%; overflow-x: auto; white-space: nowrap; }
+.op-stepper { display: flex; align-items: center; border: 1px solid var(--color-border); border-radius: var(--radius-lg); flex-shrink: 0; }
+.op-stepper > button { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; color: var(--color-text-secondary); }
+.op-stepper > button:hover { background: var(--color-surface-hover); }
+.op-stepper > span { min-width: 64px; text-align: center; font-size: 15px; font-weight: 600; color: var(--color-text-strong); }

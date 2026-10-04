@@ -207,7 +207,49 @@ function restoreHistoryProject(state: string) {
   currentProject.set(project);
 }
 
+// ── Previews ──────────────────────────────────────────────────────
+// The Assistant draws its proposed changes on the real plan. Everything from
+// beginPreview() on becomes a single undo step when committed; discarding (or
+// pressing undo) puts the plan back exactly as it was.
+
+/** True while proposed changes are shown on the plan but not yet applied. */
+export const previewActive = writable(false);
+let previewBaseline: string | null = null;
+
+export function beginPreview() {
+  if (previewBaseline !== null) return;
+  const p = get(currentProject);
+  if (!p) return;
+  previewBaseline = JSON.stringify(p);
+  beginUndoGroup();
+  previewActive.set(true);
+}
+
+export function commitPreview(description: string) {
+  if (previewBaseline === null) return;
+  previewBaseline = null;
+  undoGroupDepth = 1;
+  endUndoGroup(description);
+  previewActive.set(false);
+}
+
+export function discardPreview() {
+  if (previewBaseline === null) return;
+  const state = previewBaseline;
+  previewBaseline = null;
+  restoreHistoryProject(state);
+  undoGroupDepth = 1;
+  endUndoGroup();
+  previewActive.set(false);
+}
+
+/** Run an edit on the active floor as one undoable change. */
+export function editActiveFloor(fn: (floor: Floor) => void, description?: string) {
+  mutate(fn, description);
+}
+
 export function undo() {
+  if (previewBaseline !== null) { discardPreview(); return; }
   resetCoalescing();
   const prev = undoStack.pop();
   if (!prev) return;
@@ -218,6 +260,7 @@ export function undo() {
 }
 
 export function redo() {
+  if (previewBaseline !== null) return;
   resetCoalescing();
   const next = redoStack.pop();
   if (!next) return;
@@ -229,6 +272,7 @@ export function redo() {
 
 /** Jump to a specific undo history step by index (0 = oldest) */
 export function jumpToUndoStep(targetIndex: number) {
+  if (previewBaseline !== null) discardPreview();
   const total = undoStack.length; // total past states; current state is at index `total`
   if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex > total) return;
   if (targetIndex === total) return; // already at current state
@@ -352,7 +396,7 @@ export function moveFurniture(id: string, position: Point) {
 }
 
 /** Apply one drag frame atomically. The canvas owns the enclosing undo group. */
-export function transformFurnitureDuringDrag(id: string, updates: Partial<Pick<FurnitureItem, 'position' | 'rotation' | 'scale'>>) {
+export function transformFurnitureDuringDrag(id: string, updates: Partial<Pick<FurnitureItem, 'position' | 'rotation' | 'scale' | 'width' | 'depth'>>) {
   const p = get(currentProject);
   const floor = p?.floors.find(f => f.id === p.activeFloorId);
   const item = floor?.furniture.find(fi => fi.id === id);
@@ -1207,6 +1251,8 @@ export function updateProjectName(name: string) {
 }
 
 export function loadProject(project: Project) {
+  previewBaseline = null;
+  previewActive.set(false);
   undoStack.length = 0;
   redoStack.length = 0;
   undoGroupDepth = 0;

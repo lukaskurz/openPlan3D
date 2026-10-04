@@ -498,33 +498,25 @@
 </script>
 
 {#if wall}
-  <!-- Integrated view: fills the canvas area over the plan canvas; right padding
-       leaves room for the fixed PropertiesPanel (w-64) that stays visible on md+ -->
-  <div class="absolute inset-0 z-30 bg-white flex flex-col md:pr-64">
-    <!-- Slim header: wall index, cycling, dimensions -->
-    <div class="flex items-center gap-2 px-3 h-10 border-b border-gray-200 bg-slate-50 shrink-0">
-      <button
-        class="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors disabled:opacity-30 disabled:pointer-events-none text-lg leading-none"
-        onclick={() => cycleWall(-1)}
-        disabled={wallCount < 2}
-        title={$t('elevationView.previous')}
-        aria-label={$t('elevationView.previous')}
-      >‹</button>
-      <span class="text-sm font-semibold text-slate-700 tabular-nums">{$t('elevationView.wall', { index: wallIndex + 1, count: wallCount })}</span>
-      <button
-        class="w-7 h-7 flex items-center justify-center rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-200 transition-colors disabled:opacity-30 disabled:pointer-events-none text-lg leading-none"
-        onclick={() => cycleWall(1)}
-        disabled={wallCount < 2}
-        title={$t('elevationView.next')}
-        aria-label={$t('elevationView.next')}
-      >›</button>
-      <span class="text-xs text-gray-400 ml-1">{formatLength(wallLen, units)} × {startH === endH ? formatLength(startH, units) : `${formatLength(startH, units)} → ${formatLength(endH, units)}`}</span>
-      <div class="flex-1"></div>
-      <span class="text-[11px] text-gray-400 max-lg:hidden">{$t('elevationView.help')}</span>
+  <!-- Integrated view: fills the screen under the floating chrome; the wall switcher
+       floats where the plan tools sit, and the canvas leaves room for the corners. -->
+  <div class="absolute inset-0 z-20 flex flex-col" style="background:var(--canvas-bg, #f8f9fa)">
+    <div class="absolute top-4 max-[1150px]:top-[80px] left-1/2 -translate-x-1/2 z-40 op-float op-cluster max-w-[calc(100vw-2rem)]" data-elevation-header>
+      <button class="op-btn is-square" onclick={() => cycleWall(-1)} disabled={wallCount < 2} title={$t('elevationView.previous')} aria-label={$t('elevationView.previous')}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+      </button>
+      <div class="flex flex-col items-center px-3 min-w-[9rem]">
+        <span class="text-sm font-semibold tabular-nums" style="color:var(--color-text-strong)">{$t('elevationView.wall', { index: wallIndex + 1, count: wallCount })}</span>
+        <span class="text-xs tabular-nums" style="color:var(--color-text-muted)">{formatLength(wallLen, units)} × {startH === endH ? formatLength(startH, units) : `${formatLength(startH, units)} → ${formatLength(endH, units)}`}</span>
+      </div>
+      <button class="op-btn is-square" onclick={() => cycleWall(1)} disabled={wallCount < 2} title={$t('elevationView.next')} aria-label={$t('elevationView.next')}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg>
+      </button>
     </div>
+    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 op-pill pointer-events-none max-lg:hidden">{$t('elevationView.help')}</div>
 
     <!-- Elevation canvas -->
-    <div class="flex-1 min-h-0 relative" bind:clientWidth={cw} bind:clientHeight={ch}>
+    <div class="flex-1 min-h-0 relative mt-[96px] mb-[84px] mx-[84px] max-sm:mx-2" bind:clientWidth={cw} bind:clientHeight={ch}>
       <canvas
         aria-label={$t('elevationView.canvas')}
         bind:this={canvas}

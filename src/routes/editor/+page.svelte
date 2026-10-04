@@ -9,27 +9,19 @@
   import { replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { reportLoadingFailure } from '$lib/services/deployment';
-  import { currentProject, viewMode, selectedElementId, selectedRoomId, createDefaultProject, loadProject, selectedTool, placingFurnitureId, elevationWallId, elevationPickMode } from '$lib/stores/project';
+  import { currentProject, viewMode, selectedElementId, selectedRoomId, createDefaultProject, loadProject, elevationWallId, elevationPickMode } from '$lib/stores/project';
   import { localStore, storageErrorMessage, downloadLibraryBackup } from '$lib/services/datastore';
   import { autoSave, markClean, saveState } from '$lib/stores/saveStatus';
   import { createProjectFromRoomPlan, isRoomPlanJson } from '$lib/utils/roomplanImport';
-  import TopBar from '$lib/components/toolbar/TopBar.svelte';
-  import BuildPanel from '$lib/components/sidebar/BuildPanel.svelte';
-  import PropertiesPanel from '$lib/components/sidebar/PropertiesPanel.svelte';
-  import LayersPanel from '$lib/components/sidebar/LayersPanel.svelte';
-
-  let showLayers = $state(false);
   import FloorPlanCanvas from '$lib/components/editor/FloorPlanCanvas.svelte';
-  import AlignmentToolbar from '$lib/components/editor/AlignmentToolbar.svelte';
-  import UndoHistoryPanel from '$lib/components/editor/UndoHistoryPanel.svelte';
   import CommandPalette from '$lib/components/editor/CommandPalette.svelte';
   import ElevationView from '$lib/components/editor/ElevationView.svelte';
-  import PrintLayout from '$lib/components/editor/PrintLayout.svelte';
   import OnboardingTooltip from '$lib/components/OnboardingTooltip.svelte';
+  import EditorChrome from '$lib/components/chrome/EditorChrome.svelte';
+  import { dialog, elementsListOpen } from '$lib/stores/chrome';
   import { triggerTip } from '$lib/stores/onboarding.svelte';
 
   let commandPaletteOpen = $state(false);
-  let printOpen = $state(false);
 
   // Lazy-load ThreeViewer to avoid loading Three.js (~1.4MB) until 3D mode is activated
   let ThreeViewer: any = $state(null);
@@ -52,18 +44,10 @@
     shortcutCopyGeneration++;
     shortcutCopyState = 'idle';
   });
-  let showUndoHistory = $state(false);
-  let historyTrigger: HTMLButtonElement | undefined = $state();
-  function toggleHistory(trigger: HTMLButtonElement) {
-    historyTrigger = trigger;
-    showUndoHistory = !showUndoHistory;
-  }
-
-  // Mobile (< md): BuildPanel becomes an off-canvas drawer toggled by the Tools FAB.
-  let buildPanelOpen = $state(false);
-  // Close the drawer once the user has picked a tool / item so the canvas is usable
-  selectedTool.subscribe(() => { if (buildPanelOpen) buildPanelOpen = false; });
-  placingFurnitureId.subscribe((id) => { if (id && buildPanelOpen) buildPanelOpen = false; });
+  // The menu drawer's Help opens the shortcuts sheet.
+  $effect(() => {
+    if ($dialog === 'help') { showHelp = true; dialog.set(null); }
+  });
 
   // iOS capture handoff (?import=CODE → fetch RoomPlan JSON from Firebase Storage inbox)
   let importingCapture = $state(false);
@@ -210,109 +194,35 @@
     const target = e.target as HTMLElement | null;
     const typing = !!target && (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) || target.isContentEditable);
     const mod = e.ctrlKey || e.metaKey;
-    if (e.key === 'p' && mod) { e.preventDefault(); printOpen = true; }
+    if (e.key === 'p' && mod) { e.preventDefault(); dialog.set('print'); }
     if ((e.key === 'k' && mod) || (e.key === '/' && !mod && !e.altKey && !typing)) {
       e.preventDefault(); commandPaletteOpen = !commandPaletteOpen;
     }
     if (e.key === '?' && !mod && !e.altKey && !typing) { showHelp = !showHelp; e.preventDefault(); }
     if (e.key === 'Escape' && showHelp) showHelp = false;
-    if (e.key === 'l' && !mod && !e.altKey && !typing) showLayers = !showLayers;
+    if (e.key === 'l' && !mod && !e.altKey && !typing) elementsListOpen.update(v => !v);
   }
 </script>
 
 <svelte:window on:keydown={onEditorKeydown} />
 
 {#if ready}
-  <div class="h-screen flex flex-col overflow-hidden">
-    <TopBar onToggleLayers={() => showLayers = !showLayers} layersOpen={showLayers} onToggleHistory={toggleHistory} historyOpen={showUndoHistory} />
-    <!-- Keep canvas/viewer controls beneath toolbar menus and project dialogs. -->
-    <div class="flex flex-1 overflow-hidden isolate">
-      {#if mode === '2d'}
-        <!-- Build panel: inline sidebar on md+, off-canvas drawer on phones -->
-        {#if buildPanelOpen}
-          <div
-            class="md:hidden fixed inset-x-0 top-12 bottom-0 bg-black/40 z-40"
-            onclick={() => buildPanelOpen = false}
-            aria-hidden="true"
-          ></div>
-        {/if}
-        <div class="h-full max-md:fixed max-md:left-0 max-md:top-12 max-md:bottom-0 max-md:h-auto max-md:z-50 max-md:shadow-2xl max-md:transition-transform max-md:duration-200 {buildPanelOpen ? '' : 'max-md:-translate-x-full'}">
-          <BuildPanel />
-        </div>
+  <!-- The plan fills the screen; every control floats over it. -->
+  <div class="h-dvh overflow-hidden relative isolate" style="background:var(--canvas-bg, #f8f9fa)">
+    {#if mode === '2d'}
+      <FloorPlanCanvas />
+      {#if $elevationWallId}
+        <ElevationView />
       {/if}
-      <div class="flex-1 min-w-0 relative">
-        {#if mode === '2d'}
-          <FloorPlanCanvas />
-          <AlignmentToolbar />
-          {#if $elevationWallId}
-            <!-- Integrated elevation view replaces the plan canvas area (sidebars stay) -->
-            <ElevationView />
-          {/if}
-        {:else}
-          {#if ThreeViewer}
-            <ThreeViewer />
-          {:else}
-            <div class="flex items-center justify-center h-full text-slate-400">{$t('shortcuts.loading3d')}</div>
-          {/if}
-        {/if}
-      </div>
-      {#if showLayers && mode === '2d'}
-        <LayersPanel />
+    {:else}
+      {#if ThreeViewer}
+        <ThreeViewer />
+      {:else}
+        <div class="flex items-center justify-center h-full text-slate-400">{$t('shortcuts.loading3d')}</div>
       {/if}
-      <PropertiesPanel is3D={mode === '3d'} />
-    </div>
+    {/if}
+    <EditorChrome />
   </div>
-
-  <!-- Tools drawer FAB (mobile only) -->
-  {#if mode === '2d'}
-    <button
-      class="md:hidden fixed bottom-4 left-4 w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg active:bg-blue-700 transition-colors z-40 flex items-center justify-center"
-      onclick={() => buildPanelOpen = !buildPanelOpen}
-      title={$t('buildTools.tools')}
-      aria-label={$t('editorPanels.tools')}
-      aria-expanded={buildPanelOpen}
-    >
-      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-    </button>
-  {/if}
-
-  <!-- Layers toggle button -->
-  {#if mode === '2d'}
-    <button
-      class="max-md:hidden fixed bottom-4 left-14 w-8 h-8 rounded-full shadow-lg hover:bg-slate-600 transition-colors z-50 text-sm"
-      class:bg-blue-600={showLayers}
-      class:text-white={showLayers}
-      class:bg-slate-700={!showLayers}
-      class:text-gray-300={!showLayers}
-      onclick={() => showLayers = !showLayers}
-      title={$t('editorPanels.layersTitle')}
-      aria-label={$t('editorPanels.layers')}
-      aria-expanded={showLayers}
-    >🗂</button>
-  {/if}
-
-  <!-- Undo History toggle button -->
-  <button
-    class="max-md:hidden fixed bottom-4 left-24 w-8 h-8 rounded-full shadow-lg hover:bg-slate-600 transition-colors z-50 text-sm"
-    class:bg-blue-600={showUndoHistory}
-    class:text-white={showUndoHistory}
-    class:bg-slate-700={!showUndoHistory}
-    class:text-gray-300={!showUndoHistory}
-    onclick={(event) => toggleHistory(event.currentTarget)}
-    title={$t('undoHistory.title')}
-    aria-label={$t('editorPanels.history')}
-      aria-expanded={showUndoHistory}
-  >⟲</button>
-
-  <UndoHistoryPanel bind:visible={showUndoHistory} returnFocusTo={historyTrigger} />
-
-  <!-- Help button (desktop only — keyboard shortcuts are meaningless on touch) -->
-  <button
-    class="max-md:hidden fixed bottom-4 left-4 w-8 h-8 rounded-full bg-slate-700 text-white text-sm font-bold shadow-lg hover:bg-slate-600 transition-colors z-50"
-    onclick={() => showHelp = !showHelp}
-    title={`${$t('shortcuts.title')} (?)`}
-    aria-label={$t('shortcuts.title')}
-  >?</button>
 
   <!-- Shortcuts overlay -->
   {#if showHelp}
@@ -498,7 +408,6 @@
   {/if}
 
   <CommandPalette bind:open={commandPaletteOpen} />
-  <PrintLayout bind:open={printOpen} />
   <OnboardingTooltip />
 {:else}
   <div class="h-screen flex flex-col items-center justify-center gap-3">

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./lib/styles/chrome.css";
 
 @custom-variant dark (&.dark);
 
@@ -21,6 +22,12 @@ html.dark {
 html.dark {
   /* Global background and text */
   --tw-bg-opacity: 1;
+}
+
+/* The 2D plan is drawn on a canvas with light-theme colors; invert it (hue kept) for dark mode. */
+html.dark canvas[data-plan-canvas],
+html.dark canvas[data-plan-minimap] {
+  filter: invert(0.9) hue-rotate(180deg);
 }
 
 /* Override common bg/text patterns in dark mode */
