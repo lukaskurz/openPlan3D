@@ -1,12 +1,13 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { get } from 'svelte/store';
-  import { t, type TranslationKey } from '$lib/i18n';
+  import { t, locale, type TranslationKey } from '$lib/i18n';
   import { currentProject, detectedRoomsStore, selectedElementIds, selectedRoomId } from '$lib/stores/project';
   import { planViewApi, planInsetRight } from '$lib/stores/planView';
   import { assistantOpen, floorView, elementsListOpen } from '$lib/stores/chrome';
   import { hasPlanContent } from '$lib/utils/planContentBounds';
-  import { assistant, send, stop, retry, applyProposal, discardProposal, newConversation, type Attachment, type ChangeCounts } from '$lib/assistant/session';
+  import { assistant, send, stop, retry, applyProposal, discardProposal, newConversation, openConversation, deleteConversation, chatHistory, activeChatId, type Attachment, type ChangeCounts } from '$lib/assistant/session';
+  import { sketching, sketchAttachment, startSketch, clearSketch } from '$lib/assistant/sketch';
   import { richText } from '$lib/assistant/richText';
   import { prepareImage, preparePdf, PDF_MAX_BYTES } from '$lib/assistant/images';
   import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
@@ -24,6 +25,43 @@
   let keyOpen = $state(false);
   let keyDraft = $state('');
   let keyError = $state(false);
+  let historyOpen = $state(false);
+  let historyRef: HTMLDivElement | undefined = $state();
+  function onWindowPointerDown(e: PointerEvent) {
+    if (historyOpen && historyRef && !historyRef.contains(e.target as Node)) historyOpen = false;
+  }
+
+  /** What goes with the next message: attached files, then the sketch drawn on the plan. */
+  let outgoing = $derived([...attachments, ...($sketchAttachment ? [$sketchAttachment] : [])]);
+  let earlierChats = $derived($chatHistory.filter(chat => chat.id !== $activeChatId || $assistant.items.length));
+
+  function edited(time: number) {
+    const minutes = Math.floor((Date.now() - time) / 60000);
+    if (minutes < 1) return $t('library.justNow');
+    if (minutes < 60) return $t('library.minutes', { count: minutes });
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return $t('library.hours', { count: hours });
+    const days = Math.floor(hours / 24);
+    if (days < 7) return $t('library.days', { count: days });
+    return new Date(time).toLocaleDateString($locale === 'pt' ? 'pt-BR' : 'en');
+  }
+
+  function startNewChat() {
+    historyOpen = false;
+    newConversation();
+    tick().then(() => input?.focus());
+  }
+
+  // Drawing needs the plan: on narrow screens the panel steps aside and comes back when the sketch is done.
+  let hidForSketch = false;
+  function toggleSketch() {
+    if ($sketching) return;
+    startSketch();
+    if (window.innerWidth <= 1000) { hidForSketch = true; assistantOpen.set(false); }
+  }
+  $effect(() => {
+    if (!$sketching && hidForSketch) { hidForSketch = false; assistantOpen.set(true); }
+  });
 
   let rooms = $derived($detectedRoomsStore.length);
   let alternative = $derived(($currentProject?.alternatives ?? []).find(alt => alt.id === $currentProject?.activeAlternativeId)?.name);
@@ -98,10 +136,11 @@
   }
 
   function submit(text = draft) {
-    if ((!text.trim() && !attachments.length) || $assistant.busy) return;
-    void send(text, attachments);
+    if ((!text.trim() && !outgoing.length) || $assistant.busy || $sketching) return;
+    void send(text, outgoing);
     draft = '';
     attachments = [];
+    clearSketch();
     photoError = false;
     tick().then(resize);
   }
@@ -109,7 +148,7 @@
   async function addPhotos(files: Iterable<File>) {
     photoError = false;
     for (const file of files) {
-      if (attachments.length >= 3) continue;
+      if (outgoing.length >= 3) continue;
       if (file.type === 'application/pdf') {
         if (file.size > PDF_MAX_BYTES || attachments.some(a => a.mediaType === 'application/pdf')) { photoError = true; continue; }
         try { attachments = [...attachments, await preparePdf(file)]; }
@@ -146,6 +185,8 @@
   }
 </script>
 
+<svelte:window onpointerdown={onWindowPointerDown} />
+
 <aside class="op-float op-assistant fixed z-[26] flex flex-col overflow-hidden {visible ? 'op-enter' : 'hidden'}" aria-label={$t('chrome.assistant.title')} data-assistant-panel>
   <div class="flex items-center gap-3 py-3 pl-4 pr-2 shrink-0" style="border-bottom:1px solid var(--color-border-subtle)">
     <div class="w-9 h-9 shrink-0 rounded-lg flex items-center justify-center" style="background:var(--color-accent);color:var(--color-on-accent)"><Icon name="sparkles" size={20} /></div>
@@ -154,9 +195,30 @@
       <div class="text-xs truncate" style="color:var(--color-text-muted)">{subtitle}</div>
     </div>
     <button class="op-btn is-square" aria-label={$t('chrome.assistant.key.open')} title={$t('chrome.assistant.key.open')} aria-expanded={keyOpen} onclick={() => keyOpen ? keyOpen = false : openKey()}><Icon name="key" size={18} /></button>
-    {#if $assistant.items.length && !$assistant.busy}
-      <button class="op-btn is-square" aria-label={$t('chrome.assistant.newChat')} title={$t('chrome.assistant.newChat')} onclick={newConversation}><Icon name="newChat" /></button>
-    {/if}
+    <div class="relative" bind:this={historyRef}>
+      <button class="op-btn is-square" aria-label={$t('chrome.assistant.history.title')} title={$t('chrome.assistant.history.title')} aria-expanded={historyOpen} onclick={() => historyOpen = !historyOpen} data-chat-history-button><Icon name="history" size={18} /></button>
+      {#if historyOpen}
+        <div class="op-popover op-menu absolute right-0 top-full mt-2 w-72 max-w-[calc(100vw-2rem)] z-30 op-scroll max-h-[min(60vh,420px)]" role="menu" data-chat-history>
+          <button class="op-menu-item" disabled={$assistant.busy || !$assistant.items.length} onclick={startNewChat}><Icon name="newChat" size={18} /><span class="flex-1">{$t('chrome.assistant.newChat')}</span></button>
+          <div class="op-divider"></div>
+          {#if !earlierChats.length}
+            <p class="px-3 py-2 text-sm" style="color:var(--color-text-muted)">{$t('chrome.assistant.history.empty')}</p>
+          {/if}
+          {#each earlierChats as chat (chat.id)}
+            <div class="flex items-center gap-1">
+              <button class="op-menu-item flex-1 min-w-0" disabled={$assistant.busy && chat.id !== $activeChatId} aria-current={chat.id === $activeChatId} onclick={() => { historyOpen = false; openConversation(chat.id); }}>
+                <span class="flex-1 min-w-0 flex flex-col items-start text-left">
+                  <span class="w-full truncate {chat.id === $activeChatId ? 'font-semibold' : ''}">{chat.title || $t('chrome.assistant.history.untitled')}</span>
+                  <span class="text-xs" style="color:var(--color-text-muted)">{chat.id === $activeChatId ? $t('chrome.assistant.history.current') : edited(chat.updatedAt)}</span>
+                </span>
+              </button>
+              <button class="op-btn is-square shrink-0" aria-label={$t('chrome.assistant.history.delete')} title={$t('chrome.assistant.history.delete')} disabled={$assistant.busy && chat.id === $activeChatId} onclick={() => deleteConversation(chat.id)}><Icon name="trash" size={16} /></button>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <button class="op-btn is-square" aria-label={$t('chrome.assistant.newChat')} title={$t('chrome.assistant.newChat')} disabled={$assistant.busy || !$assistant.items.length} onclick={startNewChat} data-new-chat><Icon name="newChat" /></button>
     <button class="op-btn is-square" aria-label={$t('chrome.close')} onclick={() => assistantOpen.set(false)}><Icon name="close" /></button>
   </div>
 
@@ -249,16 +311,16 @@
         {/each}
       </div>
     {/if}
-    {#if attachments.length || photoError}
+    {#if outgoing.length || photoError}
       <div class="flex gap-2 items-center flex-wrap" data-attachments>
-        {#each attachments as attachment, i}
+        {#each outgoing as attachment, i}
           <div class="relative">
             {#if attachment.thumb}
               <img src={attachment.thumb} alt="" class="w-14 h-14 object-cover rounded-lg" style="border:1px solid var(--color-border)" />
             {:else}
               <div class="h-14 max-w-[9rem] px-2.5 rounded-lg flex flex-col justify-center text-xs" style="border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text)" data-pdf-chip><span class="font-semibold">PDF</span><span class="truncate">{attachment.name}</span></div>
             {/if}
-            <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t('chrome.assistant.removePhoto')} onclick={() => attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
+            <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t(attachment.sketch ? 'chrome.assistant.sketch.remove' : 'chrome.assistant.removePhoto')} onclick={() => attachment.sketch ? clearSketch() : attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
           </div>
         {/each}
         {#if photoError}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.photoFailed')}</span>{/if}
@@ -266,7 +328,8 @@
     {/if}
     <div class="flex items-end gap-2">
       <input bind:this={fileInput} type="file" accept="image/*,application/pdf" multiple class="hidden" onchange={(e) => { const el = e.currentTarget; void addPhotos([...(el.files ?? [])]); el.value = ''; }} />
-      <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || attachments.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
+      <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || outgoing.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
+      <button class="op-attach" aria-label={$t('chrome.assistant.sketch.start')} title={$t('chrome.assistant.sketch.start')} aria-pressed={$sketching} disabled={$assistant.busy || (outgoing.length >= 3 && !$sketchAttachment)} onclick={toggleSketch} data-sketch-button><Icon name="pencil" size={19} /></button>
       <textarea
         bind:this={input}
         bind:value={draft}
@@ -282,7 +345,7 @@
       {#if $assistant.busy}
         <button class="op-send" aria-label={$t('chrome.assistant.stop')} title={$t('chrome.assistant.stop')} onclick={stop}><Icon name="stop" size={18} /></button>
       {:else}
-        <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={!draft.trim() && !attachments.length} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
+        <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
       {/if}
     </div>
   </div>

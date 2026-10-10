@@ -4,7 +4,8 @@ import { currentProject, loadProject, createDefaultProject, addFloor, previewAct
 import { runPlanTool } from '$lib/assistant/planTools';
 import { activeCheck, assistantTools, runCheck } from '$lib/assistant/checks';
 import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
-import { assistant, send, newConversation } from '$lib/assistant/session';
+import { assistant, send, newConversation, openConversation, deleteConversation, chatHistory, activeChatId } from '$lib/assistant/session';
+import { describeStrokes, simplifyStroke } from '$lib/assistant/sketch';
 import { parseConversation } from '$lib/server/assistantChat';
 import { ANTHROPIC_MESSAGES_URL } from '$lib/assistant/stream';
 
@@ -162,9 +163,67 @@ describe('conversation features', () => {
     assistantApiKey.set('');
   });
 
+  it('keeps earlier chats: a new chat leaves the old one in the history to go back to', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(textReply('Hello.')));
+    await send('First question');
+    const first = get(activeChatId);
+    newConversation();
+    expect(get(assistant).items).toHaveLength(0);
+    expect(get(chatHistory).map(chat => chat.title)).toEqual(['First question']);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(textReply('Hi.')));
+    await send('Second question');
+    expect(get(chatHistory).map(chat => chat.title)).toEqual(['Second question', 'First question']);
+    openConversation(first);
+    expect(get(activeChatId)).toBe(first);
+    expect(get(assistant).items[0]).toMatchObject({ kind: 'user', text: 'First question' });
+    // The model hears this chat's own history, not the other one.
+    const fetchMock = vi.fn().mockResolvedValue(textReply('Okay.'));
+    vi.stubGlobal('fetch', fetchMock);
+    await send('Follow-up');
+    const sent = JSON.parse(fetchMock.mock.calls[0][1].body).messages;
+    expect(sent.map((m: { content: { text?: string }[] }) => m.content.at(-1)?.text)).toEqual(['First question', 'Hello.', 'Follow-up']);
+    // A reload reopens the chat that was open.
+    const project = structuredClone(get(currentProject)!);
+    loadProject(createDefaultProject('Other'));
+    expect(get(chatHistory)).toHaveLength(0);
+    loadProject(project);
+    expect(get(activeChatId)).toBe(first);
+    deleteConversation(first);
+    expect(get(assistant).items).toHaveLength(0);
+    expect(get(chatHistory).map(chat => chat.title)).toEqual(['Second question']);
+  });
+
+  it('sends a sketch as a picture with its strokes in plan cm', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(textReply('A desk there, got it.'));
+    vi.stubGlobal('fetch', fetchMock);
+    const note = describeStrokes([[{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 2, y: 4 }]]);
+    await send('Put a desk here', [{ mediaType: 'image/jpeg', data: 'AAAA', thumb: 'data:image/jpeg;base64,AAAA', name: 'sketch', sketch: true, note }]);
+    const content = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content;
+    expect(content[0].type).toBe('image');
+    expect(content[1].text).toContain('1 (closed: circles an area): (0,0) (100,0) (100,100) (0,100) (2,4)');
+    expect(content.at(-1).text).toBe('Put a desk here');
+  });
+
   it('checks the shape of keys', () => {
     expect(plausibleKey('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBe(true);
     expect(plausibleKey('sk-proj-abc')).toBe(false);
+  });
+});
+
+describe('sketch strokes', () => {
+  it('simplifies strokes to the points that matter', () => {
+    const wobbly = Array.from({ length: 50 }, (_, i) => ({ x: i * 4, y: i % 2 ? 0.5 : -0.5 }));
+    expect(simplifyStroke(wobbly, 2)).toEqual([wobbly[0], wobbly[49]]);
+    const corner = [{ x: 0, y: 0 }, { x: 50, y: 1 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+    expect(simplifyStroke(corner, 2)).toEqual([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }]);
+  });
+
+  it('keeps the description inside the server limit for one text block', () => {
+    const scribble = Array.from({ length: 20 }, (_, s) => Array.from({ length: 400 }, (_, i) => ({ x: s * 37 + Math.sin(i) * 300, y: i * 3 + Math.cos(i * 1.7) * 200 })));
+    const note = describeStrokes(scribble, { x0: 0, y0: 0, x1: 1000, y1: 1200 });
+    expect(note.length).toBeLessThan(8000);
+    expect(note).toContain('x 0 to 1000 cm');
+    expect(note).toMatch(/\n20( \(closed[^)]*\))?: /);
   });
 });
 

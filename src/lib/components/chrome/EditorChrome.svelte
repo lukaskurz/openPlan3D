@@ -34,6 +34,7 @@
   import SaveBanner from './SaveBanner.svelte';
   import AssistantButton from './AssistantButton.svelte';
   import AssistantPanel from './AssistantPanel.svelte';
+  import SketchLayer from './SketchLayer.svelte';
   import CheckBar from './CheckBar.svelte';
   import { discardProposal } from '$lib/assistant/session';
   import { toolGroup } from './tools';
@@ -123,6 +124,7 @@
 <SelectionBar />
 <Inspector />
 <AssistantPanel visible={$assistantOpen && plan} />
+{#if plan}<SketchLayer />{/if}
 <CatalogSheet />
 <MenuDrawer {onerror} />
 

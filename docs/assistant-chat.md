@@ -76,10 +76,25 @@ blocked doors, and the prompt asks the model to fix them before it answers.
   Try it; the plan marks findings in red and a bar adjusts the minimum. Tools
   are kept in this browser (`o3d_assistant_tools`) and listed to the model by
   `get_plan`, so "show me the walkway check" works later.
-- **Conversations are kept** per project in this browser
-  (`o3d_assistant_chat_<project id>`, photos stripped, about 1.5 MB at most).
-  A proposal still pending at a reload is gone (previews are never saved), so it
-  is shown as not applied and the model is told.
+- **Conversations are kept** per project in this browser, with a history:
+  New chat keeps the current chat, and the clock button lists the project's
+  chats (titled by the first message) to switch back to or delete. Each chat is
+  stored as `o3d_assistant_chat_<project id>:<chat id>` (photos stripped, about
+  1 MB at most), and `o3d_assistant_chats_<project id>` lists them and remembers
+  the open one; at most 30 are kept, oldest dropped first. A conversation saved
+  before history existed (`o3d_assistant_chat_<project id>`) becomes the first
+  chat in the list. A proposal still pending at a reload is gone (previews are
+  never saved), so it is shown as not applied and the model is told.
+- **Drawing on the plan.** The pen button next to + lets the person scribble
+  over the plan ([`sketch.ts`](../src/lib/assistant/sketch.ts),
+  `SketchLayer.svelte`); scrolling and pinching still move the plan, Esc or
+  Done finishes. The strokes are kept in plan cm, so they stay put while the
+  view moves. The sketch goes with the next message as a picture of that part
+  of the plan as it is on screen, strokes in red and numbered, plus a text
+  block listing each stroke's points in plan cm (simplified, and marked when a
+  stroke circles an area), so "put a desk here" has a here. Like photos, it runs
+  that turn on the build model. On narrow screens the panel steps aside while
+  drawing.
 - **Own API key.** The key button in the panel stores an Anthropic key in this
   browser (`o3d_anthropic_key`). With a key, the browser calls the Messages
   API directly (`anthropic-dangerous-direct-browser-access`), with the same

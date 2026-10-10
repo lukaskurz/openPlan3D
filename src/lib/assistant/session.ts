@@ -1,8 +1,9 @@
 /**
  * The Assistant conversation: runs the model ↔ plan-tool loop in the browser.
  * Edits land on the plan as a preview; the person applies or discards them,
- * and either way it is one undo step. Each project keeps its conversation in
- * this browser, so it survives a reload.
+ * and either way it is one undo step. Each project keeps its conversations
+ * in this browser, so they survive a reload and the person can go back to an
+ * earlier one.
  */
 import { get, writable } from 'svelte/store';
 import { currentProject, previewActive, beginPreview, commitPreview, discardPreview } from '$lib/stores/project';
@@ -33,7 +34,15 @@ export interface AssistantState {
 }
 
 /** A photo or PDF ready to send: what the model sees and a small preview for the chat (PDFs have a file name instead of a thumbnail). */
-export interface Attachment { mediaType: ImageSource['media_type'] | 'application/pdf'; data: string; thumb: string; name?: string; /** The original file, kept for zooming in. */ source?: Blob }
+export interface Attachment {
+  mediaType: ImageSource['media_type'] | 'application/pdf'; data: string; thumb: string; name?: string;
+  /** The original file, kept for zooming in. */
+  source?: Blob;
+  /** Text the model gets with the picture (a sketch's strokes in plan cm). */
+  note?: string;
+  /** Drawn on the plan rather than attached. */
+  sketch?: boolean;
+}
 
 export const assistant = writable<AssistantState>({ items: [], busy: false, activity: null });
 
@@ -71,9 +80,61 @@ function patchItem(id: number, patch: Partial<ChatItem>) {
 
 // ── Keeping the conversation ─────────────────────────────────────────
 
+/** One chat: `o3d_assistant_chat_<project>:<chat>`. Before chat history it was `o3d_assistant_chat_<project>`. */
 const STORAGE_PREFIX = 'o3d_assistant_chat_';
-const STORAGE_LIMIT = 1_500_000;
+/** The project's list of chats and which one is open. */
+const INDEX_PREFIX = 'o3d_assistant_chats_';
+const STORAGE_LIMIT = 1_000_000;
+const MAX_CHATS = 30;
 interface Saved { v: 1; items: ChatItem[]; api: ApiMessage[]; outcomeNote: string | null }
+
+/** A chat in the history list. */
+export interface ChatSummary { id: string; title: string; updatedAt: number }
+interface ChatIndex { v: 1; current: string | null; chats: ChatSummary[] }
+
+/** This project's chats, newest first. The open one is `activeChatId`. */
+export const chatHistory = writable<ChatSummary[]>([]);
+export const activeChatId = writable<string>('');
+
+const chatKey = (project: string, chat: string) => `${STORAGE_PREFIX}${project}:${chat}`;
+
+function readIndex(project: string): ChatIndex {
+  try {
+    const data = JSON.parse(localStorage.getItem(INDEX_PREFIX + project) ?? 'null') as ChatIndex | null;
+    if (data?.v === 1 && Array.isArray(data.chats)) return data;
+  } catch { /* unreadable: start a new list */ }
+  return { v: 1, current: null, chats: [] };
+}
+
+function writeIndex(project: string, index: ChatIndex) {
+  index.chats.sort((a, b) => b.updatedAt - a.updatedAt);
+  // Keep the list bounded: the oldest chats go first.
+  for (const old of index.chats.splice(MAX_CHATS)) localStorage.removeItem(chatKey(project, old.id));
+  localStorage.setItem(INDEX_PREFIX + project, JSON.stringify(index));
+  chatHistory.set(index.chats);
+}
+
+/** The single conversation saved before chat history becomes the first chat in the list. */
+function migrateLegacy(project: string) {
+  const legacy = localStorage.getItem(STORAGE_PREFIX + project);
+  if (legacy === null || localStorage.getItem(INDEX_PREFIX + project) !== null) return;
+  try {
+    const data = JSON.parse(legacy) as Saved;
+    const id = newConversationId();
+    localStorage.setItem(chatKey(project, id), legacy);
+    writeIndex(project, { v: 1, current: id, chats: [{ id, title: chatTitle(data.items ?? []), updatedAt: Date.now() }] });
+  } catch { /* unreadable: dropped */ }
+  localStorage.removeItem(STORAGE_PREFIX + project);
+}
+
+/** The first thing the person asked, shortened, or the name of the PDF they sent. */
+function chatTitle(items: ChatItem[]): string {
+  const first = items.find((item): item is Extract<ChatItem, { kind: 'user' }> => item.kind === 'user');
+  const text = first?.text.replace(/\s+/g, ' ').trim() ?? '';
+  if (text) return text.length > 60 ? `${text.slice(0, 57)}…` : text;
+  // Without text the panel shows a translated "Untitled chat".
+  return first?.files?.[0] ?? '';
+}
 
 /** A tool result's picture becomes a note; its text stays. */
 const withoutPictures = (parts: ToolResultPart[]): ToolResultPart[] =>
@@ -89,8 +150,18 @@ const withoutPhotos = (messages: ApiMessage[]): ApiMessage[] => messages.map(mes
 
 function persist() {
   if (!projectId || typeof localStorage === 'undefined') return;
+  const project = projectId, chat = conversationId;
   try {
     const items = get(assistant).items.filter(item => item.kind !== 'error').slice(-200);
+    const index = readIndex(project);
+    index.chats = index.chats.filter(entry => entry.id !== chat);
+    if (!items.length) {
+      // An empty chat isn't kept or listed.
+      localStorage.removeItem(chatKey(project, chat));
+      index.current = null;
+      writeIndex(project, index);
+      return;
+    }
     let messages = withoutPhotos(api);
     let data: Saved = { v: 1, items, api: messages, outcomeNote };
     while (JSON.stringify(data).length > STORAGE_LIMIT && messages.length > 2) {
@@ -98,14 +169,34 @@ function persist() {
       messages = next > 0 ? messages.slice(next) : messages.slice(2);
       data = { ...data, api: messages, items: data.items.slice(Math.floor(data.items.length / 4)) };
     }
-    if (!items.length) localStorage.removeItem(STORAGE_PREFIX + projectId);
-    else localStorage.setItem(STORAGE_PREFIX + projectId, JSON.stringify(data));
+    const raw = JSON.stringify(data);
+    index.chats.unshift({ id: chat, title: chatTitle(items), updatedAt: Date.now() });
+    index.current = chat;
+    for (;;) {
+      try { localStorage.setItem(chatKey(project, chat), raw); break; }
+      catch (error) {
+        // Storage full: make room by dropping the oldest other chat.
+        const oldest = index.chats.length > 1 ? index.chats.pop() : undefined;
+        if (!oldest) throw error;
+        localStorage.removeItem(chatKey(project, oldest.id));
+      }
+    }
+    writeIndex(project, index);
   } catch { /* storage full or unavailable: the conversation just isn't kept */ }
 }
 
-function restore(id: string) {
+/** Load the project's chat list and open the chat that was open last. */
+function restoreProject(project: string) {
+  if (typeof localStorage === 'undefined') { chatHistory.set([]); return; }
+  migrateLegacy(project);
+  const index = readIndex(project);
+  chatHistory.set(index.chats);
+  if (index.current && index.chats.some(chat => chat.id === index.current)) restore(project, index.current);
+}
+
+function restore(project: string, chat: string) {
   try {
-    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(STORAGE_PREFIX + id);
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(chatKey(project, chat));
     if (!raw) return;
     const data = JSON.parse(raw) as Saved;
     if (data?.v !== 1 || !Array.isArray(data.items) || !Array.isArray(data.api)) return;
@@ -117,6 +208,8 @@ function restore(id: string) {
       return item;
     });
     api = data.api;
+    conversationId = chat;
+    activeChatId.set(chat);
     outcomeNote = unapplied ? 'The page was reloaded before the person applied your last changes, so they were discarded.' : data.outcomeNote;
     nextId = Math.max(0, ...items.map(item => item.id)) + 1;
     assistant.set({ items, busy: false, activity: null });
@@ -128,7 +221,8 @@ currentProject.subscribe(project => {
   if (project?.id === projectId) return;
   projectId = project?.id;
   resetConversation();
-  if (projectId) restore(projectId);
+  if (projectId) restoreProject(projectId);
+  else chatHistory.set([]);
 });
 
 // Undo (or anything else) can end a preview from outside the panel.
@@ -140,6 +234,7 @@ function resetConversation() {
   controller?.abort();
   controller = null;
   conversationId = newConversationId();
+  activeChatId.set(conversationId);
   api = [];
   forgetDrawings();
   outcomeNote = null;
@@ -148,11 +243,39 @@ function resetConversation() {
   assistant.set({ items: [], busy: false, activity: null });
 }
 
-/** Start over. Any proposal still on the plan is discarded first. */
+/** Start a new chat; the current one stays in the history. Any proposal still on the plan is discarded first. */
 export function newConversation() {
   if (proposal) discardProposal();
+  persist();
   resetConversation();
   persist();
+}
+
+/** Go back to an earlier chat of this project. */
+export function openConversation(id: string) {
+  if (!projectId || id === conversationId || get(assistant).busy) return;
+  if (proposal) discardProposal();
+  persist();
+  resetConversation();
+  restore(projectId, id);
+  persist();
+}
+
+/** Delete a chat from the history. Deleting the open chat starts a new one. */
+export function deleteConversation(id: string) {
+  if (!projectId || typeof localStorage === 'undefined') return;
+  if (id === conversationId) {
+    if (get(assistant).busy) return;
+    if (proposal) discardProposal();
+    resetConversation();
+  }
+  try {
+    localStorage.removeItem(chatKey(projectId, id));
+    const index = readIndex(projectId);
+    index.chats = index.chats.filter(chat => chat.id !== id);
+    if (index.current === id) index.current = null;
+    writeIndex(projectId, index);
+  } catch { /* storage unavailable */ }
 }
 
 function settleProposal(status: 'applied' | 'discarded') {
@@ -255,10 +378,11 @@ export async function send(text: string, images: Attachment[] = []) {
   for (const file of images.slice(0, 3)) {
     if (file.source) rememberDrawing(file.name ?? (file.mediaType === 'application/pdf' ? 'drawing.pdf' : 'photo'), file.source);
     if (file.mediaType === 'application/pdf') content.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data } });
-    else content.push({ type: 'image', source: { type: 'base64', media_type: file.mediaType, data: file.data } });
+    else if (file.data) content.push({ type: 'image', source: { type: 'base64', media_type: file.mediaType, data: file.data } });
+    if (file.note) content.push({ type: 'text', text: file.note });
   }
   if (outcomeNote) { content.push({ type: 'text', text: `[${outcomeNote}]` }); outcomeNote = null; }
-  content.push({ type: 'text', text: text || (images.every(file => file.mediaType === 'application/pdf') ? 'Here is a PDF.' : 'Here is a photo.') });
+  content.push({ type: 'text', text: text || (images.every(file => file.mediaType === 'application/pdf') ? 'Here is a PDF.' : images.some(file => file.sketch) ? 'Look at what I drew on the plan.' : 'Here is a photo.') });
   api.push({ role: 'user', content });
   update(state => {
     state.items = state.items.filter(item => item.kind !== 'error');
