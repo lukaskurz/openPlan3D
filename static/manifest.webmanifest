@@ -1,0 +1,16 @@
+{
+  "name": "openPlan3D",
+  "short_name": "openPlan3D",
+  "description": "Draw floor plans, furnish them and see them in 3D.",
+  "start_url": "/editor",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#111827",
+  "theme_color": "#111827",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

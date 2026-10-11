@@ -99,11 +99,12 @@
     tick().then(() => scroller?.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }));
   });
 
-  // The panel covers the right of the plan: slide the plan left while it is open.
+  // The panel covers the right of the plan: slide the plan left while it is open
+  // (tablets too; on phones the panel covers the whole width anyway).
   const PANEL_SPACE = 420;
   let slid = 0;
   $effect(() => {
-    const wide = typeof window !== 'undefined' && window.innerWidth > 1000;
+    const wide = typeof window !== 'undefined' && window.innerWidth > 640;
     const want = visible && wide ? PANEL_SPACE : 0;
     planInsetRight.set(want);
     if (want !== slid) {

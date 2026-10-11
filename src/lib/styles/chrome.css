@@ -510,6 +510,10 @@ html.dark {
 
 /* ── Layout of the floating clusters ───────────────────────── */
 .op-chrome { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+/* App feel on touch screens: no text selection or callouts on controls, no rubber-band page. */
+html, body { overscroll-behavior: none; }
+.op-chrome, .op-float, .op-popover, .op-pill, canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.op-chrome :where(input, textarea, [contenteditable]), .op-assistant-thread, .op-popover :where(input, textarea) { -webkit-user-select: text; user-select: text; }
 .op-chrome :where(.op-float, .op-popover, .op-pill, button, a, input) { pointer-events: auto; }
 .op-top {
   position: absolute;
@@ -525,10 +529,9 @@ html.dark {
 .op-top > .op-left { grid-area: left; justify-self: start; min-width: 0; }
 .op-top > .op-center { grid-area: center; display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; max-width: 100%; }
 .op-top > .op-right { grid-area: right; justify-self: end; }
-/* Narrow screens: the tool strip gets its own row under the corners. */
-@media (max-width: 1150px) {
-  .op-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'left right' 'center center'; }
-}
+/* When the corners and the tool strip don't fit side by side (measured in EditorChrome),
+   the tool strip gets its own row under the corners. */
+.op-chrome.is-stacked .op-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'left right' 'center center'; }
 .op-left-rail { position: absolute; left: var(--chrome-inset); top: 50%; transform: translateY(-50%); }
 .op-bottom {
   position: absolute;
@@ -573,7 +576,8 @@ html.dark {
 .op-btn.is-outline { border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-text-secondary); padding: 0 16px; }
 .op-btn.is-outline:hover { background: var(--color-surface-hover); }
 .op-assistant { right: var(--chrome-inset); top: 84px; bottom: var(--chrome-inset); width: 404px; box-shadow: var(--shadow-xl); }
-@media (max-width: 1150px) { .op-assistant { top: 146px; } }
+/* The panel starts below the tool strip when that has its own row. */
+.op-chrome.is-stacked ~ .op-assistant { top: 146px; }
 /* Wide: the bottom bar stops short of the panel. Narrow: the panel stops above the bottom bar. */
 @media (min-width: 1001px) {
   .op-chrome.has-assistant .op-bottom { right: calc(var(--chrome-inset) * 2 + 404px); grid-template-columns: auto minmax(0, 1fr); }

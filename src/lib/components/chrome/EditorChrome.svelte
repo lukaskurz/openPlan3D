@@ -50,6 +50,27 @@
     && $toolGroup === 'select' && !$catalogOpen && !$popover && !$assistantOpen);
   let historyOpen = $derived($popover === 'history');
 
+  // The top row holds the project, the tool strip and the view controls side by side when they fit;
+  // otherwise the tool strip gets its own row. Measured, so it holds for any width and any content.
+  let topRow: HTMLDivElement | undefined = $state();
+  let stacked = $state(false);
+  $effect(() => {
+    if (!topRow) return;
+    const row = topRow;
+    const fit = () => {
+      const [left, center, right] = [...row.children] as HTMLElement[];
+      const natural = (el: HTMLElement) => Math.max(0, ...[...el.children].map(child => (child as HTMLElement).scrollWidth));
+      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+      // The tool strip stays centred, so both corners get the wider corner's room.
+      stacked = 2 * Math.max(natural(left), natural(right)) + natural(center) + 2 * gap > row.clientWidth;
+    };
+    const observer = new ResizeObserver(fit);
+    observer.observe(row);
+    for (const child of row.children) for (const inner of child.children) observer.observe(inner);
+    fit();
+    return () => observer.disconnect();
+  });
+
   // Dialogs bind `open`; mirror them onto the single dialog store.
   let settingsOpen = $state(false);
   let versionsOpen = $state(false);
@@ -94,10 +115,10 @@
 
 <svelte:window onkeydowncapture={onKeydown} />
 
-<div class="op-chrome {$assistantOpen && plan ? 'has-assistant' : ''}" data-editor-chrome>
+<div class="op-chrome {$assistantOpen && plan ? 'has-assistant' : ''} {stacked ? 'is-stacked' : ''}" data-editor-chrome>
   {#if emptyPlan}<StartCard />{/if}
 
-  <div class="op-top">
+  <div class="op-top" bind:this={topRow}>
     <div class="op-left"><ProjectCluster /></div>
     <div class="op-center">
       {#if plan}<div class="op-tool-row"><ToolStrip /><AssistantButton /></div>{/if}

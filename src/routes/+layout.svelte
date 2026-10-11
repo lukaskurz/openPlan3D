@@ -9,6 +9,13 @@
   import DeploymentNotice from '$lib/components/DeploymentNotice.svelte';
   // Self-hosted instances and browser tests can run without sending analytics.
   onMount(() => { if (window.location.pathname !== '/render-lab' && env.PUBLIC_ENABLE_ANALYTICS !== 'false') void import('$lib/firebase'); });
+  // Pinching the toolbars must not zoom the page (the plan handles its own pinch); Safari only.
+  onMount(() => {
+    /** @param {Event} e */
+    const stop = (e) => e.preventDefault();
+    document.addEventListener('gesturestart', stop);
+    return () => document.removeEventListener('gesturestart', stop);
+  });
   let { children } = $props();
 </script>
 
