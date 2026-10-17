@@ -535,7 +535,7 @@ export function exportAsSVG(project: Project, language: Locale = 'en', visibilit
     paths+=`  <g data-furniture="${escapeXml(fi.id)}" data-width="${fw}" data-depth="${fd}" transform="translate(${fx},${fy}) rotate(${fi.rotation || 0})">\n`;
     paths+=`<g transform="scale(${Math.sign(fi.scale?.x ?? 1)||1},${Math.sign(fi.scale?.y ?? 1)||1})">${furnitureSvg(fi.catalogId,fw,fd,color)}</g>\n`;
     const label=furnitureCaptionLayout(fi);
-    if(label) paths+=`<text x="0" y="${label.y}" text-anchor="middle" dominant-baseline="central" font-size="${label.size}" fill="#374151" font-family="sans-serif">${escapeXml(caption(fi))}</text>\n`;
+    if(label) paths+=`<text x="0" y="${label.y}"${label.flipped ? ` transform="rotate(180 0 ${label.y})"` : ''} text-anchor="middle" dominant-baseline="central" font-size="${label.size}" fill="#374151" font-family="sans-serif">${escapeXml(caption(fi))}</text>\n`;
     paths+='  </g>\n';
   }
 

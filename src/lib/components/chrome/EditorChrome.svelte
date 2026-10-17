@@ -7,6 +7,7 @@
   import { saveState, autoSave, initAutoSave } from '$lib/stores/saveStatus';
   import { initVersionHistory, stopVersionHistory } from '$lib/stores/versionHistory';
   import { hasPlanContent } from '$lib/utils/planContentBounds';
+  import { planInsetBottom } from '$lib/stores/planView';
   import { getFloorBelow } from '$lib/utils/floors';
   import { popover, closePopover, dialog, catalogOpen, elementsListOpen, drawerOpen, floorView, assistantOpen } from '$lib/stores/chrome';
   import SettingsDialog from '$lib/components/toolbar/SettingsDialog.svelte';
@@ -131,7 +132,8 @@
   </div>
 
   {#if $viewMode === '2d' || $currentProject?.floors.length !== 1}
-    <div class="op-left-rail"><FloorRail /></div>
+    <!-- Above the bottom sheet when one is open, instead of on top of its header. -->
+    <div class="op-left-rail" class:above-sheet={$planInsetBottom > 0} style:--sheet-inset="{$planInsetBottom}px"><FloorRail /></div>
   {/if}
 
   <div class="op-bottom {historyOpen ? 'is-history' : ''}">

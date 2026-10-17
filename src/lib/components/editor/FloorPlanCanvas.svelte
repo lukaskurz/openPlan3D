@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { prefersTouch } from '$lib/utils/inputDevice';
   import { t, locale, translate } from '$lib/i18n';
   import { connectedWallGroup } from '$lib/utils/scanAlignment';
   import { furnitureName, customModelName } from '$lib/i18n/furnitureNames';
@@ -42,7 +43,7 @@
   import { snapStatus } from '$lib/utils/snapStep';
   import { angleSnapWithin, resizeFurnitureFromHandle, snap as _snap, type CanvasState } from '$lib/utils/canvasInteraction';
   import { checkResult, type CheckResult } from '$lib/assistant/checks';
-  import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, type SelectMode, type SnapOptions } from '$lib/stores/planView';
+  import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, planInsetBottom, type SelectMode, type SnapOptions } from '$lib/stores/planView';
   import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { translatedOpeningPosition } from '$lib/utils/openingTranslation';
@@ -336,6 +337,8 @@
   onDestroy(checkResult.subscribe((result) => { checkFindings = result; markDirty(); }));
   let insetRight = 0;
   onDestroy(planInsetRight.subscribe((px) => { insetRight = px; }));
+  let insetBottom = 0;
+  onDestroy(planInsetBottom.subscribe((px) => { insetBottom = px; if (px > 0) revealSelectionAboveSheet(); }));
   let currentSelectMode: SelectMode = 'tap';
   onDestroy(selectMode.subscribe((m) => { currentSelectMode = m; }));
   let minimapCanvas = $state<HTMLCanvasElement>();
@@ -2131,7 +2134,7 @@
     if (draftKey !== lastDraftKey) { lastDraftKey = draftKey; wallDraft.set(draft); }
 
     const hint = joinMode
-      ? joinHint
+      ? (joinHint === 'doorJoin.hint' && prefersTouch() ? 'doorJoin.hint.touch' : joinHint)
       : annotating
       ? (annotationStart ? 'dimensionHints.plain' : dimensionPicks.length === 2 ? 'dimensionHints.place' : dimensionPicks[0]?.kind === 'corner' ? 'dimensionHints.cornerSecond' : dimensionPicks.length ? 'dimensionHints.second' : 'dimensionHints.start')
       : constraintPick
@@ -2209,6 +2212,8 @@
         if (currentFloor?.measurements?.some(item => item.id === id)) selectedMeasurementId = id;
         if (currentFloor?.annotations?.some(item => item.id === id)) selectedAnnotationId = id;
         if (currentFloor?.textAnnotations?.some(item => item.id === id)) selectedTextAnnotationId = id;
+        // With the bottom sheet already open, a newly selected item can land underneath it.
+        if (insetBottom > 0) queueMicrotask(revealSelectionAboveSheet);
       }
       markDirty();
     });
@@ -2425,6 +2430,34 @@
       }, fittedZoom));
   }
 
+  /** Room the top bars and the selection bar above an item take over the plan, in CSS pixels. */
+  const TOP_CHROME_PX = 200;
+  let revealFrame = 0;
+  /** Pan (never zoom) so the selection sits in the part of the plan left visible above a bottom sheet. */
+  function revealSelectionAboveSheet() {
+    if (!canvas || !currentFloor || insetBottom <= 0) return;
+    const ids = fitSelectionIds();
+    const b = ids.size ? boundsForFloor(currentFloor, zoom, ids) : null;
+    if (!b) return;
+    const rect = canvas.getBoundingClientRect();
+    const bandTop = Math.max(0, TOP_CHROME_PX - rect.top);
+    const bandBottom = Math.min(height, window.innerHeight - insetBottom - rect.top) - 16;
+    if (bandBottom - bandTop < 40) return;
+    const top = worldToScreen(b.minX, b.minY).y, bottom = worldToScreen(b.maxX, b.maxY).y;
+    if (top >= bandTop && bottom <= bandBottom) return;
+    // Centre it in the band, or pin its top to the band when it is taller than the band.
+    const target = bottom - top > bandBottom - bandTop ? bandTop + (bottom - top) / 2 : (bandTop + bandBottom) / 2;
+    const from = camY, to = camY + ((top + bottom) / 2 - target) / zoom, start = performance.now();
+    cancelAnimationFrame(revealFrame);
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / 220), eased = 1 - (1 - k) ** 3;
+      camY = from + (to - from) * eased;
+      markDirty();
+      if (k < 1) revealFrame = requestAnimationFrame(step);
+    };
+    revealFrame = requestAnimationFrame(step);
+  }
+
   function visibleCanvasHeight() {
     const canvasRect = canvas.getBoundingClientRect();
     const sheet = document.querySelector<HTMLElement>('[data-plan-properties]');
@@ -2435,7 +2468,8 @@
     const visibleHeight = coversBottom
       ? Math.max(1, Math.min(height, (sheetRect.top - canvasRect.top) * height / canvasRect.height))
       : height;
-    return visibleHeight;
+    // The chrome inspector's bottom sheet stops above the bottom bar, so it reports its own inset.
+    return insetBottom > 0 ? Math.max(1, Math.min(visibleHeight, window.innerHeight - insetBottom - canvasRect.top)) : visibleHeight;
   }
 
   function clearAuxiliarySelection() {
@@ -2538,9 +2572,14 @@
     return _findWallAt(p, currentFloor.walls, zoom);
   }
 
+  /** Screen-pixel hit radius for a handle: the mouse value, or at least a fingertip (~44 pt across) for touch. */
+  function handleTolerance(mousePx: number) {
+    return touchPress === 'finger' ? Math.max(mousePx, FINGER_HANDLE_PX) : mousePx;
+  }
+
   function findHandleAt(p: Point): HandleType | null {
     if (!currentFloor) return null;
-    return _findHandleAt(p, currentSelectedId, currentFloor.furniture, zoom);
+    return _findHandleAt(p, currentSelectedId, currentFloor.furniture, zoom, handleTolerance(8));
   }
 
   function findFurnitureAt(p: Point): FurnitureItem | null {
@@ -2902,7 +2941,7 @@
       if (!e.ctrlKey && !e.metaKey && currentSelectedId && currentFloor) {
         const selWall = currentFloor.walls.find(w => w.id === currentSelectedId);
         if (selWall) {
-          const epThreshold = 15 / zoom;
+          const epThreshold = handleTolerance(15) / zoom;
           if (Math.hypot(wp.x - selWall.start.x, wp.y - selWall.start.y) < epThreshold) {
             draggingWallEndpoint = { wallId: selWall.id, endpoint: 'start' };
             draggingConnectedEndpoints = findConnectedEndpoints(selWall.start, selWall.id);
@@ -2964,7 +3003,7 @@
         const lx = selEnt.width / 2, ly = (selEnt.width * entAspect) / 2;
         const hx = selEnt.position.x + lx * Math.cos(ea) - ly * Math.sin(ea);
         const hy = selEnt.position.y + lx * Math.sin(ea) + ly * Math.cos(ea);
-        if (Math.hypot(wp.x - hx, wp.y - hy) < 12 / zoom) {
+        if (Math.hypot(wp.x - hx, wp.y - hy) < handleTolerance(12) / zoom) {
           resizingEntourageId = selEnt.id;
           return;
         }
@@ -3711,6 +3750,8 @@
 
   /** Set while a synthetic mouse event from a touch is being handled: 'finger' or 'pen'. */
   let touchPress: 'finger' | 'pen' | null = null;
+  /** Half-size of a handle's hit area under a finger: Apple's 44 pt minimum target, halved. */
+  const FINGER_HANDLE_PX = 22;
   let touchKind: 'finger' | 'pen' = 'finger';
   /** A finger press on empty plan (or on a room not yet selected) that became a pan; a tap without movement deselects (or selects that room). */
   let touchPanFromEmpty = false;

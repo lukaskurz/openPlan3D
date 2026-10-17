@@ -11,7 +11,17 @@ export function furnitureCaptionLayout(item: FurnitureItem, zoom = 1) {
   const w = width * zoom, d = depth * zoom;
   if (!(Math.min(w, d) > 20)) return null;
   const fontSize = Math.max(8, Math.min(12, Math.min(w, d) * 0.2));
-  return { size: fontSize * 0.7, y: d / 2 + fontSize * 0.8 };
+  return { size: fontSize * 0.7, y: d / 2 + fontSize * 0.8, flipped: captionFlipped(item.rotation) };
+}
+
+/**
+ * Whether a caption rotated with its item would read upside down. Like drawing-sheet text it stays
+ * readable from the bottom or the right, so items turned past 90° (up to 270°) turn the caption
+ * 180° about its own centre.
+ */
+export function captionFlipped(rotationDeg: number | undefined) {
+  const a = (((rotationDeg || 0) % 360) + 360) % 360;
+  return a > 90.5 && a <= 270.5;
 }
 
 /**
@@ -24,8 +34,10 @@ export function furnitureCaptionBounds(item: FurnitureItem, caption: string | un
   if (!layout) return null;
   ctx.font = `${layout.size}px sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const m = ctx.measureText(caption ?? getCatalogItem(item.catalogId)?.name ?? 'Unknown furniture');
-  const left = -(m.actualBoundingBoxLeft ?? m.width / 2), right = m.actualBoundingBoxRight ?? m.width / 2;
-  const top = layout.y - (m.actualBoundingBoxAscent ?? layout.size), bottom = layout.y + (m.actualBoundingBoxDescent ?? layout.size);
+  let top = layout.y - (m.actualBoundingBoxAscent ?? layout.size), bottom = layout.y + (m.actualBoundingBoxDescent ?? layout.size);
+  let left = -(m.actualBoundingBoxLeft ?? m.width / 2), right = m.actualBoundingBoxRight ?? m.width / 2;
+  // A flipped caption is turned 180° about (0, y).
+  if (layout.flipped) [left, right, top, bottom] = [-right, -left, 2 * layout.y - bottom, 2 * layout.y - top];
   const angle = (item.rotation || 0) * Math.PI / 180, cosine = Math.cos(angle), sine = Math.sin(angle);
   const points = [left, right].flatMap(x => [top, bottom].map(y => ({
     x: item.position.x + (x * cosine - y * sine) / zoom, y: item.position.y + (x * sine + y * cosine) / zoom })));

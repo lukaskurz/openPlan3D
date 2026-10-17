@@ -31,5 +31,13 @@
 </script>
 
 {#if text}
-  <div class="op-pill pointer-events-none" role="status" aria-live="polite" data-status-pill>{text}</div>
+  {#if $doorJoinMode}
+    <!-- Joining doors has no other exit on a touch screen (Esc is keyboard only). -->
+    <div class="op-pill flex items-center gap-2" role="status" aria-live="polite" data-status-pill>
+      <span>{text}</span>
+      <button class="op-btn h-8 px-3" onclick={() => doorJoinMode.set(null)}>{$t('chrome.cancel')}</button>
+    </div>
+  {:else}
+    <div class="op-pill pointer-events-none" role="status" aria-live="polite" data-status-pill>{text}</div>
+  {/if}
 {/if}

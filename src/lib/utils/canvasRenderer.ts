@@ -16,6 +16,7 @@ import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
 import { getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
 import { getWallTextureCanvas, getFloorTextureCanvas } from '$lib/utils/textureGenerator';
+import { captionFlipped } from './furnitureCaption';
 import { getEntourageDef } from '$lib/utils/entourageCatalog';
 import type { EntourageItem, CustomEntourageDef } from '$lib/models/types';
 
@@ -949,7 +950,9 @@ export function drawFurnitureItem(cs: CanvasState, item: FurnitureItem, selected
     ctx.font = `${fontSize * 0.7}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(caption ?? cat?.name ?? 'Unknown furniture', 0, d / 2 + fontSize * 0.8);
+    ctx.translate(0, d / 2 + fontSize * 0.8);
+    if (captionFlipped(item.rotation)) ctx.rotate(Math.PI);
+    ctx.fillText(caption ?? cat?.name ?? 'Unknown furniture', 0, 0);
     ctx.restore();
   }
 

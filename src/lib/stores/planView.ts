@@ -83,3 +83,7 @@ export const previewHighlight = writable<ReadonlySet<string>>(new Set());
 
 /** Width in pixels of a panel docked over the right edge of the plan (the Assistant). Fitting keeps clear of it. */
 export const planInsetRight = writable(0);
+
+/** Height in pixels, from the window's bottom edge, of a sheet docked over the bottom of the plan
+ * (the inspector in narrow layouts). The plan pans the selection into view above it. */
+export const planInsetBottom = writable(0);

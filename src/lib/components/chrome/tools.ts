@@ -1,3 +1,4 @@
+import { prefersTouch } from '$lib/utils/inputDevice';
 import { derived, get } from 'svelte/store';
 import {
   selectedTool, placingStair, placingColumn, placingColumnShape, placingFurnitureId, placingEntourageId,
@@ -29,7 +30,7 @@ let homeGroup: 'view' | 'select' = 'select';
 
 /** Touch screens start in View, so moving around the plan never drags a wall by accident. */
 export function startingGroup(): 'view' | 'select' {
-  return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 'view' : 'select';
+  return prefersTouch() ? 'view' : 'select';
 }
 
 /** Leave every placing mode so the next tool starts clean. */

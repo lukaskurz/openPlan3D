@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { prefersTouch } from '$lib/utils/inputDevice';
   import { t } from '$lib/i18n';
   import { onDestroy } from 'svelte';
   import { hasOpenModal, popupOwnsEscape } from '$lib/utils/modalDialog';
@@ -531,7 +532,7 @@
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6" /></svg>
       </button>
     </div>
-    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 op-pill pointer-events-none max-lg:hidden">{$t('elevationView.help')}</div>
+    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-40 op-pill pointer-events-none max-lg:hidden">{$t(prefersTouch() ? 'elevationView.help.touch' : 'elevationView.help')}</div>
 
     <!-- Elevation canvas: focused only by pressing it (not a Tab stop), so it draws no focus ring -->
     <div class="flex-1 min-h-0 relative mt-[96px] mb-[84px] mx-[84px] max-sm:mx-2" bind:clientWidth={cw} bind:clientHeight={ch}>

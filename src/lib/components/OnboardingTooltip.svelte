@@ -1,6 +1,13 @@
 <script lang="ts">
-  import { t } from '$lib/i18n';
-  import { getActiveTip, dismissTip } from '$lib/stores/onboarding.svelte';
+  import { t, type TranslationKey } from '$lib/i18n';
+  import { getActiveTip, dismissTip, type TipId } from '$lib/stores/onboarding.svelte';
+  import { prefersTouch } from '$lib/utils/inputDevice';
+
+  // Tips that name keys or the mouse have a touch wording.
+  const TOUCH_TIPS: ReadonlySet<TipId> = new Set(['first-wall', 'first-furniture', 'first-3d', 'first-door']);
+  function tipKey(id: TipId): TranslationKey {
+    return (prefersTouch() && TOUCH_TIPS.has(id) ? `onboarding.${id}.touch` : `onboarding.${id}`) as TranslationKey;
+  }
 
   let tip = $derived(getActiveTip());
   let visible = $state(false);
@@ -40,7 +47,7 @@
     class:opacity-100={visible}
     style="left:{left}px;top:{top}px;width:{Math.max(0, Math.min(280, viewportWidth - margin * 2))}px;max-height:{Math.max(0, viewportHeight - margin * 2)}px;"
   >
-    <p class="min-h-0 overflow-y-auto">{$t(`onboarding.${tip.id}`)}</p>
+    <p class="min-h-0 overflow-y-auto">{$t(tipKey(tip.id))}</p>
     <button
       class="shrink-0 self-start text-xs font-medium px-3 py-1 rounded-lg bg-blue-500 hover:bg-blue-400 transition-colors"
       onclick={dismissTip}

@@ -74,11 +74,17 @@ export function findWallAt(p: Point, walls: Wall[], zoom: number): Wall | null {
   return nearest;
 }
 
+/**
+ * The selected furniture handle under `p`. `tolerancePx` is the screen-space half-size of each
+ * handle's hit box: 8 for a mouse, larger for a fingertip. On small items it shrinks so the middle
+ * stays free for dragging the item itself; where boxes overlap the nearest handle wins.
+ */
 export function findHandleAt(
   p: Point,
   selectedId: string | null,
   furniture: FurnitureItem[],
-  zoom: number
+  zoom: number,
+  tolerancePx = 8,
 ): HandleType | null {
   if (!selectedId) return null;
   const fi = furniture.find(f => f.id === selectedId);
@@ -91,23 +97,21 @@ export function findHandleAt(
   const size = getFurnitureSize(fi);
   const hw = size.width / 2;
   const hd = size.depth / 2;
-  const ht = 8 / zoom;
+  const ht = Math.min(tolerancePx, Math.max(8, Math.min(hw, hd) * zoom * 0.8)) / zoom;
 
   const rotHandleDist = 18 / zoom;
-  if (Math.abs(rx) < ht && Math.abs(ry - (-hd - rotHandleDist)) < ht) return 'rotate';
-
-  if (Math.abs(rx - (-hw)) < ht && Math.abs(ry - (-hd)) < ht) return 'resize-tl';
-  if (Math.abs(rx - hw) < ht && Math.abs(ry - (-hd)) < ht) return 'resize-tr';
-  if (Math.abs(rx - (-hw)) < ht && Math.abs(ry - hd) < ht) return 'resize-bl';
-  if (Math.abs(rx - hw) < ht && Math.abs(ry - hd) < ht) return 'resize-br';
-
-  // Edge midpoint handles
-  if (Math.abs(rx) < ht && Math.abs(ry - (-hd)) < ht) return 'resize-t';
-  if (Math.abs(rx) < ht && Math.abs(ry - hd) < ht) return 'resize-b';
-  if (Math.abs(rx - (-hw)) < ht && Math.abs(ry) < ht) return 'resize-l';
-  if (Math.abs(rx - hw) < ht && Math.abs(ry) < ht) return 'resize-r';
-
-  return null;
+  const handles: [HandleType, number, number][] = [
+    ['rotate', 0, -hd - rotHandleDist],
+    ['resize-tl', -hw, -hd], ['resize-tr', hw, -hd], ['resize-bl', -hw, hd], ['resize-br', hw, hd],
+    // Edge midpoint handles
+    ['resize-t', 0, -hd], ['resize-b', 0, hd], ['resize-l', -hw, 0], ['resize-r', hw, 0],
+  ];
+  let nearest: HandleType | null = null, best = ht;
+  for (const [type, x, y] of handles) {
+    const d = Math.max(Math.abs(rx - x), Math.abs(ry - y));
+    if (d < best) { nearest = type; best = d; }
+  }
+  return nearest;
 }
 
 export function findFurnitureAt(p: Point, furniture: FurnitureItem[]): FurnitureItem | null {

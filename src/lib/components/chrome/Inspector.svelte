@@ -4,6 +4,7 @@
   import { inspectorOpen, inspectorFocus, floorView, catalogOpen, assistantOpen } from '$lib/stores/chrome';
   import PropertiesPanel from '$lib/components/sidebar/PropertiesPanel.svelte';
   import Icon from './Icon.svelte';
+  import { planInsetBottom } from '$lib/stores/planView';
 
   let hasContent = $state(false);
   let showBackground = $derived($inspectorFocus === 'background');
@@ -22,6 +23,23 @@
     return 'chrome.inspector.title';
   });
 
+  // Report how much of the plan a bottom sheet covers; the wide layout docks beside the plan instead.
+  let sheet: HTMLElement | undefined = $state();
+  $effect(() => {
+    const el = sheet, open = visible;
+    if (!el || !open) { planInsetBottom.set(0); return; }
+    const report = () => {
+      const bottomSheet = el.offsetHeight > 0 && el.offsetWidth > window.innerWidth * 0.6;
+      // offsetTop ignores the entry animation's transform, so this is where the sheet settles.
+      planInsetBottom.set(bottomSheet ? Math.max(0, window.innerHeight - el.offsetTop) : 0);
+    };
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    window.addEventListener('resize', report);
+    report();
+    return () => { observer.disconnect(); window.removeEventListener('resize', report); planInsetBottom.set(0); };
+  });
+
   function close() {
     inspectorOpen.set(false);
     inspectorFocus.set(null);
@@ -30,6 +48,7 @@
 
 <!-- Kept mounted so the panel can report whether it has content. -->
 <aside
+  bind:this={sheet}
   class="op-float op-inspector fixed z-[25] flex flex-col overflow-hidden {visible ? 'op-enter' : 'hidden'}"
   aria-label={$t(title)}
   data-inspector

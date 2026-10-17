@@ -533,6 +533,7 @@ html, body { overscroll-behavior: none; }
    the tool strip gets its own row under the corners. */
 .op-chrome.is-stacked .op-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'left right' 'center center'; }
 .op-left-rail { position: absolute; left: var(--chrome-inset); top: 50%; transform: translateY(-50%); }
+.op-left-rail.above-sheet { top: auto; bottom: calc(var(--sheet-inset) + 12px); transform: none; }
 .op-bottom {
   position: absolute;
   left: var(--chrome-inset);
