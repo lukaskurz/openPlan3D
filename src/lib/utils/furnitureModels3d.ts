@@ -11,7 +11,7 @@ function adjustColor(color: string, factor: number): number {
 }
 
 // Helper to create standard material
-function createMaterial(color: string, roughness = 0.7, metalness = 0.1): THREE.MeshStandardMaterial {
+function createMaterial(color: THREE.ColorRepresentation, roughness = 0.7, metalness = 0.1): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({
     color,
     roughness,
@@ -1555,50 +1555,69 @@ function createClock(group: THREE.Group, w: number, d: number, h: number, color:
 }
 
 // Lighting fixtures
+//
+// Ceiling fixtures are built in their own box [0, h] with the ceiling side at the top
+// (y = h): placement lifts them to ceiling − drop − h, and a pendant's cord (the drop)
+// is added by the placement, not here. Light sources sit at or just below the fixture.
+
+/** Warm glowing glass for bulbs and diffusers. */
+function glowMaterial(intensity = 0.5): THREE.MeshStandardMaterial {
+  const mat = createMaterial('#fffde0', 0.1, 0.0);
+  mat.emissive = new THREE.Color(0xfff5c0);
+  mat.emissiveIntensity = intensity;
+  return mat;
+}
+
 function createCeilingLight(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const mat = createMaterial(color, 0.3, 0.1);
   const r = Math.min(w, d) / 2;
   const geo = new THREE.CylinderGeometry(r, r * 0.8, h, 24);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 260 - h / 2; // Mounted on ceiling
+  mesh.position.y = h / 2; // Flush with the ceiling at the top
   group.add(mesh);
-  // Add actual light
+  // Add actual light, just under the diffuser
   const light = new THREE.PointLight(0xfff5e0, 0.8, 500);
-  light.position.y = 260 - h;
+  light.position.y = -2;
   light.castShadow = true;
   group.add(light);
 }
 
 function createChandelier(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const mat = createMaterial(color, 0.3, 0.5);
-  // Central body
-  const bodyGeo = new THREE.SphereGeometry(w * 0.15, 12, 12);
-  const body = new THREE.Mesh(bodyGeo, mat);
-  body.position.y = 260 - h * 0.5;
+  // Central body, a stem up to the top of the box (where the cord or ceiling takes over)
+  // and a finial down to the bottom
+  const bodyR = Math.min(w * 0.15, h * 0.2), bodyY = h * 0.55;
+  const body = new THREE.Mesh(new THREE.SphereGeometry(bodyR, 12, 12), mat);
+  body.position.y = bodyY;
   group.add(body);
+  const stemLength = Math.max(0.1, h - bodyY - bodyR * 0.8);
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, stemLength, 8), mat);
+  stem.position.y = h - stemLength / 2;
+  group.add(stem);
+  const finialLength = Math.max(0.1, bodyY - bodyR * 0.8);
+  const finial = new THREE.Mesh(new THREE.ConeGeometry(Math.min(2.5, bodyR * 0.5), finialLength, 10).rotateX(Math.PI), mat);
+  finial.position.y = finialLength / 2;
+  group.add(finial);
   // Arms with bulbs
   const armMat = createMaterial('#888', 0.3, 0.8);
+  const bulbMat = glowMaterial();
   for (let i = 0; i < 6; i++) {
     const a = (i / 6) * Math.PI * 2;
     const r = w * 0.35;
     const armGeo = new THREE.CylinderGeometry(1.5, 1.5, r, 6);
     armGeo.rotateZ(Math.PI / 2);
     const arm = new THREE.Mesh(armGeo, armMat);
-    arm.position.set(Math.cos(a) * r * 0.5, 260 - h * 0.5, Math.sin(a) * r * 0.5);
+    arm.position.set(Math.cos(a) * r * 0.5, h * 0.5, Math.sin(a) * r * 0.5);
     arm.rotation.y = -a;
     group.add(arm);
     // Bulb
-    const bulbGeo = new THREE.SphereGeometry(4, 8, 8);
-    const bulbMat = createMaterial('#fffde0', 0.1, 0.0);
-    bulbMat.emissive = new THREE.Color(0xfff5c0);
-    bulbMat.emissiveIntensity = 0.5;
-    const bulb = new THREE.Mesh(bulbGeo, bulbMat);
-    bulb.position.set(Math.cos(a) * r, 260 - h * 0.6, Math.sin(a) * r);
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(4, 8, 8), bulbMat);
+    bulb.position.set(Math.cos(a) * r, h * 0.4, Math.sin(a) * r);
     group.add(bulb);
   }
-  // Light
+  // Light at the bulbs
   const light = new THREE.PointLight(0xfff5e0, 1.2, 800);
-  light.position.y = 260 - h;
+  light.position.y = h * 0.4;
   light.castShadow = true;
   group.add(light);
 }
@@ -1608,11 +1627,16 @@ function createRecessedLight(group: THREE.Group, w: number, d: number, h: number
   const r = Math.min(w, d) / 2;
   const geo = new THREE.CylinderGeometry(r, r, h, 16);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 260 - h / 2;
+  mesh.position.y = h / 2;
   group.add(mesh);
+  // Glowing lens on the underside
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r * 0.7, Math.min(0.4, h * 0.1), 16), glowMaterial(0.6));
+  lens.position.y = Math.min(0.2, h * 0.05);
+  group.add(lens);
+  // Downlight just below the fixture; the target is relative to the fixture, straight down
   const light = new THREE.SpotLight(0xfff5e0, 0.6, 400, Math.PI / 4, 0.5);
-  light.position.y = 258;
-  light.target.position.set(0, 0, 0);
+  light.position.y = -0.5;
+  light.target.position.set(0, -200, 0);
   group.add(light);
   group.add(light.target);
 }
@@ -1673,59 +1697,165 @@ function createWallSconce(group: THREE.Group, w: number, d: number, h: number, c
 }
 
 /**
- * Ceiling fan, built in its own box [0, h] (the mount at the top, blades at the
- * bottom); placement lifts it to ceiling − drop − h. Placeholder geometry.
+ * Ceiling fan in its own box [0, h]: a canopy against the ceiling at the top, a short
+ * downrod, the motor housing with five pitched blades spanning the footprint, and a
+ * light kit (switch housing and glass bowl) at the bottom.
  */
 function createCeilingFan(group: THREE.Group, w: number, d: number, h: number, color: string): void {
-  const mat = createMaterial(color, 0.5, 0.3);
+  const body = createMaterial(color, 0.5, 0.3);
   const metal = createMaterial('#9ca3af', 0.3, 0.8);
-  const canopyH = Math.min(4, h * 0.1), motorH = Math.min(12, h * 0.3), bladeT = 1.5;
-  const canopy = new THREE.Mesh(new THREE.CylinderGeometry(7, 7, canopyH, 16), metal);
-  canopy.position.y = h - canopyH / 2;
-  group.add(canopy);
-  const rodH = Math.max(0, h - canopyH - motorH);
-  const rod = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, rodH, 8), metal);
-  rod.position.y = motorH + rodH / 2;
-  group.add(rod);
-  const motor = new THREE.Mesh(new THREE.CylinderGeometry(10, 12, motorH, 20), mat);
-  motor.position.y = motorH / 2;
-  group.add(motor);
+  const bladeMat = new THREE.MeshStandardMaterial({ color: adjustColor(color, 0.8), roughness: 0.6, metalness: 0.05 });
   const r = Math.min(w, d) / 2;
-  for (let i = 0; i < 4; i++) {
-    const blade = new THREE.Mesh(new THREE.BoxGeometry(r - 10, bladeT, 12), mat);
-    const a = (i / 4) * Math.PI * 2;
-    blade.position.set(Math.cos(a) * (10 + (r - 10) / 2), motorH * 0.4, Math.sin(a) * (10 + (r - 10) / 2));
-    blade.rotation.y = -a;
-    group.add(blade);
+  const add = (geometry: THREE.BufferGeometry, material: THREE.Material, y: number) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.y = y;
+    group.add(mesh);
+    return mesh;
+  };
+
+  // Light kit at the bottom: a glass bowl (lower hemisphere) under a switch housing
+  const kitR = Math.min(9, h * 0.22, r * 0.3), housingH = Math.min(2, h * 0.05);
+  add(new THREE.SphereGeometry(kitR, 20, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2), glowMaterial(0.4), kitR);
+  add(new THREE.CylinderGeometry(kitR + 0.5, kitR + 0.5, housingH, 24), body, kitR + housingH / 2);
+
+  // Motor housing
+  const motorR = Math.min(12, r * 0.25), motorBottom = kitR + housingH, motorH = Math.min(12, h * 0.25);
+  add(new THREE.CylinderGeometry(motorR * 0.85, motorR, motorH, 24), body, motorBottom + motorH / 2);
+
+  // Canopy against the ceiling and the downrod down to the motor
+  const canopyH = Math.min(5, h * 0.12);
+  add(new THREE.CylinderGeometry(Math.min(7.5, r * 0.15), Math.min(5, r * 0.1), canopyH, 20), body, h - canopyH / 2);
+  const rodH = Math.max(0.1, h - canopyH - motorBottom - motorH);
+  add(new THREE.CylinderGeometry(1.2, 1.2, rodH, 8), metal, motorBottom + motorH + rodH / 2);
+
+  // Five blades on irons, pitched a little; the tips' corners stay inside the footprint
+  const bladeW = Math.min(13, r * 0.25), bladeT = 1, bladeY = motorBottom + motorH * 0.3;
+  const inner = motorR + 4, outer = Math.sqrt(Math.max(0, r * r - (bladeW / 2) ** 2)) - 0.5;
+  const length = Math.max(1, outer - inner);
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    const iron = new THREE.BoxGeometry(inner - motorR * 0.8 + 3, 0.8, 3).translate(motorR * 0.8 + (inner - motorR * 0.8 + 3) / 2, bladeY - 1, 0);
+    const blade = new THREE.BoxGeometry(length, bladeT, bladeW).rotateX(0.18).translate(inner + length / 2, bladeY - 1, 0);
+    for (const [geometry, material] of [[iron, metal], [blade, bladeMat]] as const) {
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.rotation.y = -a;
+      group.add(mesh);
+    }
   }
+
+  // Light just below the bowl
+  const light = new THREE.PointLight(0xfff5e0, 0.6, 400);
+  light.position.y = -1;
+  group.add(light);
 }
 
-/** Ceiling smoke detector, a flat disc in its own box [0, h]. Placeholder geometry. */
+/** Ceiling smoke detector in its own box [0, h]: mounting base at the top, a low white body, test button and a small red LED. */
 function createSmokeDetector(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const r = Math.min(w, d) / 2;
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, h, 24), createMaterial(color, 0.6, 0.0));
-  body.position.y = h / 2;
-  group.add(body);
+  const shell = createMaterial(color, 0.6, 0.0);
+  const add = (geometry: THREE.BufferGeometry, material: THREE.Material, x: number, y: number) => {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(x, y, 0);
+    group.add(mesh);
+    return mesh;
+  };
+  const baseH = Math.min(1, h * 0.2), buttonH = Math.min(1.2, h * 0.24), bodyH = Math.max(0.1, h - baseH - buttonH);
+  add(new THREE.CylinderGeometry(r, r, baseH, 32), shell, 0, h - baseH / 2);
+  add(new THREE.CylinderGeometry(r * 0.95, r * 0.85, bodyH, 32), shell, 0, buttonH + bodyH / 2);
+  // Vent groove around the body
+  add(new THREE.CylinderGeometry(r * 0.93, r * 0.93, Math.min(0.3, bodyH * 0.2), 32), createMaterial('#a8a29e', 0.8, 0.0), 0, buttonH + bodyH * 0.6);
+  add(new THREE.CylinderGeometry(r * 0.45, r * 0.5, buttonH, 24), createMaterial(adjustColor(color, 0.92), 0.5, 0.0), 0, buttonH / 2);
+  const led = new THREE.MeshStandardMaterial({ color: '#dc2626', emissive: '#ef4444', emissiveIntensity: 1 });
+  add(new THREE.SphereGeometry(Math.min(0.35, r * 0.06), 8, 6), led, r * 0.62, buttonH);
 }
 
+/** Pendant shade in its own box [0, h]: a cap at the top (where the cord meets it), the open shade and a bulb. */
 function createPendantLight(group: THREE.Group, w: number, d: number, h: number, color: string): void {
-  // Wire
-  const wireMat = createMaterial('#333', 0.3, 0.8);
-  const wireGeo = new THREE.CylinderGeometry(0.5, 0.5, 60, 4);
-  const wire = new THREE.Mesh(wireGeo, wireMat);
-  wire.position.y = 260 - 30;
-  group.add(wire);
-  // Shade
   const mat = createMaterial(color, 0.5, 0.2);
+  mat.side = THREE.DoubleSide; // The inside of the shade shows from below
   const r = Math.min(w, d) / 2;
-  const shadeGeo = new THREE.CylinderGeometry(r * 0.3, r, h, 16, 1, true);
-  const shade = new THREE.Mesh(shadeGeo, mat);
-  shade.position.y = 260 - 60 - h / 2;
+  const capH = Math.min(2, h * 0.1), shadeH = h - capH;
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.3, r * 0.3, capH, 16), createMaterial('#333', 0.3, 0.8));
+  cap.position.y = h - capH / 2;
+  group.add(cap);
+  const shade = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.3, r, shadeH, 16, 1, true), mat);
+  shade.position.y = shadeH / 2;
   group.add(shade);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(Math.min(4, r * 0.25), 10, 10), glowMaterial());
+  bulb.position.y = shadeH * 0.35;
+  group.add(bulb);
+  // Light near the shade's opening
   const light = new THREE.PointLight(0xfff5e0, 0.6, 400);
-  light.position.y = 260 - 60 - h;
+  light.position.y = shadeH * 0.15;
   light.castShadow = true;
   group.add(light);
+}
+
+// ============ Plan symbols in 3D ============
+
+/** Faceplate of wall-mounted outlets and switches in 3D, cm (wide × tall × deep). */
+export const SYMBOL_FACEPLATE = { width: 8, height: 8, depth: 1.2 } as const;
+/** Thickness of the disc that stands in for ceiling plan symbols in 3D, cm. */
+export const CEILING_SYMBOL_THICKNESS = 2;
+
+const WALL_SYMBOLS = new Set(['sym_outlet', 'sym_switch']);
+const CEILING_SYMBOLS = new Set(['sym_ceiling_light', 'sym_recessed_light', 'sym_pendant', 'sym_ceiling_fan', 'sym_smoke']);
+
+/** How a plan symbol shows in 3D: a faceplate on the wall, a disc on the ceiling, or nothing. */
+export function symbolModelKind(catalogId: string): 'faceplate' | 'disc' | null {
+  return WALL_SYMBOLS.has(catalogId) ? 'faceplate' : CEILING_SYMBOLS.has(catalogId) ? 'disc' : null;
+}
+
+/**
+ * The 3D stand-in for a plan symbol, or null for symbols that have none. Outlets and
+ * switches are a faceplate in the box [0, SYMBOL_FACEPLATE.height], centred in x, its
+ * back at z = −depth/2 and its face towards +z; ceiling symbols are a disc in
+ * [0, CEILING_SYMBOL_THICKNESS] with a mark in the symbol's colour underneath.
+ */
+export function createSymbolModel(catalogId: string, def: Pick<FurnitureDef, 'width' | 'depth' | 'color'>): THREE.Group | null {
+  const kind = symbolModelKind(catalogId);
+  if (!kind) return null;
+  const group = new THREE.Group();
+  group.name = `symbol_${catalogId}`;
+  const plastic = createMaterial('#f5f5f4', 0.5, 0.0);
+  if (kind === 'faceplate') {
+    const { width, height, depth } = SYMBOL_FACEPLATE;
+    const plate = new THREE.Mesh(new RoundedBoxGeometry(width, height, depth, 2, 0.4), plastic);
+    plate.position.y = height / 2;
+    group.add(plate);
+    const face = depth / 2;
+    if (catalogId === 'sym_outlet') {
+      // Two round sockets, each with two pin holes
+      const insert = createMaterial('#e7e5e4', 0.6, 0.0), hole = createMaterial('#1c1917', 0.8, 0.0);
+      for (const y of [height * 0.3, height * 0.7]) {
+        const socket = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.3, 20).rotateX(Math.PI / 2), insert);
+        socket.position.set(0, y, face + 0.1);
+        group.add(socket);
+        for (const x of [-0.6, 0.6]) {
+          const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.1, 8).rotateX(Math.PI / 2), hole);
+          pin.position.set(x, y, face + 0.27);
+          group.add(pin);
+        }
+      }
+    } else {
+      // Rocker, tipped a little
+      const rocker = new THREE.Mesh(new RoundedBoxGeometry(width * 0.5, height * 0.62, 0.8, 2, 0.2), createMaterial('#fafaf9', 0.4, 0.0));
+      rocker.position.set(0, height / 2, face + 0.3);
+      rocker.rotation.x = 0.08;
+      group.add(rocker);
+    }
+  } else {
+    const r = Math.max(4, Math.min(def.width, def.depth) / 2);
+    const markT = 0.3, body = CEILING_SYMBOL_THICKNESS - markT;
+    const disc = new THREE.Mesh(new THREE.CylinderGeometry(r, r, body, 24), plastic);
+    disc.position.y = markT + body / 2;
+    group.add(disc);
+    const mark = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.55, r * 0.55, markT, 24), createMaterial(def.color, 0.5, 0.0));
+    mark.position.y = markT / 2;
+    group.add(mark);
+  }
+  enableShadows(group);
+  return group;
 }
 
 // ============ Outdoor Furniture ============

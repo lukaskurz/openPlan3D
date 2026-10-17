@@ -143,10 +143,16 @@ it.each([false, true])('renders unknown saved furniture with exact world bounds 
   expect(item).toEqual(before);
 });
 
-it('continues omitting explicitly 2D-only catalog symbols from placed 3D furniture', async () => {
+it('omits 2D-only catalog symbols from placed 3D furniture, except wall and ceiling electrical stand-ins', async () => {
   const { createPlacedFurnitureModel } = await import('$lib/utils/furnitureModelLoader');
-  const symbol = furnitureCatalog.find(item => item.symbol)!;
-  expect(createPlacedFurnitureModel({ id: 'symbol', catalogId: symbol.id, position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1, z: 1 } })).toBeNull();
+  const place = (catalogId: string) => createPlacedFurnitureModel({ id: 'symbol', catalogId, position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1, z: 1 } });
+  const withStandIn = new Set(['sym_outlet', 'sym_switch', 'sym_ceiling_light', 'sym_recessed_light', 'sym_pendant', 'sym_ceiling_fan', 'sym_smoke']);
+  const symbols = furnitureCatalog.filter(item => item.symbol);
+  expect(symbols.some(symbol => !withStandIn.has(symbol.id))).toBe(true);
+  for (const symbol of symbols) {
+    if (withStandIn.has(symbol.id)) expect(place(symbol.id)).toBeInstanceOf(THREE.Group);
+    else expect(place(symbol.id)).toBeNull();
+  }
 });
 
 it('retries a failed model after a cooldown and shares the recovered source', async () => {

@@ -5,7 +5,12 @@
     constraintPickMode, elevationWallId, elevationPickMode, removeElement, duplicateSelection, beginUndoGroup, endUndoGroup,
     resizeWallLength, reverseWall, updateDoor, updateWindow, updateFurniture, rotateFurniture, toggleFurnitureLock,
     toggleSelectionLock, addGeometricConstraint, removeConstraint, wallConstraint, showPlanNotice, findGroupForElement,
+    setRoomCeilingHeight,
   } from '$lib/stores/project';
+  import { activeSurface } from '$lib/stores/workContext';
+  import { furnitureMount, furnitureDrop, effectiveElevation } from '$lib/utils/mounting';
+  import { effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
+  import { formatCeilingHeight } from '$lib/utils/ceilingLabels';
   import type { Door, Window as Win } from '$lib/models/types';
   import { projectSettings, formatLength, formatArea } from '$lib/stores/settings';
   import { planViewApi, selectMode } from '$lib/stores/planView';
@@ -35,6 +40,33 @@
 
   let units = $derived($projectSettings.units);
   const len = (cm: number) => formatLength(cm, units);
+
+  // ── Ceiling surface (spec §3.8): rooms carry their ceiling height ──
+  /** The selected room while the ceiling is shown, as saved on the floor when it is (that copy has the newest details). */
+  let ceilingRoom = $derived($activeSurface === 'ceiling' && room && floor ? floor.rooms.find(r => r.id === room.id) ?? room : undefined);
+  let roomCeiling = $derived(ceilingRoom && floor && $currentProject ? effectiveRoomCeiling($currentProject, floor, ceilingRoom) : 0);
+  let roomOverride = $derived(ceilingRoom && floor ? roomCeilingOverride(floor, ceilingRoom.id) : undefined);
+  /** What the room's ceiling falls back to without its own height (walls, storey). */
+  let roomDefault = $derived(ceilingRoom && floor && $currentProject
+    ? effectiveRoomCeiling($currentProject, { ...floor, roomCeilingHeights: undefined }, { ...ceilingRoom, details: undefined }) : 0);
+  function applyCeiling(cm: number) {
+    if (ceilingRoom) setRoomCeilingHeight(ceilingRoom.id, cm);
+    closePopover();
+  }
+
+  // ── Mounted items: a ceiling item's drop, a wall item's mounting height ──
+  let mount = $derived(furniture ? furnitureMount(furniture) : 'floor');
+  let itemDrop = $derived(furniture && mount === 'ceiling' ? furnitureDrop(furniture) : 0);
+  let itemHeight = $derived(furniture && mount === 'wall' ? effectiveElevation(furniture, 0) : 0);
+  function openHeight() {
+    if (furniture?.locked) { showDetails(); return; }
+    togglePopover('sel-height');
+  }
+  function applyHeight(cm: number) {
+    if (!furniture) return;
+    updateFurniture(furniture.id, mount === 'ceiling' ? { drop: cm } : { elevation: cm });
+    closePopover();
+  }
 
   // ── Actions ──
   function select(ids: string[]) {
@@ -206,6 +238,14 @@
               </div>
             </Keypad>
           {/key}
+        {:else if $popover === 'sel-ceiling' && ceilingRoom}
+          {#key ceilingRoom.id}
+            <Keypad title={$t('chrome.selection.ceilingHeight')} subtitle={$t('chrome.selection.ceilingDefault', { length: formatCeilingHeight(roomDefault, units) })} valueCm={roomCeiling} units={units} applyLabel={$t('chrome.apply')} onapply={applyCeiling} onclose={closePopover} />
+          {/key}
+        {:else if $popover === 'sel-height' && furniture && mount !== 'floor'}
+          {#key furniture.id}
+            <Keypad title={$t(mount === 'ceiling' ? 'furnitureProperties.drop' : 'furnitureProperties.mountingHeight')} subtitle={furnitureLabel} valueCm={mount === 'ceiling' ? itemDrop : itemHeight} units={units} allowZero smallUnit applyLabel={$t('chrome.apply')} onapply={applyHeight} onclose={closePopover} />
+          {/key}
         {:else if $popover === 'sel-constrain' && wall}
           <div class="op-popover op-enter op-menu w-72 max-w-full" role="menu">
             <div class="op-menu-title">{$t('chrome.constrain.thisWall')}</div>
@@ -293,6 +333,19 @@
         {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
         {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
         {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'furniture' && furniture && mount === 'ceiling'}
+        <!-- A ceiling item: its drop from the ceiling (a pendant's cord). -->
+        {@render chip('hang', furnitureLabel, $t('chrome.selection.dropValue', { length: len(itemDrop) }), openHeight, { expanded: $popover === 'sel-height' })}
+        <div class="op-divider-v"></div>
+        {@render action('hang', 'chrome.selection.hang', openHeight, { expanded: $popover === 'sel-height', disabled: furniture.locked, data: 'height' })}
+        {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'furniture' && furniture && mount === 'wall'}
+        <!-- A wall item: its mounting height. Its circuit comes with the Electrical tools. -->
+        {@render chip('ceilingHeight', furnitureLabel, len(itemHeight), openHeight, { expanded: $popover === 'sel-height' })}
+        <div class="op-divider-v"></div>
+        {@render action('ceilingHeight', 'chrome.selection.height', openHeight, { expanded: $popover === 'sel-height', disabled: furniture.locked, data: 'height' })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
       {:else if kind === 'furniture' && furniture}
         {@render chip('ruler', furnitureLabel, furnitureSize ? `${Math.round(furnitureSize.width)} × ${Math.round(furnitureSize.depth)}` : '', openSize, { expanded: $popover === 'sel-size' })}
         <div class="op-divider-v"></div>
@@ -301,6 +354,13 @@
         {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
         {@render action(furniture.locked ? 'lock' : 'unlock', furniture.locked ? 'chrome.selection.locked' : 'chrome.selection.lock', () => toggleFurnitureLock(furniture.id), { active: furniture.locked })}
         {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'room' && ceilingRoom}
+        <!-- The ceiling: a room is selected to set its ceiling height. -->
+        {@render chip('ceilingHeight', ceilingRoom.name || $t('layers.unnamed'), $t('chrome.selection.ceilingValue', { length: formatCeilingHeight(roomCeiling, units) }), () => togglePopover('sel-ceiling'), { expanded: $popover === 'sel-ceiling' })}
+        <div class="op-divider-v"></div>
+        {@render action('ceilingHeight', 'chrome.selection.height', () => togglePopover('sel-ceiling'), { expanded: $popover === 'sel-ceiling', data: 'ceiling-height' })}
+        {@render action('undo', 'chrome.selection.reset', () => { setRoomCeilingHeight(ceilingRoom.id, undefined); closePopover(); }, { disabled: roomOverride === undefined, data: 'ceiling-reset' })}
+        {@render action('sliders', 'chrome.selection.details', showDetails, { active: $inspectorOpen })}
       {:else if kind === 'room' && room}
         {@render chip('tag', room.name || $t('layers.unnamed'), formatArea(room.area, units), () => { $planViewApi?.renameRoom(room.id); }, { title: $t('chrome.selection.rename') })}
         <div class="op-divider-v"></div>

@@ -13,7 +13,9 @@
   import { roomPresetLabels, roomTemplateLabels } from '$lib/i18n/roomLabels';
   import { roomPresets } from '$lib/utils/roomPresets';
   import { roomTemplates } from '$lib/utils/roomTemplates';
-  import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs } from './tools';
+  import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs, placeCeilingVariant } from './tools';
+  import { CEILING_TOOL_ITEMS } from './tradeTools';
+  import { getCatalogItem } from '$lib/utils/furnitureCatalog';
   import { hintKey } from './hints';
   import { placeRoomShape, traceImage } from './actions';
   import Keypad from './Keypad.svelte';
@@ -28,6 +30,22 @@
   ];
   const DOOR_LABEL: Record<Door['type'], TranslationKey> = { single: 'openingCatalog.single', double: 'openingCatalog.double', sliding: 'openingCatalog.sliding', french: 'openingCatalog.french', balcony: 'openingCatalog.balcony', pocket: 'openingCatalog.pocket', bifold: 'openingCatalog.bifold', opening: 'openingCatalog.doorway', garage: 'openingCatalog.garage' };
   const WINDOW_LABEL: Record<Win['type'], TranslationKey> = { standard: 'openingCatalog.standard', fixed: 'openingCatalog.fixed', casement: 'openingCatalog.casement', sliding: 'openingCatalog.sliding', bay: 'openingCatalog.bay' };
+
+  /** How each ceiling tool's variants show in its options. */
+  const CEILING_VARIANT: Record<string, { icon: IconName; label: TranslationKey }> = {
+    ceiling_light: { icon: 'bulb', label: 'chrome.light.ceiling' },
+    recessed_light: { icon: 'recessed', label: 'chrome.light.recessed' },
+    pendant_light: { icon: 'hang', label: 'chrome.light.pendant' },
+    chandelier: { icon: 'sparkles', label: 'chrome.light.chandelier' },
+    ceiling_fan: { icon: 'fan', label: 'chrome.ceilingItem.model' },
+    sym_ceiling_fan: { icon: 'columnRound', label: 'chrome.ceilingItem.symbol' },
+    smoke_detector: { icon: 'smoke', label: 'chrome.ceilingItem.model' },
+    sym_smoke: { icon: 'columnRound', label: 'chrome.ceilingItem.symbol' },
+  };
+
+  /** Mount of the armed catalog item: wall items are placed on a wall, ceiling items anywhere. */
+  let placingMount = $derived($placingFurnitureId ? getCatalogItem($placingFurnitureId)?.mount ?? 'floor' : 'floor');
+  let placeHint = $derived<TranslationKey>(placingMount === 'wall' ? 'chrome.hint.placeOnWall' : placingMount === 'ceiling' ? 'chrome.hint.placeCeiling' : 'chrome.hint.placeFurniture');
 
   interface Variant { id: string; icon: IconName; label: TranslationKey; active: boolean; pick: () => void }
 
@@ -54,6 +72,15 @@
           { id: 'round', icon: 'columnRound', label: 'chrome.structure.round', active: $placingColumn && $placingColumnShape === 'round', pick: () => placeColumn('round') },
           { id: 'square', icon: 'columnSquare', label: 'chrome.structure.square', active: $placingColumn && $placingColumnShape === 'square', pick: () => placeColumn('square') },
         ];
+      case 'light':
+      case 'fan':
+      case 'smoke': {
+        const group = $toolGroup;
+        return CEILING_TOOL_ITEMS[group].map(id => ({
+          id, icon: CEILING_VARIANT[id].icon, label: CEILING_VARIANT[id].label,
+          active: $placingFurnitureId === id, pick: () => placeCeilingVariant(group, id),
+        }));
+      }
       case 'annotate':
         return [
           { id: 'measure', icon: 'measure', label: 'chrome.annotate.measure', active: $selectedTool === 'measure', pick: () => activateMeasurementTool('measure') },
@@ -240,9 +267,22 @@
       <div class="op-divider-v"></div>
       {@render done()}
     </div>
+  {:else if $toolGroup === 'ceilingHeight'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint('chrome.hint.ceilingHeight')}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if ($toolGroup === 'light' || $toolGroup === 'fan' || $toolGroup === 'smoke') && $placingFurnitureId}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint(placeHint, { name: furnitureName($placingFurnitureId, $locale) })}
+      {@render options()}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
   {:else if $toolGroup === 'furniture' && $placingFurnitureId && !$catalogOpen}
     <div class="op-float op-enter op-slot-bar" data-tool-tray>
-      {@render hint('chrome.hint.placeFurniture', { name: furnitureName($placingFurnitureId, $locale) })}
+      {@render hint(placeHint, { name: furnitureName($placingFurnitureId, $locale) })}
       <button class="op-btn is-outline shrink-0" onclick={() => placingRotation.update(r => (r + 90) % 360)}><Icon name="rotate" size={18} />{$placingRotation}°</button>
       <button class="op-btn is-outline shrink-0" onclick={() => catalogOpen.set(true)}><Icon name="sofa" size={18} />{$t('chrome.furniture.catalog')}</button>
       <div class="op-divider-v"></div>

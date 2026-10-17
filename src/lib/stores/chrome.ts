@@ -8,7 +8,7 @@ import type { Floor } from '$lib/models/types';
  */
 export type ChromePopover =
   | 'floors-add' | 'floor-settings'
-  | 'sel-length' | 'sel-constrain' | 'sel-more' | 'sel-type' | 'sel-align' | 'sel-size' | 'sel-colour'
+  | 'sel-length' | 'sel-constrain' | 'sel-more' | 'sel-type' | 'sel-align' | 'sel-size' | 'sel-colour' | 'sel-ceiling' | 'sel-height'
   | 'wall-length' | 'wall-angle' | 'room-shapes' | 'history'
   | 'versions' | 'trade' | 'show' | 'scale' | 'settings'
   | null;

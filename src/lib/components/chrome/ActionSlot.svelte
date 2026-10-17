@@ -3,7 +3,10 @@
   import {
     viewMode, elevationWallId, elevationPickMode, doorJoinMode, calibrationMode, calibrationPoints, constraintPickMode,
     detectedRoomsStore, selectedElementId, selectedElementIds, selectedRoomId, selectedTool, placingFurnitureId,
+    currentProject,
   } from '$lib/stores/project';
+  import { activeSurface } from '$lib/stores/workContext';
+  import { ceilingSummaryOfRooms, formatCeilingRange } from '$lib/utils/ceilingLabels';
   import { projectSettings, formatArea } from '$lib/stores/settings';
   import { canvasHint, selectMode } from '$lib/stores/planView';
   import { catalogOpen, floorView } from '$lib/stores/chrome';
@@ -48,6 +51,18 @@
   let status = $derived.by(() => {
     const floorName = $floorView?.name;
     if ($viewMode === '3d') return ['3D', floorName].filter(Boolean).join(' · ');
+    // The ceiling: `Ceiling · Ground floor · 10 lights · 2.40–2.60 m` (spec §3.8).
+    if ($activeSurface === 'ceiling' && $floorView && $currentProject) {
+      const floor = $floorView;
+      // Saved rooms carry the newest details; detected ones catch up a frame later.
+      const ceilingRooms = rooms.filter(room => !room.floorOpening).map(room => floor.rooms.find(saved => saved.id === room.id) ?? room);
+      const summary = ceilingSummaryOfRooms($currentProject, floor, ceilingRooms);
+      return [
+        $t('chrome.status.ceiling'), floorName,
+        $t(summary.lights === 1 ? 'chrome.status.lightsOne' : 'chrome.status.lightsMany', { count: summary.lights }),
+        formatCeilingRange(summary.min, summary.max, $projectSettings.units),
+      ].filter(Boolean).join(' · ');
+    }
     const parts: string[] = [];
     if (rooms.length) {
       parts.push($t(rooms.length === 1 ? 'canvasStatus.roomsOne' : 'canvasStatus.roomsMany', { count: rooms.length }));

@@ -3,9 +3,9 @@ import { get } from 'svelte/store';
 import { selectedTool, selectedElementId, selectedElementIds, panMode, placingFurnitureId } from '$lib/stores/project';
 import { catalogOpen } from '$lib/stores/chrome';
 import { activeTrade, activeSurface, TRADES } from '$lib/stores/workContext';
-import { chooseGroup, switchTrade, toolGroup, placeCatalogItem } from '$lib/components/chrome/tools';
+import { chooseGroup, switchTrade, toolGroup, placeCatalogItem, placeCeilingVariant, ceilingPick } from '$lib/components/chrome/tools';
 import {
-  FIXED_TOOLS, TRADE_TOOLS, TRADE_INFO, tradeTools, homeOfTool, contextForTool, isFixedTool,
+  FIXED_TOOLS, TRADE_TOOLS, TRADE_INFO, tradeTools, homeOfTool, contextForTool, isFixedTool, groupForItem,
 } from '$lib/components/chrome/tradeTools';
 
 describe('tool bar data', () => {
@@ -17,8 +17,11 @@ describe('tool bar data', () => {
     expect(tradeTools('furnishing', 'floor').map(tool => tool.id)).toEqual(['wall', 'openings', 'structure', 'furniture']);
   });
 
-  it('other trades and the ceiling have no tools yet', () => {
-    expect(tradeTools('furnishing', 'ceiling')).toEqual([]);
+  it('Furnishing on the ceiling offers Ceiling height, Light, Fan and Smoke detector', () => {
+    expect(tradeTools('furnishing', 'ceiling').map(tool => tool.id)).toEqual(['ceilingHeight', 'light', 'fan', 'smoke']);
+  });
+
+  it('other trades have no tools yet', () => {
     for (const trade of ['electrical', 'plumbing'] as const) {
       expect(tradeTools(trade, 'floor')).toEqual([]);
       expect(tradeTools(trade, 'ceiling')).toEqual([]);
@@ -37,6 +40,8 @@ describe('tool bar data', () => {
   it('finds the home of a trade tool, and none for fixed tools', () => {
     expect(homeOfTool('wall')).toEqual({ trade: 'furnishing', surface: 'floor' });
     expect(homeOfTool('furniture')).toEqual({ trade: 'furnishing', surface: 'floor' });
+    expect(homeOfTool('light')).toEqual({ trade: 'furnishing', surface: 'ceiling' });
+    expect(homeOfTool('ceilingHeight')).toEqual({ trade: 'furnishing', surface: 'ceiling' });
     expect(homeOfTool('select')).toBeNull();
     expect(homeOfTool('annotate')).toBeNull();
   });
@@ -94,21 +99,21 @@ describe('placing a catalog item', () => {
     activeSurface.set('floor');
   });
 
-  it('switches to the item’s trade and surface first, then arms it', () => {
+  it('switches to the item’s surface first (Furnishing edits every ceiling item), then arms it', () => {
     selectedElementId.set('sofa-1');
     expect(placeCatalogItem('pendant_light')).toBe(true);
-    expect(get(activeTrade)).toBe('electrical');
+    expect(get(activeTrade)).toBe('furnishing');
     expect(get(activeSurface)).toBe('ceiling');
     expect(get(placingFurnitureId)).toBe('pendant_light');
     expect(get(selectedTool)).toBe('furniture');
-    expect(get(toolGroup)).toBe('furniture');
+    expect(get(toolGroup)).toBe('light');
     expect(get(catalogOpen)).toBe(false);
     expect(get(selectedElementId)).toBeNull();
   });
 
   it('goes back to the floor for wall items and to Furnishing for furniture', () => {
     placeCatalogItem('sym_smoke');
-    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
     placeCatalogItem('sym_outlet');
     expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'floor']);
     expect(get(placingFurnitureId)).toBe('sym_outlet');
@@ -133,9 +138,73 @@ describe('placing a catalog item', () => {
     placeCatalogItem('ceiling_light');
     // e.g. the canvas re-asserting the furniture tool while placing
     selectedTool.set('furniture');
-    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
     chooseGroup('select');
     expect(get(placingFurnitureId)).toBeNull();
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+  });
+
+  it('switches trade only when the current one cannot edit the item', () => {
+    activeTrade.set('plumbing');
+    placeCatalogItem('ceiling_light');
     expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    // Electrical edits its own ceiling items, so a smoke detector keeps it.
+    placeCatalogItem('smoke_detector');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    // …but not a ceiling projector (furnishing).
+    placeCatalogItem('ceiling_projector');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+  });
+});
+
+describe('ceiling tools', () => {
+  beforeEach(() => {
+    chooseGroup('select');
+    activeTrade.set('furnishing');
+    activeSurface.set('floor');
+  });
+
+  it('Light, Fan and Smoke detector arm their items and switch to the ceiling, keeping Furnishing', () => {
+    chooseGroup('light');
+    expect(get(placingFurnitureId)).toBe('ceiling_light');
+    expect(get(toolGroup)).toBe('light');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+    chooseGroup('fan');
+    expect([get(placingFurnitureId), get(toolGroup)]).toEqual(['ceiling_fan', 'fan']);
+    chooseGroup('smoke');
+    expect([get(placingFurnitureId), get(toolGroup)]).toEqual(['smoke_detector', 'smoke']);
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+  });
+
+  it('a light variant stays the Light tool and is remembered', () => {
+    placeCeilingVariant('light', 'pendant_light');
+    expect([get(placingFurnitureId), get(toolGroup)]).toEqual(['pendant_light', 'light']);
+    chooseGroup('select');
+    chooseGroup('light');
+    expect(get(placingFurnitureId)).toBe('pendant_light');
+    placeCeilingVariant('light', 'ceiling_light');
+  });
+
+  it('maps catalog items to their tool group', () => {
+    expect(groupForItem('chandelier')).toBe('light');
+    expect(groupForItem('sym_ceiling_fan')).toBe('fan');
+    expect(groupForItem('sym_smoke')).toBe('smoke');
+    expect(groupForItem('sofa')).toBe('furniture');
+    expect(groupForItem(null)).toBe('furniture');
+  });
+
+  it('Ceiling height is Select limited to rooms, on the ceiling, until another tool is chosen', () => {
+    chooseGroup('ceilingHeight');
+    expect(get(toolGroup)).toBe('ceilingHeight');
+    expect(get(ceilingPick)).toBe(true);
+    expect(get(selectedTool)).toBe('select');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+    // A shortcut picking another tool leaves it.
+    selectedTool.set('measure');
+    expect(get(ceilingPick)).toBe(false);
+    chooseGroup('ceilingHeight');
+    chooseGroup('select');
+    expect(get(ceilingPick)).toBe(false);
+    expect(get(toolGroup)).toBe('select');
   });
 });

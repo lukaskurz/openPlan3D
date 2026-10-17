@@ -13,6 +13,8 @@
     onapply,
     onclose,
     children,
+    allowZero = false,
+    smallUnit = false,
   }: {
     title: string;
     subtitle?: string;
@@ -22,15 +24,20 @@
     onapply: (cm: number) => void;
     onclose?: () => void;
     children?: Snippet;
+    /** Accept 0 (e.g. a light flush with the ceiling, an outlet at the floor). */
+    allowZero?: boolean;
+    /** Start in cm / in instead of m / ft, for short heights such as a mounting height. */
+    smallUnit?: boolean;
   } = $props();
 
   const UNITS: Record<'metric' | 'imperial', Unit[]> = { metric: ['m', 'cm'], imperial: ['ft', 'in'] };
   const PER_CM: Record<Unit, number> = { m: 0.01, cm: 1, ft: 1 / 30.48, in: 1 / 2.54 };
 
   // svelte-ignore state_referenced_locally
-  let unit = $state<Unit>(units === 'imperial' ? 'ft' : 'm');
+  const startUnit: Unit = units === 'imperial' ? (smallUnit ? 'in' : 'ft') : (smallUnit ? 'cm' : 'm');
+  let unit = $state<Unit>(startUnit);
   // svelte-ignore state_referenced_locally
-  let text = $state(format(valueCm, units === 'imperial' ? 'ft' : 'm'));
+  let text = $state(format(valueCm, startUnit));
   /** The first key replaces the shown value, like a selected field. */
   let fresh = $state(true);
 
@@ -41,7 +48,7 @@
 
   let cm = $derived.by(() => {
     const v = parseFloat(text);
-    return Number.isFinite(v) && v > 0 ? v / PER_CM[unit] : null;
+    return Number.isFinite(v) && (v > 0 || (allowZero && v === 0)) ? v / PER_CM[unit] : null;
   });
 
   function setUnit(next: Unit) {

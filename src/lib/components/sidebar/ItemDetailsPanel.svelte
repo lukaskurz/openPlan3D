@@ -5,7 +5,8 @@
   import { onDestroy } from 'svelte';
   import { get } from 'svelte/store';
   import type { DetailTarget, ItemDetails } from '$lib/models/types';
-  import { currentProject, detectedRoomsStore, updateItemDetails, commitItemDetails } from '$lib/stores/project';
+  import { currentProject, detectedRoomsStore, updateItemDetails, commitItemDetails, setRoomCeilingHeight } from '$lib/stores/project';
+  import { MAX_CEILING_HEIGHT } from '$lib/utils/ceilingHeights';
   import { projectSettings } from '$lib/stores/settings';
   import { getSnapshots } from '$lib/stores/versionHistory';
   import { itemDetails, ROOM_TYPES, WALL_MATERIALS } from '$lib/utils/itemDetails';
@@ -33,6 +34,14 @@
   function save(patch: ItemDetails) {
     error = ''; status = '';
     if (Object.entries(patch).every(([key, value]) => JSON.stringify(details[key as keyof ItemDetails]) === JSON.stringify(value))) return;
+    // A room's ceiling height is the room's real ceiling (spec §4.4): set it through the store,
+    // which keeps floor.roomCeilingHeights and this details mirror in step.
+    if (target.kind === 'rooms' && 'ceilingHeight' in patch) {
+      const { ceilingHeight, ...rest } = patch;
+      if ($currentProject?.activeFloorId === target.floorId) setRoomCeilingHeight(target.id, ceilingHeight ?? undefined);
+      if (!Object.keys(rest).length) return;
+      patch = rest;
+    }
     try { updateItemDetails(target, patch); } catch (e) { error = e instanceof Error ? e.message : 'Could not update item details.'; }
   }
   function optionalNumber(event: Event, field: 'price' | 'ceilingHeight') {
@@ -42,7 +51,7 @@
       return;
     }
     const value = input.valueAsNumber * (field === 'ceilingHeight' && imperial ? 2.54 : 1);
-    if (!input.validity.valid || !Number.isFinite(value) || (field === 'price' ? value < 0 : value <= 0 || value > 1_000_000)) {
+    if (!input.validity.valid || !Number.isFinite(value) || (field === 'price' ? value < 0 : value <= 0 || value > MAX_CEILING_HEIGHT)) {
       if (event.type !== 'blur') return;
       error = field === 'price' ? 'Enter a cost of zero or more, or clear the field.' : 'Enter a positive ceiling height, or clear the field to use the default.';
       input.value = details[field] == null ? '' : String(details[field]! / (field === 'ceilingHeight' && imperial ? 2.54 : 1));

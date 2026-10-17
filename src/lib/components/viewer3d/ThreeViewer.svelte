@@ -40,7 +40,9 @@
   import { disposeModel } from '$lib/utils/furnitureModelResources';
   import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { ownColorCanvasTexture } from '$lib/utils/viewerTextures';
-  import { createFurnitureModelWithGLB, createPlacedFurnitureModel } from '$lib/utils/furnitureModelLoader';
+  import { createFloorFurnitureModels, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
+  import { defaultMountingHeight, effectiveElevation } from '$lib/utils/mounting';
+  import { createCeilingResolver, effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
   import { addFurniture } from '$lib/stores/project';
   import { detectRooms, resolveRoomGeometry, getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
   import { getMaterial } from '$lib/utils/materials';
@@ -539,6 +541,18 @@
   let selectedCatalogId = $state<string | null>(null);
   let furniturePickerCategory = $state<string>('Living Room');
   let ghostGroup: THREE.Group | null = null;
+  /** Ceiling height (cm) above a plan point of the floor last built, for placement previews. */
+  let activeCeilingAt: ((p: { x: number; y: number }) => number) | null = null;
+
+  /** Where the placement preview's bottom sits above the storey level: on the floor finish, at a wall item's mounting height, or hanging from the ceiling. */
+  function ghostBottom(catalogId: string, x: number, z: number): number {
+    const def = getCatalogItem(catalogId);
+    if (!def) return FLOOR_FINISH;
+    if (def.mount === 'ceiling') {
+      return effectiveElevation({ id: 'ghost', catalogId, position: { x, y: z }, rotation: 0, scale: { x: 1, y: 1, z: 1 } }, activeCeilingAt ?? 280);
+    }
+    return FLOOR_FINISH + (defaultMountingHeight(def) ?? 0);
+  }
   let floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y=0 plane
   let ghostIntersection = new THREE.Vector3();
 
@@ -795,7 +809,7 @@
             createGhostPreview(selectedCatalogId);
           }
           if (ghostGroup) {
-            ghostGroup.position.set(hit.x, hit.y + 1.5, hit.z);
+            ghostGroup.position.set(hit.x, hit.y + ghostBottom(selectedCatalogId, hit.x, hit.z), hit.z);
             ghostGroup.visible = true;
           }
         } else if (ghostGroup) {
@@ -1341,16 +1355,19 @@
       addOpeningFrame(wall, t, win.width + 16, win.sillHeight - 4, 4, wt + 10, frameMat);
     }
 
-    // Furniture
-    for (const fi of floor.furniture) {
-      const model = createPlacedFurnitureModel(fi, markSceneDirty, get(currentProject) ?? undefined);
-      if (model) wallGroup.add(model);
-    }
+    // Resolve rooms once: furniture hangs from their ceilings, and their floors, labels
+    // and ceilings are drawn below. Labels and materials come from this floor, including
+    // after a 3D floor switch.
+    const project = get(currentProject) ?? undefined;
+    const rooms = resolveRoomGeometry(floor);
+    const ceilingAt = createCeilingResolver(project ?? { floors: [floor] }, floor, rooms);
+    activeCeilingAt = ceilingAt;
+
+    // Furniture; ceiling items at ceiling − drop − height of the room they hang in
+    for (const model of createFloorFurnitureModels(floor, ceilingAt, project, markSceneDirty)) wallGroup.add(model);
 
     // Room floors with materials + floating labels
     const FALLBACK_ROOM_COLORS = [0xbfdbfe, 0xfde68a, 0xbbf7d0, 0xfecaca, 0xddd6fe, 0xa5f3fc, 0xfed7aa];
-    // Resolve labels and materials from this floor, including after a 3D floor switch.
-    const rooms = resolveRoomGeometry(floor);
     const holes = roomHoles(rooms.map(r => r.polygon));
     for (let ri = 0; ri < rooms.length; ri++) {
       const { room, polygon: poly } = rooms[ri];
@@ -1474,8 +1491,11 @@
       sprite.scale.set(150, 40, 1);
       wallGroup.add(sprite);
 
-      // A flat ceiling is valid only when this room's boundary has one height.
-      const ceilingHeight = roomCeilingHeight(room.walls, floor.walls);
+      // A flat ceiling at the room's effective height. Without a set height it is drawn
+      // only when the room's boundary has one height; a set height (a dropped ceiling)
+      // is drawn even under sloped or mixed walls.
+      const ceilingHeight = roomCeilingOverride(floor, room.id) !== undefined || roomCeilingHeight(room.walls, floor.walls) !== undefined
+        ? effectiveRoomCeiling(project ?? { floors: [floor] }, floor, room) : undefined;
       if (ceilingHeight !== undefined) {
         const ceilMat = new THREE.MeshStandardMaterial({
           color: 0xf5f5f0,

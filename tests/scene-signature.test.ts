@@ -12,7 +12,7 @@ it('ignores project metadata, item details and 2D payloads without serializing p
   Object.assign(project, { projectPackage: unread, attachmentNames: unread, customEntourage: unread });
   for (const floor of project.floors) {
     for (const key of ['walls', 'rooms', 'doors', 'windows', 'furniture'] as const)
-      for (const item of floor[key]) item.details = { note: 'New note', price: 45, material: 'Metadata only', ceilingHeight: 240, photos: ['assets/photo.jpg'] };
+      for (const item of floor[key]) item.details = { note: 'New note', price: 45, material: 'Metadata only', ...(key === 'rooms' ? {} : { ceilingHeight: 240 }), photos: ['assets/photo.jpg'] };
     Object.assign(floor, { backgroundImage: unread, guides: unread, measurements: unread,
       annotations: unread, textAnnotations: unread, groups: unread, entourage: unread, constraints: unread });
   }
@@ -81,4 +81,17 @@ it('rebuilds the 3D scene when a ceiling height, mount or drop changes', () => {
   expect(dropped).not.toBe(placed);
   floor.furniture.at(-1)!.mount = 'floor';
   expect(signature(project)).not.toBe(dropped);
+});
+
+it('rebuilds when a room\'s legacy ceiling height or the storey above changes', () => {
+  const project = benchmarkProject('medium'), floor = project.floors[0];
+  const base = signature(project);
+  floor.rooms[0].details = { note: 'Note only' };
+  expect(signature(project)).toBe(base);
+  floor.rooms[0].details = { ceilingHeight: 240 };
+  const legacy = signature(project);
+  expect(legacy).not.toBe(base);
+  // Rooms without walls hang their ceilings from the storey: the floor above's surface minus its slab.
+  project.floors[1].elevation = (project.floors[1].elevation ?? 300) + 40;
+  expect(signature(project)).not.toBe(legacy);
 });

@@ -50,6 +50,15 @@
   import { translatedWallGeometry, wallGeometryOf, type WallGeometry } from '$lib/utils/wallTranslation';
   import { marqueeSelectionIds } from '$lib/utils/marqueeSelection';
   import { isTracingImageType } from '$lib/utils/tracingImage';
+  import { activeTrade, activeSurface, type Trade, type Surface } from '$lib/stores/workContext';
+  import { ceilingPick } from '$lib/components/chrome/tools';
+  import { popover } from '$lib/stores/chrome';
+  import { editableFurniture, editablePlanFloor, planOpacity, structureEditable, structureOpacity, type WorkContext } from '$lib/utils/workFilter';
+  import { furnitureMount, itemSurface } from '$lib/utils/mounting';
+  import { effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
+  import { formatCeilingHeight } from '$lib/utils/ceilingLabels';
+  import { hostedPose, wallHostAt, type WallHost } from '$lib/utils/wallHostedItems';
+  import { ceilingChipRect, drawCeilingChip } from '$lib/utils/canvasRenderer';
   import { findRoomLabelAt as _findRoomLabelAt, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
 
   let canvas: HTMLCanvasElement;
@@ -374,6 +383,17 @@
   let currentSelectedRoomId: string | null = $state(null);
   let currentPlacingId: string | null = $state(null);
   let currentPlacingRotation: number = $state(0);
+  // What is being worked on (spec §4.1): decides what is editable and how strongly it is drawn.
+  let currentTrade: Trade = 'furnishing';
+  let currentSurface: Surface = 'floor';
+  /** The Ceiling height tool: a tap picks a room and opens its ceiling-height keypad. */
+  let isCeilingPick = false;
+  onDestroy(activeTrade.subscribe(v => { currentTrade = v; markDirty(); }));
+  onDestroy(activeSurface.subscribe(v => { currentSurface = v; markDirty(); }));
+  onDestroy(ceilingPick.subscribe(v => { isCeilingPick = v; markDirty(); }));
+  function workCtx(): WorkContext { return { trade: currentTrade, surface: currentSurface }; }
+  /** Walls, openings, rooms, stairs, columns and entourage can be edited (Furnishing, floor). */
+  function structureOn(): boolean { return structureEditable(workCtx()); }
   let currentDoorType: Door['type'] = $state('single');
   let currentWindowType: Win['type'] = $state('standard');
   let currentSnapEnabled: boolean = $state(true);
@@ -473,7 +493,7 @@
           const dimension = [...currentFloor.measurements ?? [], ...currentFloor.annotations ?? []].find(item => item.id === id);
           if (dimension) { origPositions.set(id, { start: { x: dimension.x1, y: dimension.y1 }, end: { x: dimension.x2, y: dimension.y2 } }); continue; }
           const fi = currentFloor.furniture.find(f => f.id === id);
-          if (fi) { if (!fi.locked) origPositions.set(id, { position: { ...fi.position } }); continue; }
+          if (fi) { if (!fi.locked && !fi.wallId) origPositions.set(id, { position: { ...fi.position } }); continue; }
           if (currentFloor.stairs) { const st = currentFloor.stairs.find(s => s.id === id); if (st) { origPositions.set(id, { position: { ...st.position } }); continue; } }
           if (currentFloor.columns) { const col = currentFloor.columns.find(c => c.id === id); if (col) { origPositions.set(id, { position: { ...col.position } }); continue; } }
         }
@@ -490,10 +510,12 @@
   function selectAllPlanElements() {
     if (!currentFloor) return;
     const ids = new Set<string>();
-    for (const items of [currentFloor.walls, currentFloor.furniture, currentFloor.doors,
-      currentFloor.windows, currentFloor.stairs, currentFloor.columns, currentFloor.entourage,
-      layerVis.textAnnotations ? currentFloor.textAnnotations : [],
-      layerVis.measurements ? currentFloor.measurements : [], layerVis.annotations ? currentFloor.annotations : []]) {
+    // Everything the current trade and surface may edit (workFilter), plus visible notes and dimensions.
+    const floor = editablePlanFloor(currentFloor, workCtx());
+    for (const items of [floor.walls, floor.furniture, floor.doors,
+      floor.windows, floor.stairs, floor.columns, floor.entourage,
+      layerVis.textAnnotations ? floor.textAnnotations : [],
+      layerVis.measurements ? floor.measurements : [], layerVis.annotations ? floor.annotations : []]) {
       for (const item of items ?? []) ids.add(item.id);
     }
     clearAuxiliarySelection();
@@ -753,49 +775,101 @@
     _drawWindowOnWall(getCS(), wall, win);
   }
 
-  function drawFurniture(item: FurnitureItem, selected: boolean) {
-    drawFurnitureItem(getCS(), item, selected, customModelName(item, get(currentProject)) ?? (getCatalogItem(item.catalogId) ? furnitureName(item.catalogId, get(locale)) : undefined));
+  function drawFurniture(item: FurnitureItem, selected: boolean, opacity = 1) {
+    drawFurnitureItem(getCS(), item, selected, customModelName(item, get(currentProject)) ?? (getCatalogItem(item.catalogId) ? furnitureName(item.catalogId, get(locale)) : undefined), opacity);
   }
 
-  // Track wall snap during placement preview
-  let placementWallSnap: { position: Point; rotation: number; wallId: string } | null = $state(null);
+  /**
+   * The ceiling surface: a chip with each room's ceiling height at its label, accent
+   * outlined when the room has its own height. Tapping a room (or its chip) selects it.
+   */
+  function drawCeilingChips(floor: Floor) {
+    const project = get(currentProject);
+    if (!project) return;
+    for (const room of detectedRooms) {
+      const polygon = roomPolygons.get(room.id) ?? [];
+      if (polygon.length < 3 || room.floorOpening) continue;
+      const anchor = roomLabelPosition(room, polygon, roomHolePolygons.get(room.id));
+      const text = formatCeilingHeight(effectiveRoomCeiling(project, floor, room), dimSettings.units);
+      const rect = ceilingChipRect(ctx, worldToScreen(anchor.x, anchor.y), text, zoom, showRoomLabels);
+      drawCeilingChip(ctx, rect, text, { override: roomCeilingOverride(floor, room.id) !== undefined, selected: currentSelectedRoomId === room.id });
+    }
+  }
+
+  /**
+   * Where an armed catalog item goes at a point (spec §4.2): wall items onto the nearest
+   * wall, facing away from it on the side the point is on; ceiling items freely (no wall
+   * snapping); floor items against a wall when close enough to snap. Null when a wall
+   * item has no wall within reach.
+   */
+  function placementAt(def: FurnitureDef, wp: Point): { position: Point; rotation: number; host?: WallHost; wallId?: string } | null {
+    const mount = def.mount ?? 'floor';
+    if (mount === 'wall') {
+      const host = currentFloor ? wallHostAt(wp, currentFloor.walls) : null;
+      const wall = host ? currentFloor!.walls.find(w => w.id === host.wallId) : undefined;
+      if (!host || !wall) return null;
+      return { ...hostedPose(wall, { catalogId: def.id, scale: { x: 1, y: 1, z: 1 } }, host), host, wallId: wall.id };
+    }
+    const free = { position: { x: snap(wp.x), y: snap(wp.y) }, rotation: currentPlacingRotation };
+    if (mount === 'ceiling') return free;
+    const wallSnap = snapFurnitureToWall(wp, def);
+    return wallSnap ? { position: wallSnap.position, rotation: wallSnap.rotation, wallId: wallSnap.wallId } : free;
+  }
+
+  /** Place the armed catalog item at a point; wall items refuse (with a notice) away from walls. Returns the new id. */
+  function placeCatalogItemAt(catalogId: string, wp: Point): string | null {
+    const def = getCatalogItem(catalogId);
+    if (!def) return null;
+    const place = placementAt(def, wp);
+    if (!place) {
+      showPlanNotice(translate(get(locale), 'chrome.hint.needWall', { name: furnitureName(catalogId, get(locale)) }));
+      return null;
+    }
+    beginUndoGroup();
+    try {
+      const id = addFurniture(catalogId, place.position, place.host);
+      if (place.rotation !== 0) rotateFurniture(id, place.rotation);
+      return id;
+    } finally {
+      endUndoGroup('Placed furniture');
+    }
+  }
 
   function drawFurniturePreview() {
     if (!currentPlacingId) return;
     const cat = getCatalogItem(currentPlacingId);
     if (!cat) return;
 
-    const wallSnap = snapFurnitureToWall(mousePos, cat);
-    placementWallSnap = wallSnap;
-
-    const pos = wallSnap ? wallSnap.position : mousePos;
-    const rot = wallSnap ? wallSnap.rotation : currentPlacingRotation;
+    const place = placementAt(cat, mousePos);
+    const pos = place ? place.position : mousePos;
+    const rot = place ? place.rotation : currentPlacingRotation;
 
     const s = worldToScreen(pos.x, pos.y);
     const w = cat.width * zoom;
     const d = cat.depth * zoom;
     const angle = (rot * Math.PI) / 180;
 
-    if (wallSnap && currentFloor) {
-      const snapWall = currentFloor.walls.find(wl => wl.id === wallSnap.wallId);
-      if (snapWall) {
-        const ws = worldToScreen(snapWall.start.x, snapWall.start.y);
-        const we = worldToScreen(snapWall.end.x, snapWall.end.y);
-        ctx.strokeStyle = '#3b82f6';
-        ctx.lineWidth = 2;
-        ctx.setLineDash([6, 3]);
-        ctx.beginPath();
-        ctx.moveTo(ws.x, ws.y);
-        ctx.lineTo(we.x, we.y);
-        ctx.stroke();
-        ctx.setLineDash([]);
-      }
+    const snapWall = place?.wallId && currentFloor ? currentFloor.walls.find(wl => wl.id === place.wallId) : undefined;
+    if (snapWall) {
+      const ws = worldToScreen(snapWall.start.x, snapWall.start.y);
+      const we = worldToScreen(snapWall.end.x, snapWall.end.y);
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.beginPath();
+      ctx.moveTo(ws.x, ws.y);
+      ctx.lineTo(we.x, we.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
     }
 
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.rotate(angle);
-    ctx.globalAlpha = 0.5;
+    // Ceiling and wall items show at full strength (they are small and sit over dimmed
+    // furniture); a wall item with no wall in reach stays faint; floor items as before.
+    const mount = cat.mount ?? 'floor';
+    ctx.globalAlpha = !place ? 0.3 : mount === 'floor' ? 0.5 : 1;
     drawFurnitureIcon(ctx, currentPlacingId, w, d, cat.color, cat.color);
     ctx.globalAlpha = 1;
     ctx.restore();
@@ -924,8 +998,9 @@
   function drawAlignmentGuides(item: FurnitureItem) {
     if (!currentFloor) return;
     const threshold = 5;
+    const surface = itemSurface(item);
     for (const other of currentFloor.furniture) {
-      if (other.id === item.id) continue;
+      if (other.id === item.id || itemSurface(other) !== surface) continue;
       const s1 = worldToScreen(item.position.x, item.position.y);
       const s2 = worldToScreen(other.position.x, other.position.y);
       ctx.strokeStyle = '#ef4444';
@@ -1400,19 +1475,28 @@
       }
     }
 
+    // Structure other than walls and rooms is drawn dimmed where it cannot be edited.
+    const work = workCtx();
+    const dimStructure = structureOpacity(work);
+
     // Entourage (2D presentation symbols) — under furniture
     if (layerVis.entourage) {
+      ctx.save();
+      ctx.globalAlpha = dimStructure;
       _drawEntourageItems(getCS(), floor, currentSelectedId, customEntourageDefs, markDirty);
+      ctx.restore();
     }
 
-    // Furniture
+    // Furniture: floor, then wall, then ceiling mounts. Items of the active trade on the
+    // active surface at full strength, the rest at 18 % (on the ceiling, every ceiling item).
     if (showFurniture) {
       for (const fi of byElevation(floor.furniture)) {
         const selected = isSelected(fi.id);
         if (selected && draggingFurnitureId === fi.id) drawAlignmentGuides(fi);
-        drawFurniture(fi, selected);
+        drawFurniture(fi, selected, planOpacity(fi, work));
       }
     }
+
 
     // Object distance dimensions (from selected furniture to room boundaries)
     if (showDimensions && dimSettings.showObjectDistance && currentSelectedId && showFurniture) {
@@ -1431,7 +1515,7 @@
           const fBottom = fy + fd / 2;
           
           // Find which room the furniture is in
-          const furnitureRoom = findRoomAt(selFurniture.position);
+          const furnitureRoom = roomAt(selFurniture.position);
           
           // Collect all dimension lines (wall + furniture distances)
           type DimLine = { label: string; from: Point; to: Point; color: string; dir: 'left' | 'right' | 'top' | 'bottom' };
@@ -1457,7 +1541,9 @@
           
           // --- Furniture-to-furniture distances ---
           // For each direction, find the nearest other furniture edge
-          const otherFurniture = floor.furniture.filter(f => f.id !== selFurniture.id);
+          // Only items on the same surface: a pendant's distance to the sofa below means nothing.
+          const selSurface = itemSurface(selFurniture);
+          const otherFurniture = floor.furniture.filter(f => f.id !== selFurniture.id && itemSurface(f) === selSurface);
           // Track closest furniture per direction
           const closestFurn: Record<string, { dist: number; dim: DimLine }> = {};
           
@@ -1607,19 +1693,22 @@
       }
     }
 
-    // Stairs
+    // Stairs and columns (dimmed where structure is not editable)
+    ctx.save();
+    ctx.globalAlpha = dimStructure;
     if (showStairs && floor.stairs) {
       for (const stair of floor.stairs) {
         drawStair(stair, isSelected(stair.id));
       }
     }
-
-    // Columns
     if (layerVis.columns && floor.columns) {
       for (const col of floor.columns) {
         drawColumn(col, isSelected(col.id));
       }
     }
+    ctx.restore();
+    // Ceiling-height chips sit above everything in the room.
+    if (currentSurface === 'ceiling') drawCeilingChips(floor);
 
     // Column placement preview
     if (isPlacingColumn) {
@@ -2594,8 +2683,9 @@
 
   // ── Hit-testing wrappers (delegating to hitTesting.ts) ──────────────
 
+  // Editing hit tests answer only for what the current trade and surface may edit (workFilter).
   function findWallAt(p: Point): Wall | null {
-    if (!currentFloor) return null;
+    if (!currentFloor || !structureOn()) return null;
     return _findWallAt(p, currentFloor.walls, zoom);
   }
 
@@ -2604,44 +2694,70 @@
     return touchPress === 'finger' ? Math.max(mousePx, FINGER_HANDLE_PX) : mousePx;
   }
 
+  /** Furniture the current trade and surface may edit. */
+  function editableItems(): FurnitureItem[] {
+    if (!currentFloor) return [];
+    const ctx = workCtx();
+    return currentFloor.furniture.filter(item => editableFurniture(item, ctx));
+  }
+
   function findHandleAt(p: Point): HandleType | null {
     if (!currentFloor) return null;
-    return _findHandleAt(p, currentSelectedId, currentFloor.furniture, zoom, handleTolerance(8));
+    // Wall-hosted items take their pose from the wall: no resize or rotate handles.
+    const items = editableItems().filter(item => !item.wallId);
+    return _findHandleAt(p, currentSelectedId, items, zoom, handleTolerance(8));
   }
 
   function findFurnitureAt(p: Point): FurnitureItem | null {
     if (!currentFloor) return null;
-    return _findFurnitureAt(p, currentFloor.furniture);
+    return _findFurnitureAt(p, editableItems());
   }
 
   function findColumnAt(p: Point): Column | null {
-    if (!currentFloor) return null;
+    if (!currentFloor || !structureOn()) return null;
     return _findColumnAt(p, currentFloor.columns);
   }
 
   function findStairAt(p: Point): Stair | null {
-    if (!currentFloor) return null;
+    if (!currentFloor || !structureOn()) return null;
     return _findStairAt(p, currentFloor.stairs);
   }
 
+  function findEditableEntourageAt(p: Point) {
+    if (!currentFloor || !structureOn()) return null;
+    return findEntourageAt(p, currentFloor.entourage, d => entourageAspect(d, customEntourageDefs));
+  }
+
   function findDoorAt(p: Point): Door | null {
-    if (!currentFloor) return null;
+    if (!currentFloor || !structureOn()) return null;
     return _findDoorAt(p, currentFloor.doors, currentFloor.walls, zoom);
   }
 
   function findWindowAt(p: Point): Win | null {
-    if (!currentFloor) return null;
+    if (!currentFloor || !structureOn()) return null;
     return _findWindowAt(p, currentFloor.windows, currentFloor.walls, zoom);
   }
 
   function findRoomLabelAt(p: Point): Room | null {
-    if (!currentFloor || !showRoomLabels) return null;
+    if (!currentFloor || !showRoomLabels || !structureOn()) return null;
     return _findRoomLabelAt(p, detectedRooms, currentFloor.walls, zoom, roomPolygons);
   }
 
   function findRoomAt(p: Point): Room | null {
+    if (!structureOn()) return null;
+    return roomAt(p);
+  }
+
+  /** The room under a point, whatever is being worked on (for drawing, not editing). */
+  function roomAt(p: Point): Room | null {
     if (!currentFloor) return null;
     return _findRoomAt(p, detectedRooms, currentFloor.walls, roomPolygons);
+  }
+
+  /** On the ceiling: the room whose ceiling chip or area is under the point (to set its ceiling height). */
+  function ceilingRoomAt(p: Point): Room | null {
+    if (!currentFloor || currentSurface !== 'ceiling') return null;
+    return _findRoomLabelAt(p, detectedRooms, currentFloor.walls, zoom, roomPolygons) ?? roomAt(p);
   }
 
   // pointInPolygon, pointToSegmentDist, positionOnWall imported from hitTesting.ts
@@ -2706,8 +2822,7 @@
         return;
       }
       const object = findColumnAt(wp) || findStairAt(wp) || findFurnitureAt(wp) ||
-        findEntourageAt(wp, currentFloor.entourage, d => entourageAspect(d, customEntourageDefs)) ||
-        findDoorAt(wp) || findWindowAt(wp) || findWallAt(wp);
+        findEditableEntourageAt(wp) || findDoorAt(wp) || findWindowAt(wp) || findWallAt(wp);
       if (object) {
         toggleSelectionTarget(object.id);
         return;
@@ -2886,7 +3001,8 @@
     }
 
     // Parametric dimension / constraint badge click (select); dragging moves the dimension line.
-    if (tool === 'select' && currentFloor) {
+    // Dimensions drive walls, so they are picked only where walls can be edited.
+    if (tool === 'select' && currentFloor && structureOn()) {
       const hitId = constraintAt(sx, sy);
       if (hitId) {
         selectConstraint(hitId);
@@ -2929,18 +3045,8 @@
     // Column and stair placement moved earlier (before select-mode handlers)
 
     if (tool === 'furniture' && currentPlacingId) {
-      const placingCat = getCatalogItem(currentPlacingId);
-      const wallSnap = placingCat ? snapFurnitureToWall(wp, placingCat) : null;
-      const pos = wallSnap ? wallSnap.position : { x: snap(wp.x), y: snap(wp.y) };
-      const rot = wallSnap ? wallSnap.rotation : currentPlacingRotation;
-      beginUndoGroup();
-      try {
-        const id = addFurniture(currentPlacingId, pos);
-        if (rot !== 0) rotateFurniture(id, rot);
-        selectedElementId.set(id);
-      } finally {
-        endUndoGroup('Placed furniture');
-      }
+      const id = placeCatalogItemAt(currentPlacingId, wp);
+      if (id) selectedElementId.set(id);
       return;
     }
 
@@ -2963,9 +3069,18 @@
         }
       }
     } else if (tool === 'select') {
+      // Ceiling height tool: only rooms answer, and picking one opens its keypad.
+      if (isCeilingPick) {
+        const room = ceilingRoomAt(wp);
+        selectedElementId.set(null);
+        selectedElementIds.set(new Set());
+        selectedRoomId.set(room?.id ?? null);
+        if (room) popover.set('sel-ceiling');
+        return;
+      }
       if (!e.ctrlKey && !e.metaKey && startMultiSelectionDrag(wp)) return;
       // Check wall endpoint handles first (drag-to-resize walls)
-      if (!e.ctrlKey && !e.metaKey && currentSelectedId && currentFloor) {
+      if (!e.ctrlKey && !e.metaKey && currentSelectedId && currentFloor && structureOn()) {
         const selWall = currentFloor.walls.find(w => w.id === currentSelectedId);
         if (selWall) {
           const epThreshold = handleTolerance(15) / zoom;
@@ -3023,7 +3138,7 @@
         }
       }
       // Entourage resize handle (SE corner of the selected item)
-      const selEnt = currentFloor?.entourage?.find(en => en.id === currentSelectedId);
+      const selEnt = structureOn() ? currentFloor?.entourage?.find(en => en.id === currentSelectedId) : undefined;
       if (!e.ctrlKey && !e.metaKey && selEnt && !selEnt.locked) {
         const entAspect = entourageAspect(selEnt.defId, customEntourageDefs) || 1;
         const ea = ((selEnt.rotation || 0) * Math.PI) / 180;
@@ -3081,7 +3196,8 @@
       const fi = findFurnitureAt(wp);
       if (fi) {
         if (selectElement(fi.id, e.shiftKey, e.ctrlKey || e.metaKey)) return;
-        if (!e.shiftKey && !fi.locked) {
+        // Wall-hosted items follow their wall; moving them along it comes with the wall-item tools.
+        if (!e.shiftKey && !fi.locked && !fi.wallId) {
           draggingFurnitureId = fi.id;
           dragOffset = { x: wp.x - fi.position.x, y: wp.y - fi.position.y };
           dragStartRotation = fi.rotation;
@@ -3090,7 +3206,7 @@
         return;
       }
       // Check entourage (below furniture in priority)
-      const ent = findEntourageAt(wp, currentFloor?.entourage, (d) => entourageAspect(d, customEntourageDefs));
+      const ent = findEditableEntourageAt(wp);
       if (ent) {
         if (selectElement(ent.id, e.shiftKey)) return;
         if (!e.shiftKey && !ent.locked) {
@@ -3114,8 +3230,23 @@
         return;
       }
       const wall = findWallAt(wp);
+      const ceilingRoom = !wall ? ceilingRoomAt(wp) : null;
       if (wall) {
         if (selectElement(wall.id, e.shiftKey)) return;
+      } else if (ceilingRoom) {
+        // On the ceiling a room is picked to set its ceiling height; it never moves.
+        if (touchPress === 'finger' && currentSelectMode === 'tap' && !viewTap && get(selectedRoomId) !== ceilingRoom.id) {
+          // As on the floor: the press moves the view, and a tap selects the room on release.
+          isPanning = true;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          touchPanFromEmpty = true;
+          touchPanRoomId = ceilingRoom.id;
+        } else {
+          selectedRoomId.set(ceilingRoom.id);
+          selectedElementId.set(null);
+          selectedElementIds.set(new Set());
+        }
       } else {
         // Check if clicking on a room label (for dragging)
         const labelRoom = findRoomLabelAt(wp);
@@ -3547,7 +3678,8 @@
       const basePos = { x: mousePos.x - dragOffset.x, y: mousePos.y - dragOffset.y };
       const fi = currentFloor?.furniture.find(f => f.id === draggingFurnitureId);
       if (fi) {
-        const wallSnap = snapFurnitureToWall(basePos, fi);
+        // Only floor items snap against walls; ceiling items move freely.
+        const wallSnap = furnitureMount(fi) === 'floor' ? snapFurnitureToWall(basePos, fi) : null;
         if (wallSnap) {
           transformFurnitureDuringDrag(draggingFurnitureId, { position: wallSnap.position, rotation: wallSnap.rotation });
           dragWasWallSnapped = true;
@@ -3665,7 +3797,7 @@
       // Only treat as marquee if dragged at least a small distance
       if (marqueeW > 5 || marqueeH > 5) {
         const ids = new Set<string>(e.shiftKey ? currentSelectedIds : []);
-        for (const id of marqueeSelectionIds(currentFloor, { minX, maxX, minY, maxY }, layerVis)) ids.add(id);
+        for (const id of marqueeSelectionIds(editablePlanFloor(currentFloor, workCtx()), { minX, maxX, minY, maxY }, layerVis)) ids.add(id);
 
         if (ids.size > 0) {
           clearAuxiliarySelection();
@@ -3990,9 +4122,10 @@
   /** Copy the selection to the plan clipboard. Returns false when nothing copyable is selected. */
   function copySelectionToClipboard(): boolean {
     if (!currentFloor) return false;
-    const copyable = [...currentFloor.walls,...currentFloor.doors,...currentFloor.windows,...currentFloor.furniture,
-      ...currentFloor.stairs ?? [],...currentFloor.columns ?? [],...currentFloor.entourage ?? [],
-      ...currentFloor.textAnnotations ?? [],...currentFloor.measurements ?? [],...currentFloor.annotations ?? []];
+    const floor = editablePlanFloor(currentFloor, workCtx());
+    const copyable = [...floor.walls,...floor.doors,...floor.windows,...floor.furniture,
+      ...floor.stairs ?? [],...floor.columns ?? [],...floor.entourage ?? [],
+      ...floor.textAnnotations ?? [],...floor.measurements ?? [],...floor.annotations ?? []];
     const ids = [...fitSelectionIds()].filter(id => copyable.some(item => item.id === id));
     if (!ids.length) return false;
     clipboard = { floor: structuredClone(get(activeFloor)!), ids, step: 1, projectId: get(currentProject)!.id };
@@ -4311,7 +4444,8 @@
     const pos = { x: snap(wp.x), y: snap(wp.y) };
 
     if (itemType === 'furniture') {
-      const id = addFurniture(itemId, pos);
+      const id = placeCatalogItemAt(itemId, wp);
+      if (!id) return;
       selectedElementId.set(id);
       selectedTool.set('select');
       placingFurnitureId.set(null);

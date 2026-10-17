@@ -920,7 +920,11 @@ export function drawWindowDistanceDimensions(cs: CanvasState, wall: Wall, window
 
 // ── Furniture drawing ────────────────────────────────────────────────
 
-export function drawFurnitureItem(cs: CanvasState, item: FurnitureItem, selected: boolean, caption?: string): void {
+/**
+ * Draw a placed item. `opacity` dims it (items of another trade or surface are drawn
+ * at 18 %, see workFilter.planOpacity); it multiplies whatever alpha is already set.
+ */
+export function drawFurnitureItem(cs: CanvasState, item: FurnitureItem, selected: boolean, caption?: string, opacity = 1): void {
   const { ctx, zoom } = cs;
   const cat = getCatalogItem(item.catalogId);
   const s = wts(cs, item.position.x, item.position.y);
@@ -932,6 +936,7 @@ export function drawFurnitureItem(cs: CanvasState, item: FurnitureItem, selected
   const angle = (item.rotation * Math.PI) / 180;
 
   ctx.save();
+  if (opacity !== 1) ctx.globalAlpha *= opacity;
   ctx.translate(s.x, s.y);
   ctx.rotate(angle);
   ctx.scale(Math.sign(sx) || 1, Math.sign(sy) || 1);
@@ -1555,6 +1560,49 @@ export function drawRooms(
   }
 }
 
+// ── Ceiling height chips (ceiling surface) ───────────────────────────
+
+/** Font size of room labels at this zoom (as drawRooms draws them). */
+export function roomLabelFontSize(zoom: number): number {
+  return Math.max(11, 13 * zoom);
+}
+
+/**
+ * Screen rectangle of a room's ceiling-height chip: a pill centred under the room label
+ * at `anchor` (screen px), or on the anchor itself when room labels are hidden.
+ */
+export function ceilingChipRect(ctx: CanvasRenderingContext2D, anchor: Point, text: string, zoom: number, belowLabel: boolean): { x: number; y: number; width: number; height: number } {
+  ctx.save();
+  ctx.font = '600 12px system-ui, sans-serif';
+  const width = ctx.measureText(text).width + 20;
+  ctx.restore();
+  const height = 24;
+  const cy = belowLabel ? anchor.y + roomLabelFontSize(zoom) / 2 + 6 + height / 2 : anchor.y;
+  return { x: anchor.x - width / 2, y: cy - height / 2, width, height };
+}
+
+/**
+ * A room's ceiling-height chip: accent outline when the room has its own height (an
+ * override), muted when it uses the default; filled when the room is selected.
+ */
+export function drawCeilingChip(ctx: CanvasRenderingContext2D, rect: { x: number; y: number; width: number; height: number }, text: string, opts: { override: boolean; selected: boolean }): void {
+  const accent = '#2563eb';
+  ctx.save();
+  ctx.beginPath();
+  ctx.roundRect(rect.x, rect.y, rect.width, rect.height, rect.height / 2);
+  ctx.fillStyle = opts.selected ? accent : '#ffffff';
+  ctx.fill();
+  ctx.lineWidth = opts.override || opts.selected ? 1.5 : 1;
+  ctx.strokeStyle = opts.override || opts.selected ? accent : '#cbd5e1';
+  ctx.stroke();
+  ctx.font = '600 12px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = opts.selected ? '#ffffff' : opts.override ? accent : '#64748b';
+  ctx.fillText(text, rect.x + rect.width / 2, rect.y + rect.height / 2 + 0.5);
+  ctx.restore();
+}
+
 // ── Wall joints ──────────────────────────────────────────────────────
 
 export function drawWallJoints(cs: CanvasState, floor: Floor, selId: string | null): void {
@@ -1730,11 +1778,13 @@ export function drawEntourageItem(
   const aspect = def?.aspect ?? custom!.aspect;
   const wPx = item.width * zoom;
   const hPx = wPx * aspect;
+  // Relative to the alpha already set, so a dimmed layer (another trade or surface) stays dim.
+  const baseAlpha = ctx.globalAlpha;
 
   ctx.save();
   ctx.translate(s.x, s.y);
   ctx.rotate(((item.rotation || 0) * Math.PI) / 180);
-  ctx.globalAlpha = item.opacity ?? 1;
+  ctx.globalAlpha = baseAlpha * (item.opacity ?? 1);
 
   if (def) {
     const scale = wPx / 100;
@@ -1761,7 +1811,7 @@ export function drawEntourageItem(
     }
   }
 
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = baseAlpha;
   if (selected) {
     ctx.strokeStyle = '#3b82f6';
     ctx.lineWidth = 1.5;

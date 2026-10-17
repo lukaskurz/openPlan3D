@@ -94,6 +94,18 @@
     ceiling: 'M3 4h18M12 4v5M7 14a5 5 0 0 1 10 0zM10.5 17.5h3',
     /** A floor line with a block standing on it. */
     floor: 'M3 20h18M8 20v-8h8v8',
+    /** Ceiling height: a ceiling and a floor line with a two-headed arrow between them. */
+    ceilingHeight: 'M3 3h18M3 21h18M12 6v12M9 9l3-3 3 3M9 15l3 3 3-3',
+    /** A light bulb (ceiling lights). */
+    bulb: 'M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5M9 18h6M10 22h4',
+    /** A recessed downlight: a can set into the ceiling, shining down. */
+    recessed: 'M3 5h18M7 5v2a5 5 0 0 0 10 0V5M12 16v2M7.5 15l-1.5 1.5M16.5 15l1.5 1.5',
+    /** Ceiling fan blades. */
+    fan: 'M10.83 16.38a6.08 6.08 0 0 1-8.62-7l5.41 1.45a6.08 6.08 0 0 1 7-8.62l-1.45 5.41a6.08 6.08 0 0 1 8.62 7l-5.41-1.45a6.08 6.08 0 0 1-7 8.62zM12 12v.01',
+    /** Smoke detector: a round ceiling unit with its sensor. */
+    smoke: 'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM7 12h.01M17 12h.01M12 7h.01M12 17h.01',
+    /** Hang: a cord from the ceiling down to an item (a pendant's drop). */
+    hang: 'M3 3h18M12 3v8M12 11l-3 3M12 11l3 3M8 18h8M10 21h4',
   } as const;
   export type IconName = keyof typeof ICONS;
 </script>

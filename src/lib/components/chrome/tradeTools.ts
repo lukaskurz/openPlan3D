@@ -23,7 +23,7 @@ export const FIXED_TOOLS: readonly BarTool[] = [
   { id: 'annotate', icon: 'ruler', label: 'chrome.tool.annotate' },
 ];
 
-/** Electrical, plumbing and ceiling tools arrive with packages 2 and 3; their lists start empty. */
+/** Electrical and plumbing tools arrive with package 3; their lists start empty. */
 export const TRADE_TOOLS: Readonly<Record<Trade, Readonly<Record<Surface, readonly BarTool[]>>>> = {
   furnishing: {
     floor: [
@@ -32,7 +32,12 @@ export const TRADE_TOOLS: Readonly<Record<Trade, Readonly<Record<Surface, readon
       { id: 'structure', icon: 'stairs', label: 'chrome.tool.structure' },
       { id: 'furniture', icon: 'sofa', label: 'chrome.tool.furniture' },
     ],
-    ceiling: [],
+    ceiling: [
+      { id: 'ceilingHeight', icon: 'ceilingHeight', label: 'chrome.tool.ceilingHeight', title: 'chrome.hint.ceilingHeight' },
+      { id: 'light', icon: 'bulb', label: 'chrome.tool.light' },
+      { id: 'fan', icon: 'fan', label: 'chrome.tool.fan' },
+      { id: 'smoke', icon: 'smoke', label: 'chrome.tool.smoke' },
+    ],
   },
   electrical: { floor: [], ceiling: [] },
   plumbing: { floor: [], ceiling: [] },
@@ -48,6 +53,26 @@ export const TRADE_INFO: Readonly<Record<Trade, TradeInfo>> = {
 
 const TRADE_ORDER: readonly Trade[] = ['furnishing', 'electrical', 'plumbing'];
 const SURFACE_ORDER: readonly Surface[] = ['floor', 'ceiling'];
+
+/**
+ * Catalog items the ceiling tools place. The first of each is what the tool arms;
+ * the others are its variants in the tool's options (spec §3.8: "light hang height…").
+ */
+export const CEILING_TOOL_ITEMS = {
+  light: ['ceiling_light', 'recessed_light', 'pendant_light', 'chandelier'],
+  fan: ['ceiling_fan', 'sym_ceiling_fan'],
+  smoke: ['smoke_detector', 'sym_smoke'],
+} as const satisfies Partial<Record<ToolGroup, readonly string[]>>;
+
+export type PlacingGroup = 'furniture' | keyof typeof CEILING_TOOL_ITEMS;
+
+/** The tool group an armed catalog item belongs to: a ceiling tool for its items, else Furniture. */
+export function groupForItem(catalogId: string | null): PlacingGroup {
+  for (const [group, ids] of Object.entries(CEILING_TOOL_ITEMS) as [keyof typeof CEILING_TOOL_ITEMS, readonly string[]][]) {
+    if (catalogId && ids.includes(catalogId)) return group;
+  }
+  return 'furniture';
+}
 
 export function tradeTools(trade: Trade, surface: Surface): readonly BarTool[] {
   return TRADE_TOOLS[trade][surface];
