@@ -39,7 +39,7 @@
   import { applyWallXray } from '$lib/utils/wallXray';
   import { disposeModel } from '$lib/utils/furnitureModelResources';
   import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
-  import { ownColorCanvasTexture, refreshBackgroundTexture } from '$lib/utils/viewerTextures';
+  import { ownColorCanvasTexture } from '$lib/utils/viewerTextures';
   import { createFurnitureModelWithGLB, createPlacedFurnitureModel } from '$lib/utils/furnitureModelLoader';
   import { addFurniture } from '$lib/stores/project';
   import { detectRooms, resolveRoomGeometry, getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
@@ -92,7 +92,6 @@
   // Multi-floor stacking
   let showAllFloors = $state(false);
   let activeFloorElevation = $state(0);
-  let sceneGround: THREE.Mesh;
   // Stacked geometry uses the same floor levels as the 2D reference layer.
 
   // Walkthrough mode
@@ -119,8 +118,6 @@
   let sunLight: THREE.DirectionalLight;
   let fillLight: THREE.DirectionalLight;
   let rimLight: THREE.DirectionalLight;
-  let skyCanvas: HTMLCanvasElement;
-  let skyTexture: THREE.CanvasTexture;
 
   // Interior Camera placement
   let cameraPlacementMode = $state(false);
@@ -546,10 +543,10 @@
   let ghostIntersection = new THREE.Vector3();
 
   const TIME_PRESETS = {
-    morning: { azimuth: 90, elevation: 25, ambient: 0.3, sunColor: 0xffe0a0, sunIntensity: 0.8, skyTop: '#f5a86c', skyMid: '#fdd89b', skyHorizon: '#ffe8c0', hemiSky: '#fdd89b', hemiGround: '#9b8060' },
-    noon:    { azimuth: 180, elevation: 80, ambient: 0.45, sunColor: 0xffffff, sunIntensity: 1.2, skyTop: '#3a7bd5', skyMid: '#87ceeb', skyHorizon: '#c8e8f8', hemiSky: '#87ceeb', hemiGround: '#8b7355' },
-    evening: { azimuth: 270, elevation: 15, ambient: 0.2, sunColor: 0xff8040, sunIntensity: 0.6, skyTop: '#2d1b69', skyMid: '#c84e3c', skyHorizon: '#f4a460', hemiSky: '#c84e3c', hemiGround: '#4a3520' },
-    night:   { azimuth: 0, elevation: 5, ambient: 0.08, sunColor: 0x8899cc, sunIntensity: 0.15, skyTop: '#0a0a2e', skyMid: '#141432', skyHorizon: '#1a1a3e', hemiSky: '#141432', hemiGround: '#0a0a15' },
+    morning: { azimuth: 90, elevation: 25, ambient: 0.3, sunColor: 0xffe0a0, sunIntensity: 0.8, hemiSky: '#fdd89b', hemiGround: '#9b8060' },
+    noon:    { azimuth: 180, elevation: 80, ambient: 0.45, sunColor: 0xffffff, sunIntensity: 1.2, hemiSky: '#87ceeb', hemiGround: '#8b7355' },
+    evening: { azimuth: 270, elevation: 15, ambient: 0.2, sunColor: 0xff8040, sunIntensity: 0.6, hemiSky: '#c84e3c', hemiGround: '#4a3520' },
+    night:   { azimuth: 0, elevation: 5, ambient: 0.08, sunColor: 0x8899cc, sunIntensity: 0.15, hemiSky: '#141432', hemiGround: '#0a0a15' },
   };
 
   function updateSunPosition() {
@@ -568,20 +565,6 @@
   function updateAmbientIntensity() {
     if (ambientLight) ambientLight.intensity = ambientIntensity;
     markSceneDirty();
-  }
-
-  function updateSkyGradient(topColor: string, midColor: string, horizonColor: string) {
-    if (!skyCanvas || !skyTexture) return;
-    const cx = skyCanvas.getContext('2d')!;
-    const grad = cx.createLinearGradient(0, 0, 0, 512);
-    grad.addColorStop(0, topColor);
-    grad.addColorStop(0.4, midColor);
-    grad.addColorStop(0.55, horizonColor);
-    grad.addColorStop(0.7, '#d4cfc4');
-    grad.addColorStop(1.0, '#b8b0a0');
-    cx.fillStyle = grad;
-    cx.fillRect(0, 0, 4, 512);
-    refreshBackgroundTexture(skyTexture);
   }
 
   function applyTimePreset(preset: 'morning' | 'noon' | 'evening' | 'night') {
@@ -603,38 +586,14 @@
     }
     if (fillLight) fillLight.intensity = preset === 'night' ? 0.05 : 0.4;
     if (rimLight) rimLight.intensity = preset === 'night' ? 0.05 : 0.25;
-    updateSkyGradient(p.skyTop, p.skyMid, p.skyHorizon);
     // The main view redraws for the new lights; an open interior preview redraws only when asked.
     if (cameraPlaced) cameraPreviewDirty = true;
   }
 
   const WALL_THICKNESS = 15;
+  /** The 3D view's surroundings: the dark-mode plan canvas grey. */
+  const SCENE_BACKGROUND = 0x1f1f1f;
   const BASEBOARD_HEIGHT = 8;
-
-  // Create a canvas-based floor texture
-  function createFloorTexture(): THREE.CanvasTexture {
-    const size = 256;
-    const c = document.createElement('canvas');
-    c.width = size; c.height = size;
-    const cx = c.getContext('2d')!;
-    // Hardwood pattern
-    cx.fillStyle = '#c4a882';
-    cx.fillRect(0, 0, size, size);
-    for (let y = 0; y < size; y += 32) {
-      for (let x = 0; x < size; x += 64) {
-        const offset = (y / 32) % 2 === 0 ? 0 : 32;
-        cx.fillStyle = y % 64 < 32 ? '#b89b72' : '#d4b892';
-        cx.fillRect(x + offset, y, 62, 30);
-        cx.strokeStyle = '#a08060';
-        cx.lineWidth = 0.5;
-        cx.strokeRect(x + offset, y, 62, 30);
-      }
-    }
-    const tex = ownColorCanvasTexture(c);
-    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
-    tex.repeat.set(10, 10);
-    return tex;
-  }
 
   function exitWalkthroughMode() {
     walkthroughMode = false;
@@ -699,79 +658,9 @@
 
   function init() {
     scene = new THREE.Scene();
-
-    // Sky dome — hemisphere with gradient texture mapped inside
-    skyCanvas = document.createElement('canvas');
-    skyCanvas.width = 4; skyCanvas.height = 512;
-    const cx = skyCanvas.getContext('2d')!;
-    const grad = cx.createLinearGradient(0, 0, 0, 512);
-    grad.addColorStop(0, '#4a90d9');
-    grad.addColorStop(0.3, '#87ceeb');
-    grad.addColorStop(0.5, '#b8ddf0');
-    grad.addColorStop(0.55, '#f0ece4');
-    grad.addColorStop(0.7, '#d4cfc4');
-    grad.addColorStop(1.0, '#b8b0a0');
-    cx.fillStyle = grad;
-    cx.fillRect(0, 0, 4, 512);
-    skyTexture = ownColorCanvasTexture(skyCanvas);
-    // Use as scene background (maps onto equirectangular projection)
-    skyTexture.mapping = THREE.EquirectangularReflectionMapping;
-    scene.background = skyTexture;
-
-    // Ground plane — textured concrete with grid overlay
-    const groundSize = 40000;
-    const groundGeo = new THREE.PlaneGeometry(groundSize, groundSize);
-    // Generate a subtle concrete texture with grid
-    const groundCanvas = document.createElement('canvas');
-    groundCanvas.width = 1024; groundCanvas.height = 1024;
-    const gctx = groundCanvas.getContext('2d')!;
-    // Base concrete color with noise
-    gctx.fillStyle = '#c8c2b8';
-    gctx.fillRect(0, 0, 1024, 1024);
-    // Add subtle noise for concrete feel
-    for (let i = 0; i < 30000; i++) {
-      const nx = Math.random() * 1024;
-      const ny = Math.random() * 1024;
-      const v = 180 + Math.random() * 30;
-      gctx.fillStyle = `rgba(${v},${v-5},${v-12},0.15)`;
-      gctx.fillRect(nx, ny, 2, 2);
-    }
-    // Grid lines every 128px (= 500cm real-world at current repeat)
-    gctx.strokeStyle = 'rgba(0,0,0,0.08)';
-    gctx.lineWidth = 1;
-    const gridStep = 128;
-    for (let x = 0; x <= 1024; x += gridStep) {
-      gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, 1024); gctx.stroke();
-    }
-    for (let y = 0; y <= 1024; y += gridStep) {
-      gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(1024, y); gctx.stroke();
-    }
-    // Thicker lines every 4 grid cells (= 2000cm / 20m)
-    gctx.strokeStyle = 'rgba(0,0,0,0.15)';
-    gctx.lineWidth = 2;
-    for (let x = 0; x <= 1024; x += gridStep * 4) {
-      gctx.beginPath(); gctx.moveTo(x, 0); gctx.lineTo(x, 1024); gctx.stroke();
-    }
-    for (let y = 0; y <= 1024; y += gridStep * 4) {
-      gctx.beginPath(); gctx.moveTo(0, y); gctx.lineTo(1024, y); gctx.stroke();
-    }
-    const groundTex = ownColorCanvasTexture(groundCanvas);
-    groundTex.wrapS = groundTex.wrapT = THREE.RepeatWrapping;
-    groundTex.repeat.set(groundSize / 4000, groundSize / 4000);
-    const groundMat = new THREE.MeshStandardMaterial({
-      map: groundTex,
-      roughness: 0.92,
-      metalness: 0
-    });
-    groundMat.polygonOffset = true;
-    groundMat.polygonOffsetFactor = 2;
-    groundMat.polygonOffsetUnits = 2;
-    const ground = new THREE.Mesh(groundGeo, groundMat);
-    sceneGround = ground;
-    ground.rotation.x = -Math.PI / 2;
-    ground.position.y = -1;
-    ground.receiveShadow = true;
-    scene.add(ground);
+    // No sky or ground outside the building: a flat dark grey matching the dark plan canvas,
+    // so nothing can z-fight with the room floors and the model reads against the app chrome.
+    scene.background = new THREE.Color(SCENE_BACKGROUND);
 
     camera = new THREE.PerspectiveCamera(50, container.clientWidth / container.clientHeight, 1, 20000);
     camera.position.set(800, 600, 800);
@@ -781,7 +670,6 @@
     } catch {
       // WebGL is off, blocked or unsupported in this browser, and three has logged the error. Release
       // the scene built so far; onMount then starts nothing that needs a renderer.
-      skyTexture.dispose();
       clearGroup(scene);
       webglUnavailable = true;
       return false;
@@ -987,16 +875,6 @@
     rimLight = new THREE.DirectionalLight(0xffe4c4, 0.25);
     rimLight.position.set(-200, 600, 1000);
     scene.add(rimLight);
-
-    // Textured floor
-    const floorTex = createFloorTexture();
-    const floorGeo = new THREE.PlaneGeometry(4000, 4000);
-    const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, side: THREE.DoubleSide, roughness: 0.8, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
-    const floorMesh = new THREE.Mesh(floorGeo, floorMat);
-    floorMesh.rotation.x = -Math.PI / 2;
-    floorMesh.position.y = 0.5;
-    floorMesh.receiveShadow = true;
-    scene.add(floorMesh);
 
     wallGroup = new THREE.Group();
     scene.add(wallGroup);
@@ -1643,8 +1521,6 @@
     }
     activeFloorElevation = entries.find(entry => entry.floor.id === activeF.id)?.yOffset ?? 0;
     floorPlane.constant = -activeFloorElevation;
-    // Keep the presentation ground below basements as well as above-ground floors.
-    sceneGround.position.y = Math.min(0, ...entries.map(entry => entry.yOffset)) - 1;
   }
 
   function addFloorLabel(name: string, yOffset: number, labelX: number, labelZ: number) {
@@ -1766,7 +1642,6 @@
     } else if (currentFloor) {
       activeFloorElevation = 0;
       floorPlane.constant = 0;
-      sceneGround.position.y = -1;
       buildWalls(currentFloor);
     }
     // Fit the orbit camera only for a new project, floor or stacking choice, so edits, Undo/Redo,
@@ -2056,7 +1931,6 @@
       releaseCameraPreview();
       wallHighlight.clear();
       removeGhostPreview();
-      skyTexture.dispose();
       sunLight.shadow.dispose();
       clearGroup(scene);
       wallMeshMap.clear();

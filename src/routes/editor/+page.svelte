@@ -218,7 +218,8 @@
       {#if ThreeViewer}
         <ThreeViewer />
       {:else}
-        <div class="flex items-center justify-center h-full text-slate-400">{$t('shortcuts.loading3d')}</div>
+        <!-- Same grey as the 3D scene background, so switching to 3D does not flash white. -->
+        <div class="flex items-center justify-center h-full bg-[#1f1f1f] text-slate-400">{$t('shortcuts.loading3d')}</div>
       {/if}
     {/if}
     <EditorChrome />
