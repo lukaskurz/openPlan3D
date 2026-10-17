@@ -1432,13 +1432,17 @@ export function drawRoomFloorPattern(cs: CanvasState, room: Room, screenPoly: Po
       traceRoomRings(ctx, screenPoly, holes); ctx.clip('evenodd');
       ctx.globalAlpha = 0.5;
       const scale = zoom * 0.15;
+      // Anchor the pattern at the plan's world origin, not the canvas corner, so the
+      // floor pans and zooms with the drawing instead of sliding underneath it.
+      const origin = wts(cs, 0, 0);
+      ctx.translate(origin.x, origin.y);
       ctx.scale(scale, scale);
       const pat = ctx.createPattern(texCanvas, 'repeat');
       if (pat) {
         ctx.fillStyle = pat;
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         for (const p of screenPoly) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
-        ctx.fillRect(minX / scale - 10, minY / scale - 10, (maxX - minX) / scale + 20, (maxY - minY) / scale + 20);
+        ctx.fillRect((minX - origin.x) / scale - 10, (minY - origin.y) / scale - 10, (maxX - minX) / scale + 20, (maxY - minY) / scale + 20);
       }
       ctx.restore();
       return;
