@@ -87,8 +87,11 @@ function renderSketch(strokes: Point[][]): Attachment {
   if (!plan || !plan.width || !plan.height) return { mediaType: 'image/jpeg', data: '', thumb: '', name: 'sketch', note, sketch: true };
 
   const zoom = get(canvasZoom), camX = get(canvasCamX), camY = get(canvasCamY);
-  const toCanvas = (p: Point) => ({ x: (p.x - camX) * zoom + plan.width / 2, y: (p.y - camY) * zoom + plan.height / 2 });
-  const toPlan = (x: number, y: number) => ({ x: (x - plan.width / 2) / zoom + camX, y: (y - plan.height / 2) / zoom + camY });
+  // Work in CSS pixels like the editor; the backing store is larger by the device pixel ratio.
+  const cssWidth = plan.clientWidth || plan.width, cssHeight = plan.clientHeight || plan.height;
+  const ratio = plan.width / cssWidth;
+  const toCanvas = (p: Point) => ({ x: (p.x - camX) * zoom + cssWidth / 2, y: (p.y - camY) * zoom + cssHeight / 2 });
+  const toPlan = (x: number, y: number) => ({ x: (x - cssWidth / 2) / zoom + camX, y: (y - cssHeight / 2) / zoom + camY });
 
   // The strokes' bounds with room around them for context, kept on the canvas.
   const all = strokes.flat().map(toCanvas);
@@ -96,8 +99,8 @@ function renderSketch(strokes: Point[][]): Attachment {
   let y0 = Math.min(...all.map(p => p.y)), y1 = Math.max(...all.map(p => p.y));
   const pad = Math.max(150 * zoom, (x1 - x0) * 0.4, (y1 - y0) * 0.4, 60);
   x0 = Math.max(0, Math.floor(x0 - pad)); y0 = Math.max(0, Math.floor(y0 - pad));
-  x1 = Math.min(plan.width, Math.ceil(x1 + pad)); y1 = Math.min(plan.height, Math.ceil(y1 + pad));
-  if (x1 - x0 < 10 || y1 - y0 < 10) { x0 = 0; y0 = 0; x1 = plan.width; y1 = plan.height; }
+  x1 = Math.min(cssWidth, Math.ceil(x1 + pad)); y1 = Math.min(cssHeight, Math.ceil(y1 + pad));
+  if (x1 - x0 < 10 || y1 - y0 < 10) { x0 = 0; y0 = 0; x1 = cssWidth; y1 = cssHeight; }
 
   const scale = Math.min(1.5, PICTURE_EDGE / Math.max(x1 - x0, y1 - y0));
   const out = document.createElement('canvas');
@@ -106,7 +109,7 @@ function renderSketch(strokes: Point[][]): Attachment {
   const ctx = out.getContext('2d')!;
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, out.width, out.height);
-  ctx.drawImage(plan, x0, y0, x1 - x0, y1 - y0, 0, 0, out.width, out.height);
+  ctx.drawImage(plan, x0 * ratio, y0 * ratio, (x1 - x0) * ratio, (y1 - y0) * ratio, 0, 0, out.width, out.height);
 
   const toOut = (p: Point) => { const c = toCanvas(p); return { x: (c.x - x0) * scale, y: (c.y - y0) * scale }; };
   ctx.lineCap = 'round';

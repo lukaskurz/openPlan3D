@@ -604,14 +604,20 @@
     return end;
   }
 
+  /** Backing-store pixels per CSS pixel. Drawing code works in CSS pixels; draw() scales by this
+   * so the plan stays sharp on Retina screens (2× on iPad). Capped to bound memory and fill cost. */
+  let pixelRatio = 1;
+  const devicePixelRatioNow = () => Math.min(Math.max(window.devicePixelRatio || 1, 1), 3);
+
   function resize() {
     const parent = canvas?.parentElement;
     if (!parent) return;
     width = parent.clientWidth;
     height = parent.clientHeight;
+    pixelRatio = devicePixelRatioNow();
     if (canvas) {
-      canvas.width = width;
-      canvas.height = height;
+      canvas.width = Math.round(width * pixelRatio);
+      canvas.height = Math.round(height * pixelRatio);
     }
     markDirty();
   }
@@ -1336,6 +1342,9 @@
 
   function draw() {
     if (!ctx) return;
+    // Browser zoom or moving the window to another screen changes the ratio without a resize.
+    if (devicePixelRatioNow() !== pixelRatio) resize();
+    ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f8f9fa';
     ctx.fillRect(0, 0, width, height);
