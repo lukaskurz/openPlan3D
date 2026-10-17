@@ -28,6 +28,7 @@
   import { portableRenderSceneJSON } from '$lib/utils/portableRenderScene';
   import { sceneSignature } from '$lib/utils/sceneSignature';
   import { WalkthroughMotion } from '$lib/utils/walkthroughMotion';
+  import { resolveWalk, walkBarriers, type WalkBarrier } from '$lib/utils/walkCollision';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
   import { getCatalogItem, furnitureCatalog, furnitureCategories } from '$lib/utils/furnitureCatalog';
@@ -91,6 +92,9 @@
   let walkthroughMode = $state(false);
   let walkthroughMouseUnavailable = $state(false);
   const walkthroughMotion = new WalkthroughMotion();
+  let walkthroughBarriers: WalkBarrier[] = [];
+  const collideWalk = (from: { x: number; z: number }, to: { x: number; z: number }) =>
+    resolveWalk(from, to, walkthroughBarriers);
   let moveSpeed = $state(800);
   let sprintSpeed = $state(1600);
   let eyeHeight = $state(160); // cm
@@ -1806,6 +1810,7 @@
       buildWalls(currentFloor);
     }
     wallHighlight.apply(wallMeshMap, selectedWallId3D);
+    if (walkthroughMode) walkthroughBarriers = walkBarriers(currentFloor);
     if (walkingPosition && walkingRotation) {
       camera.position.copy(walkingPosition);
       camera.position.y = activeFloorElevation + eyeHeight;
@@ -1906,6 +1911,7 @@
     removeGhostPreview();
     walkthroughMode = true;
     walkthroughMotion.reset();
+    walkthroughBarriers = currentFloor ? walkBarriers(currentFloor) : [];
     walkthroughMouseUnavailable = false;
     controls.enabled = false;
 
@@ -1968,7 +1974,7 @@
     if (walkthroughMode) {
       lastOrbitFrame = undefined;
       const moving = walkthroughMotion.active;
-      walkthroughMotion.advance(timestamp, camera, { moveSpeed, sprintSpeed, eyeHeight, floorElevation: activeFloorElevation });
+      walkthroughMotion.advance(timestamp, camera, { moveSpeed, sprintSpeed, eyeHeight, floorElevation: activeFloorElevation, collide: collideWalk });
       if (sceneDirty || moving) {
         sceneDirty = false;
         renderer.render(scene, camera);

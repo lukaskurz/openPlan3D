@@ -566,6 +566,7 @@ html, body { overscroll-behavior: none; }
 @media (max-width: 640px) {
   .op-btn.is-big, .op-float.op-btn.is-big { height: 44px; min-width: 44px; }
   .op-top .op-float.op-btn[style*='width'] { width: 44px !important; height: 44px !important; }
+  .op-top [data-project-card] { height: 44px; padding: 2px; }
   .op-mode > button { height: 36px; padding: 0 9px; font-size: 13px; }
   [data-bottom-bar] .op-zoom { display: none; }
   [data-selection-bar] > .op-float { max-width: calc(100vw - 16px); overflow-x: auto; }
@@ -642,7 +643,12 @@ html, body { overscroll-behavior: none; }
 @keyframes op-typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 .op-tool-row { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
 .op-tool-row > [data-tool-strip] { min-width: 0; }
+/* The tool in hand is the one filled button in the strip; its kinds live in the tray below. */
+.op-tool-strip > .op-btn[aria-pressed='true'] { background: var(--color-accent); color: var(--color-on-accent); }
+.op-tool-strip > .op-btn[aria-pressed='true']:hover { background: var(--color-accent-hover); }
 .op-assistant-btn { position: relative; gap: 8px; padding: 0 14px; font-weight: 600; }
+@media (max-width: 1439px) { .op-assistant-btn { padding: 0; width: 52px; } }
+@media (max-width: 640px) { .op-assistant-btn { width: 44px; } }
 .op-assistant-btn.is-open { background: var(--color-accent); color: var(--color-on-accent); }
 .op-assistant-btn.is-open:hover { background: var(--color-accent-hover); }
 .op-assistant-btn .op-dot { position: absolute; top: 8px; right: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-accent); box-shadow: 0 0 0 2px var(--color-surface-raised); }

@@ -3,6 +3,7 @@
   import {
     activeFloor, selectedTool, placingDoorType, placingWindowType, placingFurnitureId, placingRotation,
     placingStair, placingColumn, placingColumnShape, constraintPickMode, removeMeasurement, beginUndoGroup, endUndoGroup,
+    activateMeasurementTool,
   } from '$lib/stores/project';
   import type { Door, Window as Win } from '$lib/models/types';
   import { projectSettings, formatLength } from '$lib/stores/settings';
@@ -12,10 +13,10 @@
   import { roomPresetLabels, roomTemplateLabels } from '$lib/i18n/roomLabels';
   import { roomPresets } from '$lib/utils/roomPresets';
   import { roomTemplates } from '$lib/utils/roomTemplates';
-  import { toolGroup, finishTool, chooseGroup } from './tools';
-  import { placeRoomShape } from './actions';
+  import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs } from './tools';
+  import { placeRoomShape, traceImage } from './actions';
   import Keypad from './Keypad.svelte';
-  import Icon from './Icon.svelte';
+  import Icon, { type IconName } from './Icon.svelte';
 
   const DOOR_TYPES: { type: Door['type']; width: number }[] = [
     { type: 'single', width: 90 }, { type: 'double', width: 150 }, { type: 'sliding', width: 180 }, { type: 'french', width: 150 },
@@ -26,6 +27,42 @@
   ];
   const DOOR_LABEL: Record<Door['type'], TranslationKey> = { single: 'openingCatalog.single', double: 'openingCatalog.double', sliding: 'openingCatalog.sliding', french: 'openingCatalog.french', balcony: 'openingCatalog.balcony', pocket: 'openingCatalog.pocket', bifold: 'openingCatalog.bifold', opening: 'openingCatalog.doorway', garage: 'openingCatalog.garage' };
   const WINDOW_LABEL: Record<Win['type'], TranslationKey> = { standard: 'openingCatalog.standard', fixed: 'openingCatalog.fixed', casement: 'openingCatalog.casement', sliding: 'openingCatalog.sliding', bay: 'openingCatalog.bay' };
+
+  interface Variant { id: string; icon: IconName; label: TranslationKey; active: boolean; pick: () => void }
+
+  /** The current tool's kinds, shown first in its tray. */
+  let variants = $derived.by((): Variant[] => {
+    switch ($toolGroup) {
+      case 'wall':
+        return [
+          { id: 'straight', icon: 'straight', label: 'chrome.wall.straight', active: $popover !== 'room-shapes', pick: () => { if ($popover === 'room-shapes') togglePopover('room-shapes'); } },
+          { id: 'shape', icon: 'roomShape', label: 'chrome.wall.shape', active: $popover === 'room-shapes', pick: () => togglePopover('room-shapes') },
+          { id: 'trace', icon: 'image', label: 'chrome.wall.trace', active: false, pick: () => traceImage() },
+        ];
+      case 'openings': {
+        const kind = $selectedTool === 'window' ? 'window' : $placingDoorType === 'opening' ? 'opening' : 'door';
+        return [
+          { id: 'door', icon: 'doorSwing', label: 'chrome.openings.door', active: kind === 'door', pick: () => { if ($placingDoorType === 'opening') placingDoorType.set('single'); selectedTool.set('door'); } },
+          { id: 'window', icon: 'windowPane', label: 'chrome.openings.window', active: kind === 'window', pick: () => selectedTool.set('window') },
+          { id: 'opening', icon: 'opening', label: 'chrome.openings.opening', active: kind === 'opening', pick: () => { placingDoorType.set('opening'); selectedTool.set('door'); } },
+        ];
+      }
+      case 'structure':
+        return [
+          { id: 'stairs', icon: 'stairs', label: 'chrome.structure.stairs', active: $placingStair, pick: placeStairs },
+          { id: 'round', icon: 'columnRound', label: 'chrome.structure.round', active: $placingColumn && $placingColumnShape === 'round', pick: () => placeColumn('round') },
+          { id: 'square', icon: 'columnSquare', label: 'chrome.structure.square', active: $placingColumn && $placingColumnShape === 'square', pick: () => placeColumn('square') },
+        ];
+      case 'annotate':
+        return [
+          { id: 'measure', icon: 'measure', label: 'chrome.annotate.measure', active: $selectedTool === 'measure', pick: () => activateMeasurementTool('measure') },
+          { id: 'dimension', icon: 'dimension', label: 'chrome.annotate.dimension', active: $selectedTool === 'annotate', pick: () => activateMeasurementTool('annotate') },
+          { id: 'text', icon: 'text', label: 'chrome.annotate.text', active: $selectedTool === 'text', pick: () => selectedTool.set('text') },
+        ];
+      default:
+        return [];
+    }
+  });
 
   let units = $derived($projectSettings.units);
   const len = (cm: number) => formatLength(cm, units);
@@ -63,12 +100,24 @@
     : null);
 </script>
 
+{#snippet options()}
+  {#if variants.length}
+    <div class="op-seg shrink-0" role="group" aria-label={$t('chrome.tools')} data-tool-options>
+      {#each variants as variant (variant.id)}
+        <button aria-pressed={variant.active} aria-label={$t(variant.label)} title={$t(variant.label)} data-variant={variant.id} onclick={variant.pick}>
+          <Icon name={variant.icon} size={18} /><span class="max-md:hidden">{$t(variant.label)}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet done(label: TranslationKey = 'chrome.done')}
   <button class="op-btn is-primary" onclick={finishTool} data-tray-done>{$t(label)}</button>
 {/snippet}
 
 {#snippet hint(key: TranslationKey | string, vars: Record<string, string | number> = {})}
-  <span class="text-sm px-2 whitespace-nowrap max-md:hidden" style="color:var(--color-text-muted)">{$t(key as TranslationKey, vars)}</span>
+  <span class="text-sm px-2 whitespace-nowrap {variants.length ? 'max-xl:hidden' : 'max-md:hidden'}" style="color:var(--color-text-muted)">{$t(key as TranslationKey, vars)}</span>
 {/snippet}
 
 {#if pickHint}
@@ -79,7 +128,8 @@
   </div>
 {:else if $toolGroup === 'wall'}
   <div class="flex flex-col items-center gap-2 max-w-full">
-    <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2 max-w-full overflow-x-auto" data-tool-tray>
+    <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full overflow-x-auto" data-tool-tray>
+      {@render options()}
       {#if !draft}
         {@render hint('chrome.hint.firstCorner')}
       {:else}
@@ -138,9 +188,11 @@
 {:else if $toolGroup === 'openings'}
   {@const isWindow = $selectedTool === 'window'}
   {@const isOpening = !isWindow && $placingDoorType === 'opening'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2 max-w-full" data-tool-tray>
+  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
+    {@render options()}
     {@render hint(isWindow ? 'chrome.hint.placeWindow' : isOpening ? 'chrome.hint.placeOpening' : 'chrome.hint.placeDoor')}
     {#if !isOpening}
+      <div class="op-divider-v !mx-0"></div>
       <div class="op-seg overflow-x-auto min-w-0">
         {#if isWindow}
           {#each WINDOW_TYPES as item}
@@ -160,12 +212,14 @@
     {@render done()}
   </div>
 {:else if $toolGroup === 'structure'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2" data-tool-tray>
+  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
+    {@render options()}
     {@render hint($placingStair ? 'chrome.hint.placeStairs' : 'chrome.hint.placeColumn')}
     {@render done()}
   </div>
 {:else if $toolGroup === 'annotate'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2" data-tool-tray>
+  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
+    {@render options()}
     {#if $selectedTool === 'measure'}
       {@render hint('chrome.hint.measure')}
       <button class="op-btn is-outline" disabled={!measurementCount} onclick={clearMeasurements}>{$t('chrome.annotate.clear', { count: measurementCount })}</button>
@@ -183,9 +237,15 @@
     <button class="op-btn is-outline" onclick={() => catalogOpen.set(true)}><Icon name="sofa" size={18} />{$t('chrome.furniture.catalog')}</button>
     {@render done()}
   </div>
-{:else if $toolGroup === 'select' && $selectMode !== 'tap'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2" data-tool-tray>
-    {@render hint($selectMode === 'box' ? 'chrome.hint.box' : 'chrome.hint.add')}
-    <button class="op-btn is-primary" onclick={() => selectMode.set('tap')}>{$t('chrome.done')}</button>
+{:else if $toolGroup === 'select'}
+  <!-- Plain tapping is Select itself; Box and Add switch on for a while and off again. -->
+  <div class="op-float op-enter flex items-center gap-1.5 p-1.5 max-w-full" data-tool-tray>
+    {#each [{ mode: 'box', icon: 'box' }, { mode: 'add', icon: 'plus' }] as const as option (option.mode)}
+      {@const on = $selectMode === option.mode}
+      <button class="op-btn" aria-pressed={on} title={$t(`chrome.hint.${option.mode}`)} data-variant={option.mode} onclick={() => selectMode.set(on ? 'tap' : option.mode)}>
+        <Icon name={option.icon} size={18} />{$t(`chrome.select.${option.mode}`)}
+      </button>
+    {/each}
+    {#if $selectMode !== 'tap'}{@render hint($selectMode === 'box' ? 'chrome.hint.box' : 'chrome.hint.add')}{/if}
   </div>
 {/if}

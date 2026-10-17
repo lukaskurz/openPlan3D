@@ -90,6 +90,9 @@
   let isPanning = $state(false);
   let panStartX = 0;
   let panStartY = 0;
+  // Look around (pan mode): every press pans, and a press that never moves is a tap that selects what is under it.
+  let viewTapStart: { x: number; y: number } | null = null;
+  let viewTap = false;
   let spaceDown = $state(false);
   let shiftDown = $state(false);
 
@@ -2619,7 +2622,8 @@
     canvasGestureActive = true;
     canvasPressPosition = { x: e.clientX, y: e.clientY };
     const addToSelection = e.shiftKey || currentSelectMode === 'add';
-    if (e.button === 0 && addToSelection && currentTool === 'select' && currentFloor && !spaceDown && !$panMode) {
+    const panning = $panMode && !viewTap;
+    if (e.button === 0 && addToSelection && currentTool === 'select' && currentFloor && !spaceDown && !panning) {
       const rect = canvas.getBoundingClientRect();
       const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const measurement = hitTestMeasurement(wp, currentFloor);
@@ -2638,10 +2642,11 @@
         return;
       }
     }
-    if (e.button === 1 || (e.button === 0 && (spaceDown || $panMode || (e.shiftKey && currentTool === 'select')))) {
+    if (e.button === 1 || (e.button === 0 && (spaceDown || panning || (e.shiftKey && currentTool === 'select')))) {
       isPanning = true;
       panStartX = e.clientX;
       panStartY = e.clientY;
+      viewTapStart = e.button === 0 && panning && !spaceDown ? { x: e.clientX, y: e.clientY } : null;
       return;
     }
     if (e.button !== 0) return;
@@ -3043,7 +3048,15 @@
           return;
         }
         const room = findRoomLabelAt(wp) ?? findRoomAt(wp);
-        if (room) {
+        if (room && touchPress === 'finger' && currentSelectMode === 'tap' && get(selectedRoomId) !== room.id) {
+          // A room is most of the plan: a finger only moves one that is already selected. Until then
+          // the press moves the view, and a tap selects the room on release.
+          isPanning = true;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          touchPanFromEmpty = true;
+          touchPanRoomId = room.id;
+        } else if (room) {
           selectedRoomId.set(room.id);
           selectedElementId.set(null);
           selectedElementIds.set(new Set());
@@ -3083,6 +3096,8 @@
   }
 
   function onDblClick(e: MouseEvent) {
+    // Looking around never opens editing (renaming a room, finishing walls).
+    if ($panMode) return;
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -3515,6 +3530,20 @@
 
   function onMouseUp(e: MouseEvent) {
     markDirty();
+    const tap = viewTapStart;
+    viewTapStart = null;
+    if (tap && isPanning && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) <= 6) {
+      // A tap while looking around: select like the Select tool would, with nothing left to drag.
+      isPanning = false;
+      canvasGestureActive = false;
+      viewTap = true;
+      try {
+        const press = { clientX: e.clientX, clientY: e.clientY, button: 0, detail: 1 };
+        onMouseDown(new MouseEvent('mousedown', press));
+        onMouseUp(new MouseEvent('mouseup', press));
+      } finally { viewTap = false; }
+      return;
+    }
     canvasGestureActive = false;
     isPanning = false;
     draggingGuideId = null;
@@ -3712,8 +3741,9 @@
   /** Set while a synthetic mouse event from a touch is being handled: 'finger' or 'pen'. */
   let touchPress: 'finger' | 'pen' | null = null;
   let touchKind: 'finger' | 'pen' = 'finger';
-  /** A finger press on empty plan that became a pan; a tap without movement deselects. */
+  /** A finger press on empty plan (or on a room not yet selected) that became a pan; a tap without movement deselects (or selects that room). */
   let touchPanFromEmpty = false;
+  let touchPanRoomId: string | null = null;
   // Long-press opens the actions menu for that spot.
   const HOLD_MS = 550;
   let holdTimer: ReturnType<typeof setTimeout> | null = null;
@@ -3750,6 +3780,7 @@
       singleTouchMoved = false;
       holdFired = false;
       touchPanFromEmpty = false;
+      touchPanRoomId = null;
       // Apple Pencil reports itself as a stylus; it drag-selects instead of panning.
       touchKind = (touch as Touch & { touchType?: string }).touchType === 'stylus' ? 'pen' : 'finger';
       dispatchMouse('mousedown', touch.clientX, touch.clientY);
@@ -3857,9 +3888,10 @@
         if (!singleTouchMoved && currentTool === 'select' && currentSelectMode === 'tap') {
           selectedElementId.set(null);
           selectedElementIds.set(new Set());
-          selectedRoomId.set(null);
+          selectedRoomId.set(touchPanRoomId);
           clearAuxiliarySelection();
         }
+        touchPanRoomId = null;
       }
       if (singleTouchMoved) { lastTapTime = 0; return; }
       // Synthesize click so document-level click-outside handlers (menus) fire

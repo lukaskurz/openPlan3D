@@ -5,6 +5,9 @@
   import { tick } from 'svelte';
   import Icon from '$lib/components/chrome/Icon.svelte';
 
+  /** `bare` drops the trigger's own card, for when it sits inside another one. */
+  let { bare = false }: { bare?: boolean } = $props();
+
   let open = $state(false);
   let menuRef: HTMLDivElement | undefined = $state();
   let renamingId = $state<string | null>(null);
@@ -88,7 +91,7 @@
 <div class="relative shrink-0" bind:this={menuRef}>
   <button
     onclick={toggle}
-    class="op-float op-btn is-big gap-1 pl-3.5 pr-2.5"
+    class="{bare ? 'op-btn' : 'op-float op-btn is-big'} gap-1 pl-3.5 pr-2.5"
     title={$t('alternatives.title')}
     aria-label={$t('alternatives.title')}
     aria-expanded={open}
@@ -99,7 +102,7 @@
   </button>
 
   {#if open}
-    <div class="op-popover op-enter absolute left-0 top-full mt-2 w-[22rem] max-w-[calc(100vw-2rem)] z-50 overflow-hidden" role="menu">
+    <div class="op-popover op-enter absolute left-0 top-full {bare ? 'mt-3' : 'mt-2'} w-[22rem] max-w-[calc(100vw-2rem)] z-50 overflow-hidden" role="menu">
       <div class="op-menu pb-0">
         <button class="op-menu-item" style="color:var(--color-accent-text)" onclick={branch} role="menuitem">
           <span class="w-11 h-11 rounded-lg flex items-center justify-center shrink-0" style="background:var(--color-accent-subtle)"><Icon name="plus" /></span>

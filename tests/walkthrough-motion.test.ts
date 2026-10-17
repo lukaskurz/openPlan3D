@@ -73,16 +73,14 @@ describe('walkthrough cadence', () => {
     expect(motion.active).toBe(false);
   });
 
-  it('stops keyboard look immediately on release without inventing look momentum', () => {
-    const motion = new WalkthroughMotion(), camera = new PerspectiveCamera();
-    motion.setKey('KeyA', true); motion.startClock(0);
-    motion.advance(100, camera, settings);
-    expect(motion.active).toBe(true);
-    motion.setKey('KeyA', false);
-    expect(motion.active).toBe(false);
-    const rotation = camera.quaternion.clone();
-    motion.stopClock(); motion.advance(60_000, camera, settings);
-    expect(camera.quaternion.equals(rotation)).toBe(true);
+  it('moves with WASD exactly like the arrow keys and never turns the camera', () => {
+    for (const [wasd, arrow] of [['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown'], ['KeyA', 'ArrowLeft'], ['KeyD', 'ArrowRight']]) {
+      const camera = run(60, [wasd]);
+      expect(camera.position.distanceTo(run(60, [arrow]).position)).toBeLessThan(1e-9);
+      expect(camera.quaternion.equals(new PerspectiveCamera().quaternion)).toBe(true);
+    }
+    expect(-run(60, ['KeyW']).position.z).toBeCloseTo(72.0003632, 6);
+    expect(run(60, ['KeyD']).position.x).toBeCloseTo(72.0003632, 6);
   });
 
   it('reset drops all animation demand and ignores repeats after focus loss', () => {
@@ -98,7 +96,7 @@ describe('walkthrough cadence', () => {
   for (const [name, keys, coast] of [
     ['walking', ['ArrowUp'], false],
     ['diagonal sprint', ['ArrowUp', 'ArrowRight', 'ShiftLeft'], false],
-    ['turning while walking', ['ArrowUp', 'KeyA'], false],
+    ['strafing while walking', ['KeyW', 'KeyA'], false],
     ['released momentum', ['ArrowUp'], true],
   ] as const) {
     it.each([30, 120])(`${name} travels the same path at %s Hz as at 60 Hz`, hz => {
@@ -183,12 +181,23 @@ describe('walkthrough cadence', () => {
     expect(camera.position.z).toBeLessThan(-2);
   });
 
-  it('turns at two radians per second and clamps pitch without changing eye height', () => {
-    const yaw = new Euler().setFromQuaternion(run(120, ['KeyA']).quaternion, 'YXZ');
-    expect(yaw.y).toBeCloseTo(2, 8);
-    const camera = run(30, ['KeyW']);
-    const pitch = new Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-    expect(pitch.x).toBeCloseTo(Math.PI / 2, 8);
+  it('walks along the mouse-look heading without changing eye height', () => {
+    const motion = new WalkthroughMotion(), camera = new PerspectiveCamera();
+    camera.quaternion.setFromEuler(new Euler(-0.4, Math.PI / 2, 0, 'YXZ')); // facing -x, looking down
+    motion.setKey('KeyW', true);
+    motion.advance(0, camera, settings);
+    for (let frame = 1; frame <= 60; frame++) motion.advance(frame * 1000 / 60, camera, settings);
+    expect(-camera.position.x).toBeCloseTo(72.0003632, 6);
+    expect(camera.position.z).toBeCloseTo(0, 9);
     expect(camera.position.y).toBe(585.5);
+  });
+
+  it('routes every step through the collision callback', () => {
+    const motion = new WalkthroughMotion(), camera = new PerspectiveCamera();
+    const wall = { ...settings, collide: (_: unknown, to: { x: number; z: number }) => ({ x: to.x, z: Math.max(to.z, -30) }) };
+    motion.setKey('KeyW', true);
+    motion.advance(0, camera, wall);
+    for (let frame = 1; frame <= 120; frame++) motion.advance(frame * 1000 / 60, camera, wall);
+    expect(camera.position.z).toBe(-30);
   });
 });

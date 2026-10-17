@@ -14,6 +14,6 @@
   data-assistant-button
 >
   <Icon name="sparkles" size={22} />
-  <span class="max-lg:hidden">{$t('chrome.assistant.title')}</span>
+  <span class="max-[1439px]:hidden">{$t('chrome.assistant.title')}</span>
   {#if $previewActive && !$assistantOpen}<span class="op-dot"></span>{/if}
 </button>

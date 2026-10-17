@@ -1,25 +1,36 @@
 import { derived, get } from 'svelte/store';
 import {
   selectedTool, placingStair, placingColumn, placingColumnShape, placingFurnitureId, placingEntourageId,
-  placingDoorType, constraintPickMode, calibrationMode, activateMeasurementTool, elevationPickMode,
+  placingDoorType, constraintPickMode, calibrationMode, activateMeasurementTool, elevationPickMode, panMode,
 } from '$lib/stores/project';
 import { catalogOpen, closePopover } from '$lib/stores/chrome';
 import { selectMode } from '$lib/stores/planView';
 
-/** The six tools in the strip. Each opens into its own options. */
-export type ToolGroup = 'select' | 'wall' | 'openings' | 'structure' | 'annotate' | 'furniture';
+/**
+ * The tools in the strip. View moves around and taps to look at things without
+ * dragging anything; Select edits. The drawing tools open into their own options.
+ */
+export type ToolGroup = 'view' | 'select' | 'wall' | 'openings' | 'structure' | 'annotate' | 'furniture';
 
 export const toolGroup = derived(
-  [selectedTool, placingStair, placingColumn, catalogOpen, placingFurnitureId],
-  ([$tool, $stair, $column, $catalog, $placing]): ToolGroup => {
+  [selectedTool, placingStair, placingColumn, catalogOpen, placingFurnitureId, panMode],
+  ([$tool, $stair, $column, $catalog, $placing, $pan]): ToolGroup => {
     if ($stair || $column) return 'structure';
     if ($tool === 'door' || $tool === 'window') return 'openings';
     if ($tool === 'measure' || $tool === 'annotate' || $tool === 'text') return 'annotate';
     if ($tool === 'furniture' || $catalog || $placing) return 'furniture';
     if ($tool === 'wall') return 'wall';
-    return 'select';
+    return $pan ? 'view' : 'select';
   },
 );
+
+/** View or Select, whichever the person last chose: where Done goes back to. */
+let homeGroup: 'view' | 'select' = 'select';
+
+/** Touch screens start in View, so moving around the plan never drags a wall by accident. */
+export function startingGroup(): 'view' | 'select' {
+  return typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches ? 'view' : 'select';
+}
 
 /** Leave every placing mode so the next tool starts clean. */
 export function clearPlacing() {
@@ -35,7 +46,14 @@ export function clearPlacing() {
 export function chooseGroup(group: ToolGroup) {
   closePopover();
   if (group !== 'furniture') catalogOpen.set(false);
+  panMode.set(group === 'view');
+  if (group === 'view' || group === 'select') homeGroup = group;
   switch (group) {
+    case 'view':
+      clearPlacing();
+      selectMode.set('tap');
+      selectedTool.set('select');
+      break;
     case 'select':
       clearPlacing();
       selectMode.set('tap');
@@ -68,6 +86,7 @@ export function chooseGroup(group: ToolGroup) {
 
 export function placeColumn(shape: 'round' | 'square') {
   placingStair.set(false);
+  panMode.set(false);
   placingColumnShape.set(shape);
   placingColumn.set(true);
   selectedTool.set('select');
@@ -75,11 +94,12 @@ export function placeColumn(shape: 'round' | 'square') {
 
 export function placeStairs() {
   placingColumn.set(false);
+  panMode.set(false);
   placingStair.set(true);
   selectedTool.set('select');
 }
 
-/** Done: back to Select with nothing armed. */
+/** Done: back to View or Select with nothing armed. */
 export function finishTool() {
-  chooseGroup('select');
+  chooseGroup(homeGroup);
 }

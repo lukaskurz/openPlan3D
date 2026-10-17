@@ -37,7 +37,7 @@
   import SketchLayer from './SketchLayer.svelte';
   import CheckBar from './CheckBar.svelte';
   import { discardProposal } from '$lib/assistant/session';
-  import { toolGroup } from './tools';
+  import { toolGroup, chooseGroup, startingGroup } from './tools';
   import Icon from './Icon.svelte';
 
   let errorMessage = $state<string | null>(null);
@@ -47,7 +47,7 @@
   let floorBelow = $derived(getFloorBelow($currentProject));
   let emptyPlan = $derived(plan && !!$floorView && !hasPlanContent($floorView)
     && !($layerVisibility.floorBelow && floorBelow && hasPlanContent(floorBelow))
-    && $toolGroup === 'select' && !$catalogOpen && !$popover && !$assistantOpen);
+    && ($toolGroup === 'select' || $toolGroup === 'view') && !$catalogOpen && !$popover && !$assistantOpen);
   let historyOpen = $derived($popover === 'history');
 
   // The top row holds the project, the tool strip and the view controls side by side when they fit;
@@ -88,6 +88,7 @@
 
   onMount(() => {
     const stopAutoSave = initAutoSave();
+    if (get(toolGroup) === 'select') chooseGroup(startingGroup());
     initVersionHistory();
     const openSettings = () => { if (!hasOpenModal()) dialog.set('settings'); };
     window.addEventListener('open-settings', openSettings);
