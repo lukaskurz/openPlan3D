@@ -313,10 +313,13 @@ html.dark {
 .op-seg.is-small > button { height: 30px; font-size: 12px; }
 .op-seg.is-tall > button { height: 44px; }
 
-/* The Plan · Elevation · 3D switch uses an inverted active segment. */
+/* The 2D · 3D switch uses an inverted active segment; each segment is an icon plus its label. */
 .op-mode > button {
   height: 44px;
   padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -515,62 +518,232 @@ html, body { overscroll-behavior: none; }
 .op-chrome, .op-float, .op-popover, .op-pill, canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 .op-chrome :where(input, textarea, [contenteditable]), .op-assistant-thread, .op-popover :where(input, textarea) { -webkit-user-select: text; user-select: text; }
 .op-chrome :where(.op-float, .op-popover, .op-pill, button, a, input) { pointer-events: auto; }
+/* Top bar: the corner groups pin to the corners (what am I editing / how am I looking at it). */
 .op-top {
   position: absolute;
   left: var(--chrome-inset);
   right: var(--chrome-inset);
   top: var(--chrome-inset);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  grid-template-areas: 'left center right';
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: 'left right';
   align-items: start;
   gap: 10px;
 }
 .op-top > .op-left { grid-area: left; justify-self: start; min-width: 0; }
-.op-top > .op-center { grid-area: center; display: flex; flex-direction: column; align-items: center; gap: 10px; min-width: 0; max-width: 100%; }
 .op-top > .op-right { grid-area: right; justify-self: end; }
-/* When the corners and the tool strip don't fit side by side (measured in EditorChrome),
-   the tool strip gets its own row under the corners. */
-.op-chrome.is-stacked .op-top { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'left right' 'center center'; }
-.op-left-rail { position: absolute; left: var(--chrome-inset); top: 50%; transform: translateY(-50%); }
-.op-left-rail.above-sheet { top: auto; bottom: calc(var(--sheet-inset) + 12px); transform: none; }
+/* The tool bars are centred on the window as a pair, whatever the corners hold; the save banner,
+   tool tray and check bar hang below them. When the pair would touch a corner group (measured in
+   EditorChrome), it moves to a second row: inset + 52 px corner row + 12 px. */
+.op-center {
+  position: absolute;
+  left: var(--chrome-inset);
+  right: var(--chrome-inset);
+  top: var(--chrome-inset);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.op-center.is-below { top: calc(var(--chrome-inset) + 52px + 12px); }
+.op-tool-pair { position: relative; display: flex; align-items: center; gap: 10px; max-width: 100%; }
+/* The Assistant sits 8 px right of the pair and is not part of its centring. */
+.op-tool-pair > .op-assistant-slot { position: absolute; left: calc(100% + 8px); top: 0; }
+.op-tool-bar { flex-shrink: 0; }
+/* The tool in hand is the one filled button in either bar. */
+.op-tool-bar .op-btn[data-tool][aria-pressed='true'] { background: var(--color-accent); color: var(--color-on-accent); }
+.op-tool-bar .op-btn[data-tool][aria-pressed='true']:hover { background: var(--color-accent-hover); }
+/* The trade button is tinted so it never reads as a tool; a small chevron says it opens a menu. */
+.op-btn.op-trade-btn { position: relative; width: 52px; padding: 0; background: var(--color-accent-subtle); color: var(--color-accent-text-strong); }
+.op-btn.op-trade-btn:hover { background: var(--color-accent-subtle-strong); }
+.op-btn.op-trade-btn[aria-expanded='true'] { box-shadow: inset 0 0 0 2px var(--color-accent); }
+.op-corner-chevron { position: absolute; right: 4px; bottom: 4px; pointer-events: none; }
+/* Version badge: the alternative's short code. */
+.op-version-badge {
+  flex: none;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+  color: var(--color-text-strong);
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.op-version-badge.is-current { background: var(--color-accent); color: var(--color-on-accent); }
+.op-elements-panel { top: 84px; }
+.op-chrome.is-stacked ~ .op-elements-panel { top: 146px; }
+/* Phones: the two bars cannot sit side by side, so they wrap under each other with the Assistant. */
+@media (max-width: 640px) {
+  .op-center.is-below { top: calc(var(--chrome-inset) + 44px + 8px); }
+  .op-tool-pair { flex-wrap: wrap; justify-content: center; }
+  .op-tool-pair > .op-assistant-slot { position: static; }
+}
+/* Floor rail: vertically centred on the left edge, clear of the top and bottom bars. When it is taller
+   than the room between them (many storeys), the storey list scrolls inside it. */
+.op-left-rail {
+  --rail-clear-top: 84px;     /* inset + 52 px top row + gap */
+  /* inset + the bottom bar's measured height (EditorChrome sets --op-bottom-bar-h) + gap */
+  --rail-clear-bottom: calc(var(--chrome-inset) + var(--op-bottom-bar-h, 56px) + 12px);
+  position: absolute; left: var(--chrome-inset); top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column;
+  max-height: calc(100% - 2 * max(var(--rail-clear-top), var(--rail-clear-bottom)));
+}
+.op-chrome.is-stacked .op-left-rail { --rail-clear-top: 148px; }
+/* Portrait: the action slot gets its own row above the bottom corners. */
+@media (max-width: 1000px) { .op-left-rail { --rail-clear-bottom: calc(var(--chrome-inset) + var(--op-bottom-bar-h, 120px) + 12px); } }
+/* With the inspector sheet open the bottom bar sits on top of the sheet, so the rail goes above both. */
+.op-left-rail.above-sheet {
+  --rail-sheet-bottom: calc(var(--sheet-inset) + 12px + var(--op-bottom-bar-h, 68px) + 12px);
+  top: auto; bottom: var(--rail-sheet-bottom); transform: none;
+  max-height: calc(100% - var(--rail-sheet-bottom) - var(--rail-clear-top));
+}
+.op-rail-wrap { position: relative; display: flex; flex-direction: column; min-height: 0; }
+.op-rail { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 60px; padding: 3px; min-height: 0; }
+.op-rail-btn { flex: none; width: 52px; padding: 0; font-size: 15px; }
+.op-rail-divider { flex: none; width: 28px; height: 1px; margin: 3px 0; background: var(--color-border); }
+.op-rail-storeys { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; }
+.op-rail-storeys::-webkit-scrollbar { display: none; }
+/* The current storey: its letter, then its ceiling above its floor, held together by one tinted outline. */
+.op-rail-current {
+  flex: none; display: flex; flex-direction: column; align-items: center; gap: 2px;
+  width: 52px; padding: 3px;
+  border: 1px solid var(--color-accent); border-radius: var(--radius-xl);
+  background: var(--color-accent-subtle);
+}
+.op-rail-current > .op-rail-btn { width: 44px; color: var(--color-accent-text-strong); font-weight: 700; }
+.op-rail-current > .op-rail-btn:hover, .op-rail-current > .op-rail-btn[aria-expanded='true'] { background: var(--color-accent-subtle-strong); }
+.op-rail-current > .op-rail-surface { color: var(--color-text-secondary); }
+.op-rail-current > .op-rail-surface[aria-pressed='true'] { background: var(--color-accent); color: var(--color-on-accent); }
+/* Rail popovers open to the right, toward the plan; above the sheet they grow upward. */
+.op-rail-popover { position: absolute; left: calc(100% + 12px); top: 0; z-index: 50; }
+.op-left-rail.above-sheet .op-rail-popover { top: auto; bottom: 0; }
+/* Bottom bar: time (undo, redo, history) left, the action slot truly centred, precision (scale, settings)
+   right. The corners never shrink below their content and the slot only takes what is left, so the
+   slot can never run under a corner: wide slot content scrolls inside the slot instead. */
 .op-bottom {
   position: absolute;
   left: var(--chrome-inset);
   right: var(--chrome-inset);
   bottom: var(--chrome-inset);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, max-content) minmax(max-content, 1fr);
+  grid-template-areas: 'left center right';
   align-items: end;
   gap: 10px;
 }
-.op-bottom > :first-child { justify-self: start; display: flex; min-width: 0; max-width: 100%; }
-.op-bottom > :nth-child(2) { justify-self: center; margin-bottom: 8px; }
-.op-bottom > :last-child { justify-self: end; }
-.op-bottom.is-history { grid-template-columns: minmax(0, 1fr); }
-.op-bottom.is-history > :first-child { justify-self: stretch; }
+/* Above the inspector's bottom sheet when that is open (portrait). */
+.op-bottom.above-sheet { bottom: calc(var(--sheet-inset) + 12px); }
+.op-bottom-left { grid-area: left; justify-self: start; display: flex; min-width: 0; max-width: 100%; }
+.op-bottom-center { grid-area: center; justify-self: center; display: flex; justify-content: center; min-width: 0; max-width: 100%; }
+.op-bottom-right { grid-area: right; justify-self: end; display: flex; }
+/* The history timeline takes the whole row while it is open. */
+.op-bottom.is-history { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'left'; }
+.op-bottom.is-history > .op-bottom-left { justify-self: stretch; }
+/* Portrait: the action slot gets its own row above the two corner clusters. */
 @media (max-width: 1000px) {
-  .op-bottom { grid-template-columns: auto minmax(0, 1fr); }
-  .op-bottom > :nth-child(2) { display: none; }
+  .op-bottom { grid-template-columns: minmax(max-content, 1fr) minmax(max-content, 1fr); grid-template-areas: 'center center' 'left right'; }
+}
+
+/* ── Action slot ───────────────────────────────────────────── */
+/* A bar in the slot with its popovers stacked above it; the bar scrolls sideways when it is too wide. */
+.op-slot-stack { position: relative; display: flex; flex-direction: column; align-items: center; min-width: 0; max-width: 100%; }
+.op-slot-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  min-width: 0;
+  max-width: min(100%, calc(100vw - 2 * var(--chrome-inset)));
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.op-slot-bar::-webkit-scrollbar { display: none; }
+.op-slot-bar > * { flex-shrink: 0; }
+.op-slot-bar > .op-divider-v { margin: 0 2px; }
+/* Popovers from the slot open upward, centred on it, never wider or taller than the screen allows. */
+.op-slot-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  width: max-content;
+  max-width: calc(100vw - 2 * var(--chrome-inset));
+  max-height: calc(100dvh - var(--sheet-inset, 0px) - 260px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  pointer-events: auto;
+}
+.op-slot-pop > * { max-width: 100%; }
+/* Hints lead the slot and may wrap to two lines; text lengths differ a lot between languages. */
+.op-slot-hint {
+  flex-shrink: 1 !important;
+  min-width: 8rem;
+  max-width: 18rem;
+  padding: 0 8px;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--color-text-secondary);
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.op-slot-status { padding: 0 10px; font-size: 13px; color: var(--color-text-tertiary); white-space: nowrap; line-height: 44px; }
+.op-slot-bar.is-status { padding-top: 4px; padding-bottom: 4px; }
+/* Selection actions: 56 px icon-over-label buttons after the dimension chip. */
+.op-sel-bar { padding: 6px; }
+.op-sel-bar .op-action { height: 56px; }
+.op-sel-bar .op-value-chip {
+  height: 56px;
+  max-width: 300px;
+  background: var(--color-accent-subtle);
+  box-shadow: inset 0 0 0 1.5px var(--color-accent);
+}
+.op-sel-bar .op-value-chip[aria-expanded='true'] { box-shadow: inset 0 0 0 2.5px var(--color-accent); }
+.op-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.op-chip-value { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+/* ── Bottom-right: scale readout and settings ──────────────── */
+.op-scale-btn { min-width: 76px; padding: 0 10px; gap: 6px; font-variant-numeric: tabular-nums; }
+/* Corner popovers open upward, toward the screen centre. */
+.op-corner-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 16px);
+  z-index: 50;
+  max-width: calc(100vw - 2 * var(--chrome-inset));
+  max-height: calc(100dvh - var(--sheet-inset, 0px) - 200px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 /* The inspector floats on the right; on narrow screens it becomes a sheet above the bottom bar. */
 .op-inspector { right: var(--chrome-inset); width: 340px; top: 150px; bottom: 92px; }
 @media (max-width: 1000px) {
-  .op-inspector { left: var(--chrome-inset); width: auto; top: auto; bottom: 84px; max-height: 46dvh; }
+  /* The bottom bar rises above the sheet (EditorChrome), so the sheet sits at the bottom edge. */
+  .op-inspector { left: var(--chrome-inset); width: auto; top: auto; bottom: var(--chrome-inset); max-height: 46dvh; }
 }
 @media (max-width: 640px) {
-  .op-left-rail { top: auto; bottom: 76px; transform: none; }
+  .op-left-rail { top: auto; bottom: var(--rail-clear-bottom); transform: none; max-height: calc(100% - var(--rail-clear-bottom) - var(--rail-clear-top)); }
+  .op-left-rail .op-rail-popover { top: auto; bottom: 0; }
 }
 
-/* ── Phones: smaller corner buttons, pinch replaces the zoom buttons ── */
+/* ── Phones: smaller corner buttons ── */
 @media (max-width: 640px) {
   .op-btn.is-big, .op-float.op-btn.is-big { height: 44px; min-width: 44px; }
   .op-top .op-float.op-btn[style*='width'] { width: 44px !important; height: 44px !important; }
   .op-top [data-project-card] { height: 44px; padding: 2px; }
   .op-mode > button { height: 36px; padding: 0 9px; font-size: 13px; }
-  [data-bottom-bar] .op-zoom { display: none; }
-  [data-selection-bar] > .op-float { max-width: calc(100vw - 16px); overflow-x: auto; }
   .op-action { min-width: 52px; }
 }
 
@@ -582,10 +755,13 @@ html, body { overscroll-behavior: none; }
 .op-chrome.is-stacked ~ .op-assistant { top: 146px; }
 /* Wide: the bottom bar stops short of the panel. Narrow: the panel stops above the bottom bar. */
 @media (min-width: 1001px) {
-  .op-chrome.has-assistant .op-bottom { right: calc(var(--chrome-inset) * 2 + 404px); grid-template-columns: auto minmax(0, 1fr); }
-  .op-chrome.has-assistant .op-bottom > :nth-child(2) { display: none; }
+  .op-chrome.has-assistant .op-bottom { right: calc(var(--chrome-inset) * 2 + 404px); }
 }
-@media (max-width: 1000px) { .op-assistant { bottom: 84px; } }
+/* --op-bottom-bar-h is the bottom bar's measured height (EditorChrome); two rows in portrait. */
+@media (max-width: 1000px) {
+  .op-assistant { bottom: calc(var(--chrome-inset) + var(--op-bottom-bar-h, 68px) + 12px); }
+  .op-elements-panel { bottom: calc(var(--chrome-inset) + var(--op-bottom-bar-h, 68px) + 12px) !important; }
+}
 @media (max-width: 640px) {
   .op-assistant { left: var(--chrome-inset); width: auto; }
   .op-chrome.has-assistant .op-left-rail { display: none; }
@@ -642,11 +818,6 @@ html, body { overscroll-behavior: none; }
 .op-typing i:nth-child(2) { animation-delay: 0.15s; }
 .op-typing i:nth-child(3) { animation-delay: 0.3s; }
 @keyframes op-typing { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-.op-tool-row { display: flex; align-items: center; gap: 8px; min-width: 0; max-width: 100%; }
-.op-tool-row > [data-tool-strip] { min-width: 0; }
-/* The tool in hand is the one filled button in the strip; its kinds live in the tray below. */
-.op-tool-strip > .op-btn[aria-pressed='true'] { background: var(--color-accent); color: var(--color-on-accent); }
-.op-tool-strip > .op-btn[aria-pressed='true']:hover { background: var(--color-accent-hover); }
 .op-assistant-btn { position: relative; gap: 8px; padding: 0 14px; font-weight: 600; }
 @media (max-width: 1439px) { .op-assistant-btn { padding: 0; width: 52px; } }
 @media (max-width: 640px) { .op-assistant-btn { width: 44px; } }

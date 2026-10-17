@@ -2,18 +2,19 @@
   import { t, locale, type TranslationKey } from '$lib/i18n';
   import {
     activeFloor, selectedTool, placingDoorType, placingWindowType, placingFurnitureId, placingRotation,
-    placingStair, placingColumn, placingColumnShape, constraintPickMode, removeMeasurement, beginUndoGroup, endUndoGroup,
+    placingStair, placingColumn, placingColumnShape, removeMeasurement, beginUndoGroup, endUndoGroup,
     activateMeasurementTool,
   } from '$lib/stores/project';
   import type { Door, Window as Win } from '$lib/models/types';
   import { projectSettings, formatLength } from '$lib/stores/settings';
-  import { planViewApi, wallDraft, selectMode, canvasHint } from '$lib/stores/planView';
+  import { planViewApi, wallDraft, canvasHint } from '$lib/stores/planView';
   import { popover, togglePopover, closePopover, catalogOpen, floorView } from '$lib/stores/chrome';
   import { furnitureName } from '$lib/i18n/furnitureNames';
   import { roomPresetLabels, roomTemplateLabels } from '$lib/i18n/roomLabels';
   import { roomPresets } from '$lib/utils/roomPresets';
   import { roomTemplates } from '$lib/utils/roomTemplates';
   import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs } from './tools';
+  import { hintKey } from './hints';
   import { placeRoomShape, traceImage } from './actions';
   import Keypad from './Keypad.svelte';
   import Icon, { type IconName } from './Icon.svelte';
@@ -95,10 +96,21 @@
     closePopover();
   }
 
-  let pickHint = $derived<TranslationKey | null>($constraintPickMode
-    ? ($constraintPickMode === 'fix' ? 'chrome.hint.pickFix' : $constraintPickMode === 'parallel' || $constraintPickMode === 'perpendicular' ? 'chrome.hint.pickPair' : 'chrome.hint.pickWall')
-    : null);
+  /** What the wall tool asks for next: the first corner, then the next one (or what it snapped to). */
+  let wallHint = $derived<TranslationKey>(!draft ? 'chrome.hint.firstCorner'
+    : draft.nearFirst ? 'chrome.hint.closeRoom'
+    : draft.snappedTo ? (draft.snappedTo === 'corner' ? 'chrome.hint.snappedCorner' : 'chrome.hint.snappedWall')
+    : 'chrome.hint.nextCorner');
+
+  // The tray's popovers (segment keypad, room shapes) close when the plan is tapped.
+  let root: HTMLDivElement | undefined = $state();
+  function onWindowPointerDown(e: PointerEvent) {
+    if (($popover === 'wall-length' || $popover === 'room-shapes') && root && !root.contains(e.target as Node)) closePopover();
+  }
 </script>
+
+<svelte:window onpointerdown={onWindowPointerDown} />
+
 
 {#snippet options()}
   {#if variants.length}
@@ -112,58 +124,37 @@
   {/if}
 {/snippet}
 
-{#snippet done(label: TranslationKey = 'chrome.done')}
-  <button class="op-btn is-primary" onclick={finishTool} data-tray-done>{$t(label)}</button>
+{#snippet done()}
+  <button class="op-btn is-primary shrink-0" onclick={finishTool} data-tray-done>{$t('chrome.done')}</button>
 {/snippet}
 
+<!-- The hint leads the tray and may wrap to two lines, so it never needs hiding on narrow screens. -->
 {#snippet hint(key: TranslationKey | string, vars: Record<string, string | number> = {})}
-  <span class="text-sm px-2 whitespace-nowrap {variants.length ? 'max-xl:hidden' : 'max-md:hidden'}" style="color:var(--color-text-muted)">{$t(key as TranslationKey, vars)}</span>
+  <span class="op-slot-hint" role="status" aria-live="polite" data-status-pill>{$t(hintKey(key), vars)}</span>
 {/snippet}
 
-{#if pickHint}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2 max-w-full" data-tool-tray>
-    <span class="w-2 h-2 rounded-full ml-2" style="background:var(--color-constraint)"></span>
-    <span class="text-sm px-1" style="color:var(--color-text-secondary)">{$t(pickHint)}</span>
-    <button class="op-btn is-outline" onclick={() => constraintPickMode.set(null)}>{$t('chrome.cancel')}</button>
-  </div>
-{:else if $toolGroup === 'wall'}
-  <div class="flex flex-col items-center gap-2 max-w-full">
-    <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full overflow-x-auto" data-tool-tray>
-      {@render options()}
-      {#if !draft}
-        {@render hint('chrome.hint.firstCorner')}
-      {:else}
-        <div class="relative">
-          <button class="op-btn is-outline font-normal {$popover === 'wall-length' ? 'is-active' : ''}" aria-expanded={$popover === 'wall-length'} onclick={() => togglePopover('wall-length')} data-wall-length>
-            {$t('chrome.wall.length')} <b class="tabular-nums" style="color:var(--color-text-strong)">{len(draft.lengthCm)}</b>
-          </button>
-          {#if $popover === 'wall-length'}
-            <div class="absolute left-0 top-full mt-2 z-50">
-              <Keypad title={$t('chrome.wall.nextSegment')} subtitle={$t('chrome.wall.segment', { number: draft.corners })} valueCm={draft.lengthCm || 100} units={units} applyLabel={$t('chrome.wall.placeCorner')} onapply={placeSegment} onclose={closePopover}>
-                <div class="flex gap-2">
-                  <label class="op-field flex-1">
-                    <span class="text-sm" style="color:var(--color-text-muted)">{$t('chrome.wall.angle')}</span>
-                    <input type="number" inputmode="numeric" class="text-right font-semibold" bind:value={keypadAngle} min="0" max="359" />
-                    <span class="op-unit">°</span>
-                  </label>
-                  <div class="op-seg">
-                    {#each [0, 90, 180, 270] as a}
-                      <button class="!px-2 !min-w-9" aria-pressed={keypadAngle === a} onclick={() => keypadAngle = a}>{a}°</button>
-                    {/each}
-                  </div>
-                </div>
-              </Keypad>
-            </div>
-          {/if}
+<!-- The current tool's hint, options and Done, docked in the action slot. Its popovers open upward. -->
+<div class="op-slot-stack" bind:this={root}>
+  {#if $toolGroup === 'wall' && $popover === 'wall-length' && draft}
+    <div class="op-slot-pop">
+      <Keypad title={$t('chrome.wall.nextSegment')} subtitle={$t('chrome.wall.segment', { number: draft.corners })} valueCm={draft.lengthCm || 100} units={units} applyLabel={$t('chrome.wall.placeCorner')} onapply={placeSegment} onclose={closePopover}>
+        <div class="flex gap-2">
+          <label class="op-field flex-1">
+            <span class="text-sm" style="color:var(--color-text-muted)">{$t('chrome.wall.angle')}</span>
+            <input type="number" inputmode="numeric" class="text-right font-semibold" bind:value={keypadAngle} min="0" max="359" />
+            <span class="op-unit">°</span>
+          </label>
+          <div class="op-seg">
+            {#each [0, 90, 180, 270] as a}
+              <button class="!px-2 !min-w-9" aria-pressed={keypadAngle === a} onclick={() => keypadAngle = a}>{a}°</button>
+            {/each}
+          </div>
         </div>
-        <div class="op-btn is-outline font-normal pointer-events-none">{$t('chrome.wall.angle')} <b class="tabular-nums" style="color:var(--color-text-strong)">{angleText}</b></div>
-        <div class="op-divider-v"></div>
-        <button class="op-btn is-outline {draft.nearFirst ? 'is-active' : ''}" disabled={!canClose} onclick={() => $planViewApi?.closeWallLoop()} data-close-loop>{$t('chrome.wall.closeLoop')}</button>
-      {/if}
-      {@render done()}
+      </Keypad>
     </div>
-    {#if $popover === 'room-shapes'}
-      <div class="op-popover op-enter p-3 w-[min(40rem,calc(100vw-2rem))]" data-room-shapes>
+  {:else if $toolGroup === 'wall' && $popover === 'room-shapes'}
+    <div class="op-slot-pop">
+      <div class="op-popover op-enter p-3 w-[min(40rem,calc(100vw-2*var(--chrome-inset)))]" data-room-shapes>
         <div class="op-menu-title !px-1 !pt-0">{$t('chrome.wall.shapesTitle')}</div>
         <div class="grid grid-cols-4 max-sm:grid-cols-3 gap-2">
           {#each roomPresets as preset}
@@ -183,69 +174,79 @@
           {/each}
         </div>
       </div>
-    {/if}
-  </div>
-{:else if $toolGroup === 'openings'}
-  {@const isWindow = $selectedTool === 'window'}
-  {@const isOpening = !isWindow && $placingDoorType === 'opening'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
-    {@render options()}
-    {@render hint(isWindow ? 'chrome.hint.placeWindow' : isOpening ? 'chrome.hint.placeOpening' : 'chrome.hint.placeDoor')}
-    {#if !isOpening}
-      <div class="op-divider-v !mx-0"></div>
-      <div class="op-seg overflow-x-auto min-w-0">
-        {#if isWindow}
-          {#each WINDOW_TYPES as item}
-            <button aria-pressed={$placingWindowType === item.type} onclick={() => placingWindowType.set(item.type)}>
-              {$t(WINDOW_LABEL[item.type])} <span class="text-xs opacity-70 tabular-nums">{len(item.width)}</span>
-            </button>
-          {/each}
-        {:else}
-          {#each DOOR_TYPES as item}
-            <button aria-pressed={$placingDoorType === item.type} onclick={() => placingDoorType.set(item.type)}>
-              {$t(DOOR_LABEL[item.type])} <span class="text-xs opacity-70 tabular-nums">{len(item.width)}</span>
-            </button>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-    {@render done()}
-  </div>
-{:else if $toolGroup === 'structure'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
-    {@render options()}
-    {@render hint($placingStair ? 'chrome.hint.placeStairs' : 'chrome.hint.placeColumn')}
-    {@render done()}
-  </div>
-{:else if $toolGroup === 'annotate'}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 max-w-full" data-tool-tray>
-    {@render options()}
-    {#if $selectedTool === 'measure'}
-      {@render hint('chrome.hint.measure')}
-      <button class="op-btn is-outline" disabled={!measurementCount} onclick={clearMeasurements}>{$t('chrome.annotate.clear', { count: measurementCount })}</button>
-    {:else if $selectedTool === 'annotate'}
-      {@render hint($canvasHint ?? 'dimensionHints.start')}
-    {:else}
-      {@render hint('chrome.hint.text')}
-    {/if}
-    {@render done()}
-  </div>
-{:else if $toolGroup === 'furniture' && $placingFurnitureId && !$catalogOpen}
-  <div class="op-float op-enter flex items-center gap-2 p-1.5 pl-2 max-w-full" data-tool-tray>
-    {@render hint('chrome.hint.placeFurniture', { name: furnitureName($placingFurnitureId, $locale) })}
-    <button class="op-btn is-outline" onclick={() => placingRotation.update(r => (r + 90) % 360)}><Icon name="rotate" size={18} />{$placingRotation}°</button>
-    <button class="op-btn is-outline" onclick={() => catalogOpen.set(true)}><Icon name="sofa" size={18} />{$t('chrome.furniture.catalog')}</button>
-    {@render done()}
-  </div>
-{:else if $toolGroup === 'select'}
-  <!-- Plain tapping is Select itself; Box and Add switch on for a while and off again. -->
-  <div class="op-float op-enter flex items-center gap-1.5 p-1.5 max-w-full" data-tool-tray>
-    {#each [{ mode: 'box', icon: 'box' }, { mode: 'add', icon: 'plus' }] as const as option (option.mode)}
-      {@const on = $selectMode === option.mode}
-      <button class="op-btn" aria-pressed={on} title={$t(`chrome.hint.${option.mode}`)} data-variant={option.mode} onclick={() => selectMode.set(on ? 'tap' : option.mode)}>
-        <Icon name={option.icon} size={18} />{$t(`chrome.select.${option.mode}`)}
-      </button>
-    {/each}
-    {#if $selectMode !== 'tap'}{@render hint($selectMode === 'box' ? 'chrome.hint.box' : 'chrome.hint.add')}{/if}
-  </div>
-{/if}
+    </div>
+  {/if}
+
+  {#if $toolGroup === 'wall'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint(wallHint)}
+      {@render options()}
+      {#if draft}
+        <button class="op-btn is-outline font-normal shrink-0 {$popover === 'wall-length' ? 'is-active' : ''}" aria-expanded={$popover === 'wall-length'} onclick={() => togglePopover('wall-length')} data-wall-length>
+          {$t('chrome.wall.length')} <b class="tabular-nums" style="color:var(--color-text-strong)">{len(draft.lengthCm)}</b>
+        </button>
+        <div class="op-btn is-outline font-normal pointer-events-none shrink-0">{$t('chrome.wall.angle')} <b class="tabular-nums" style="color:var(--color-text-strong)">{angleText}</b></div>
+        <button class="op-btn is-outline shrink-0 {draft.nearFirst ? 'is-active' : ''}" disabled={!canClose} onclick={() => $planViewApi?.closeWallLoop()} data-close-loop>{$t('chrome.wall.closeLoop')}</button>
+      {/if}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'openings'}
+    {@const isWindow = $selectedTool === 'window'}
+    {@const isOpening = !isWindow && $placingDoorType === 'opening'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint(isWindow ? 'chrome.hint.placeWindow' : isOpening ? 'chrome.hint.placeOpening' : 'chrome.hint.placeDoor')}
+      {@render options()}
+      {#if !isOpening}
+        <div class="op-seg shrink-0">
+          {#if isWindow}
+            {#each WINDOW_TYPES as item}
+              <button aria-pressed={$placingWindowType === item.type} onclick={() => placingWindowType.set(item.type)}>
+                {$t(WINDOW_LABEL[item.type])} <span class="text-xs opacity-70 tabular-nums">{len(item.width)}</span>
+              </button>
+            {/each}
+          {:else}
+            {#each DOOR_TYPES as item}
+              <button aria-pressed={$placingDoorType === item.type} onclick={() => placingDoorType.set(item.type)}>
+                {$t(DOOR_LABEL[item.type])} <span class="text-xs opacity-70 tabular-nums">{len(item.width)}</span>
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'structure'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint($placingStair ? 'chrome.hint.placeStairs' : 'chrome.hint.placeColumn')}
+      {@render options()}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'annotate'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {#if $selectedTool === 'measure'}
+        {@render hint('chrome.hint.measure')}
+      {:else if $selectedTool === 'annotate'}
+        {@render hint($canvasHint ?? 'dimensionHints.start')}
+      {:else}
+        {@render hint('chrome.hint.text')}
+      {/if}
+      {@render options()}
+      {#if $selectedTool === 'measure'}
+        <button class="op-btn is-outline shrink-0" disabled={!measurementCount} onclick={clearMeasurements}>{$t('chrome.annotate.clear', { count: measurementCount })}</button>
+      {/if}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'furniture' && $placingFurnitureId && !$catalogOpen}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint('chrome.hint.placeFurniture', { name: furnitureName($placingFurnitureId, $locale) })}
+      <button class="op-btn is-outline shrink-0" onclick={() => placingRotation.update(r => (r + 90) % 360)}><Icon name="rotate" size={18} />{$placingRotation}°</button>
+      <button class="op-btn is-outline shrink-0" onclick={() => catalogOpen.set(true)}><Icon name="sofa" size={18} />{$t('chrome.furniture.catalog')}</button>
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {/if}
+</div>

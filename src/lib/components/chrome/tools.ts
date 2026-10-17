@@ -3,9 +3,12 @@ import { derived, get } from 'svelte/store';
 import {
   selectedTool, placingStair, placingColumn, placingColumnShape, placingFurnitureId, placingEntourageId,
   placingDoorType, constraintPickMode, calibrationMode, activateMeasurementTool, elevationPickMode, panMode,
+  selectedElementId, selectedElementIds, selectedRoomId,
 } from '$lib/stores/project';
 import { catalogOpen, closePopover } from '$lib/stores/chrome';
 import { selectMode } from '$lib/stores/planView';
+import { activeTrade, activeSurface, type Trade } from '$lib/stores/workContext';
+import { contextForTool } from './tradeTools';
 
 /**
  * The tools in the strip. View moves around and taps to look at things without
@@ -24,6 +27,31 @@ export const toolGroup = derived(
     return $pan ? 'view' : 'select';
   },
 );
+
+/**
+ * A tool can be chosen without its trade's bar showing: a shortcut (W, D…), the
+ * command palette or the catalog. The bars then follow the tool, so pressing W
+ * while working on Electrical switches to Furnishing on the floor and its Wall tool.
+ * (Package 3: placing an item from another trade's catalog will refine this.)
+ */
+toolGroup.subscribe(group => {
+  const next = contextForTool(group, get(activeTrade), get(activeSurface));
+  if (!next) return;
+  activeTrade.set(next.trade);
+  activeSurface.set(next.surface);
+});
+
+/** Switch trade (spec §5.1): back to Select with nothing selected, so nothing of the old trade stays in hand. */
+export function switchTrade(trade: Trade): boolean {
+  closePopover();
+  if (get(activeTrade) === trade) return false;
+  activeTrade.set(trade);
+  chooseGroup('select');
+  selectedElementId.set(null);
+  selectedElementIds.set(new Set());
+  selectedRoomId.set(null);
+  return true;
+}
 
 /** View or Select, whichever the person last chose: where Done goes back to. */
 let homeGroup: 'view' | 'select' = 'select';

@@ -3,7 +3,7 @@
   import { currentProject } from '$lib/stores/project';
   import { saveState, saveError } from '$lib/stores/saveStatus';
   import { drawerOpen } from '$lib/stores/chrome';
-  import AlternativesMenu from '$lib/components/toolbar/AlternativesMenu.svelte';
+  import VersionsMenu from './VersionsMenu.svelte';
   import Icon from './Icon.svelte';
 
   let alternativeName = $derived(($currentProject?.alternatives ?? []).find(alt => alt.id === $currentProject?.activeAlternativeId)?.name);
@@ -14,7 +14,7 @@
   <button class="op-float op-btn is-square is-big shrink-0" style="width:52px" aria-label={$t('chrome.menu')} aria-expanded={$drawerOpen} onclick={() => drawerOpen.set(true)}>
     <Icon name="menu" />
   </button>
-  <!-- The project and its alternatives are one card; below xl only the alternatives button stays. -->
+  <!-- The project and its versions are one card; below xl only the version button stays. -->
   <div class="op-float op-cluster relative min-w-0 shrink-0 h-[52px]" data-project-card>
     <div class="flex items-center h-full min-w-0 max-xl:hidden">
       <button class="op-btn h-full min-w-0 !px-3 flex-col !items-start !gap-0 text-left" onclick={() => drawerOpen.set(true)} aria-label={$t('chrome.openProjectMenu', { name: $currentProject?.name ?? '' })}>
@@ -30,7 +30,7 @@
       </button>
       <div class="op-divider-v !mx-0.5"></div>
     </div>
-    <AlternativesMenu bare />
+    <VersionsMenu />
     {#if status === 'failed'}
       <span class="xl:hidden absolute top-1.5 right-1.5 w-2 h-2 rounded-full pointer-events-none" style="background:var(--color-danger)" title={$t('chrome.save.failed')}></span>
     {/if}

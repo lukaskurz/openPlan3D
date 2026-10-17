@@ -304,7 +304,7 @@
   let showRulers = $state(false);
 
   // Layer visibility toggles
-  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true, constraints: true });
+  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true, constraints: true, underlay: true, sections: true });
   // Sync showFurnitureStore ↔ layerVisibility.furniture
   let showFurniture = $derived(layerVis.furniture);
   $effect(() => { showFurnitureStore.set(layerVis.furniture); });
@@ -1329,7 +1329,7 @@
   }
 
   function drawBackgroundImage() {
-    if (!bgImage || !currentFloor?.backgroundImage) return;
+    if (!bgImage || !currentFloor?.backgroundImage || !layerVis.underlay) return;
     const bg = currentFloor.backgroundImage;
     const s = worldToScreen(bg.position.x, bg.position.y);
     ctx.save();
@@ -2417,7 +2417,7 @@
         units: dimSettings.units,
         zoom: fittedZoom,
         entourageAspect: id => entourageAspect(id, customEntourageDefs) || 1,
-        backgroundSize: floor === currentFloor && bgImage ? bgImage : undefined,
+        backgroundSize: floor === currentFloor && bgImage && layerVis.underlay ? bgImage : undefined,
       };
       return ids ? selectionContentBounds(floor,ids,options,detectedRooms) : planContentBounds(floor,options);
   }
@@ -2430,8 +2430,30 @@
       }, fittedZoom));
   }
 
-  /** Room the top bars and the selection bar above an item take over the plan, in CSS pixels. */
+  /** Fallback for the room the top bars take over the plan, in CSS pixels, when the chrome can't be measured. */
   const TOP_CHROME_PX = 200;
+
+  /**
+   * The band of the canvas (CSS pixels from its top) left clear between the editor's top and bottom
+   * chrome, measured from the DOM so it follows the second tool row in portrait and the taller bottom
+   * bar. Falls back to fixed margins when there is no editor chrome (e.g. embedded canvases, tests).
+   */
+  function chromeBand(): { top: number; bottom: number; measured: boolean } {
+    const fallback = (height > 600 ? 200 : 120) / 2;
+    let top = fallback, bottom = height - fallback;
+    const chrome = canvas && document.querySelector<HTMLElement>('[data-editor-chrome]');
+    if (chrome) {
+      const canvasTop = canvas.getBoundingClientRect().top;
+      const tops = [...chrome.querySelectorAll<HTMLElement>('.op-top > *, .op-center > *')]
+        .map(el => el.getBoundingClientRect()).filter(rect => rect.width > 0 && rect.height > 0);
+      if (tops.length) top = Math.max(...tops.map(rect => rect.bottom)) - canvasTop + 12;
+      const bar = chrome.querySelector<HTMLElement>('.op-bottom')?.getBoundingClientRect();
+      if (bar && bar.width > 0 && bar.height > 0) bottom = bar.top - canvasTop - 12;
+    }
+    top = Math.max(0, Math.min(height, top));
+    bottom = Math.max(0, Math.min(height, bottom));
+    return bottom - top >= 80 ? { top, bottom, measured: !!chrome } : { top: fallback, bottom: height - fallback, measured: false };
+  }
   let revealFrame = 0;
   /** Pan (never zoom) so the selection sits in the part of the plan left visible above a bottom sheet. */
   function revealSelectionAboveSheet() {
@@ -2440,7 +2462,7 @@
     const b = ids.size ? boundsForFloor(currentFloor, zoom, ids) : null;
     if (!b) return;
     const rect = canvas.getBoundingClientRect();
-    const bandTop = Math.max(0, TOP_CHROME_PX - rect.top);
+    const bandTop = document.querySelector('[data-editor-chrome]') ? chromeBand().top : Math.max(0, TOP_CHROME_PX - rect.top);
     const bandBottom = Math.min(height, window.innerHeight - insetBottom - rect.top) - 16;
     if (bandBottom - bandTop < 40) return;
     const top = worldToScreen(b.minX, b.minY).y, bottom = worldToScreen(b.maxX, b.maxY).y;
@@ -2538,9 +2560,13 @@
     // On phones the properties sheet overlays the lower canvas. Fit into the
     // visible area, then compensate for the renderer's full-canvas origin.
     const visibleHeight = visibleCanvasHeight();
-    // Leave room for the floating controls along each edge.
-    const chromeX = width > 900 ? 200 : 80, chromeY = height > 600 ? 200 : 120;
-    const availableWidth = Math.max(1, width - chromeX - insetRight), availableHeight = Math.max(1, visibleHeight - chromeY);
+    // Leave room for the floating controls along each edge: measured top and bottom bars, a fixed side margin.
+    const chromeX = width > 900 ? 200 : 80;
+    const band = chromeBand();
+    // A bottom sheet hides the lower plan: stop above it (with the usual margin when nothing was measured).
+    const sheetBottom = visibleHeight < height ? visibleHeight - (band.measured ? 12 : height - band.bottom) : height;
+    const bandTop = band.top, bandBottom = Math.max(bandTop + 1, Math.min(sheetBottom, band.bottom));
+    const availableWidth = Math.max(1, width - chromeX - insetRight), availableHeight = Math.max(1, bandBottom - bandTop);
     const initialZoom = Math.min(availableWidth / (maxX - minX + padding * 2),
       availableHeight / (maxY - minY + padding * 2), 3);
     // Minimum screen fonts make text bounds scale-dependent. Find the largest
@@ -2561,7 +2587,8 @@
     ({ minX, minY, maxX, maxY } = fittedBounds);
     minimumZoom = Math.min(0.1, zoom / 4);
     camX = (minX + maxX) / 2 + insetRight / (2 * zoom);
-    camY = (minY + maxY) / 2 + (height - visibleHeight) / (2 * zoom);
+    // Centre the content in the clear band (the renderer's origin is the full canvas's centre).
+    camY = (minY + maxY) / 2 - ((bandTop + bandBottom) / 2 - height / 2) / zoom;
     markDirty();
   }
 

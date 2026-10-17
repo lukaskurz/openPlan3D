@@ -5,7 +5,7 @@ import {
   activeFloor, addFloor, createAlternative, createDefaultProject, currentProject, deletePlanAlternative, loadProject,
   redo, renamePlanAlternative, selectedElementId, switchPlanAlternative, undo, updateWall,
 } from '$lib/stores/project';
-import { allPlanFloors, branchAlternative, deleteAlternative, nextAlternativeLetter, switchAlternative } from '$lib/utils/planAlternatives';
+import { allPlanFloors, alternativeCodes, branchAlternative, deleteAlternative, nextAlternativeLetter, switchAlternative } from '$lib/utils/planAlternatives';
 import { readProject } from '$lib/utils/projectValidation';
 
 const wall = (id: string, x2: number): Wall =>
@@ -134,5 +134,36 @@ describe('plan alternatives store', () => {
     switchPlanAlternative(b.id);
     expect(get(currentProject)!.floors).toHaveLength(2);
     expect(get(currentProject)!.activeFloorId).toBe(upstairs);
+  });
+});
+
+describe('alternative codes', () => {
+  const alt = (id: string, name: string) => ({ id, name });
+  const codes = (list: { id: string; name: string }[], namer?: (letter: string) => string) =>
+    Object.fromEntries(alternativeCodes(list, namer));
+
+  it('gives codes by position when no name is a letter', () => {
+    expect(codes([alt('a', 'Kitchen open'), alt('b', 'Kitchen closed'), alt('c', 'Third')])).toEqual({ a: 'A', b: 'B', c: 'C' });
+  });
+
+  it('keeps a name that is exactly one letter as its code', () => {
+    expect(codes([alt('a', 'Big kitchen'), alt('b', 'A'), alt('c', ' c ')])).toEqual({ a: 'B', b: 'A', c: 'C' });
+  });
+
+  it('gives the next unused letter to the rest, and a repeated letter only once', () => {
+    expect(codes([alt('a', 'B'), alt('b', 'B'), alt('c', 'Other')])).toEqual({ a: 'B', b: 'A', c: 'C' });
+  });
+
+  it('reads default names when told how they are built', () => {
+    expect(codes([alt('a', 'Option A'), alt('b', 'Option C'), alt('c', 'Copy')], nameFor)).toEqual({ a: 'A', b: 'C', c: 'B' });
+    expect(codes([alt('a', 'Option A'), alt('b', 'Option C')])).toEqual({ a: 'A', b: 'B' });
+  });
+
+  it('runs past Z into two letters', () => {
+    const many = Array.from({ length: 28 }, (_, i) => alt(`id${i}`, `Plan ${i}`));
+    const result = alternativeCodes(many);
+    expect(result.get('id25')).toBe('Z');
+    expect(result.get('id26')).toBe('AA');
+    expect(result.get('id27')).toBe('AB');
   });
 });

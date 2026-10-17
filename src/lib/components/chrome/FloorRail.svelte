@@ -1,28 +1,31 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { currentProject, addFloor, removeFloor, setActiveFloor, updateFloorElevation, updateFloorSlabThickness, layerVisibility, type FloorSeed } from '$lib/stores/project';
-  import { floorElevations } from '$lib/utils/floors';
+  import { currentProject, addFloor, removeFloor, setActiveFloor, updateFloorElevation, updateFloorSlabThickness, layerVisibility, viewMode, elevationWallId, type FloorSeed } from '$lib/stores/project';
+  import { activeSurface, type Surface } from '$lib/stores/workContext';
+  import { railStoreys } from '$lib/utils/floorRail';
   import { popover, togglePopover, closePopover } from '$lib/stores/chrome';
+  import { switchSurface } from './surface';
   import Icon from './Icon.svelte';
 
   // Highest floor at the top, like the building.
-  let entries = $derived(floorElevations($currentProject?.floors ?? []).slice().reverse());
   let activeId = $derived($currentProject?.activeFloorId);
-  let active = $derived(entries.find(entry => entry.floor.id === activeId));
+  let entries = $derived(railStoreys($currentProject?.floors ?? [], activeId));
+  let active = $derived(entries.find(entry => entry.current));
+  // Ceiling and floor are surfaces of the plan; 3D and wall elevations have no use for them.
+  let showSurfaces = $derived($viewMode === '2d' && !$elevationWallId);
   let confirmingRemove = $state(false);
-
-  /** Short label for the rail: G for the ground floor, otherwise the floor's number. */
-  function short(name: string, level: number) {
-    const digits = name.match(/-?\d+/)?.[0];
-    if (digits) return digits;
-    if (level === 0) return 'G';
-    return name.trim().charAt(0).toUpperCase() || String(level);
-  }
+  let announcement = $state('');
 
   function pick(id: string) {
     confirmingRemove = false;
     if (id === activeId) togglePopover('floor-settings');
+    // Switching storey keeps the surface: the ceiling of one storey leads to the ceiling of the next.
     else { closePopover(); setActiveFloor(id); }
+  }
+
+  function chooseSurface(surface: Surface) {
+    confirmingRemove = false;
+    if (switchSurface(surface)) announcement = $t(surface === 'ceiling' ? 'chrome.floors.lookingAtCeiling' : 'chrome.floors.lookingAtFloor');
   }
 
   function add(seed: FloorSeed) {
@@ -39,32 +42,59 @@
   function onWindowPointerDown(e: PointerEvent) {
     if (($popover === 'floors-add' || $popover === 'floor-settings') && railRef && !railRef.contains(e.target as Node)) closePopover();
   }
+
+  // With many storeys the list scrolls; keep the current one in view.
+  let currentRef: HTMLDivElement | undefined = $state();
+  $effect(() => {
+    void activeId;
+    currentRef?.scrollIntoView?.({ block: 'nearest' });
+  });
 </script>
 
 <svelte:window onpointerdown={onWindowPointerDown} />
 
-<div class="relative" bind:this={railRef}>
-  <div class="op-float flex flex-col items-center gap-0.5 p-1" role="group" aria-label={$t('floorControls.floors')} data-floor-rail>
-    <button class="op-btn is-square" aria-label={$t('floorControls.add')} title={$t('floorControls.add')} aria-expanded={$popover === 'floors-add'} onclick={() => togglePopover('floors-add')}>
+<div class="op-rail-wrap" bind:this={railRef}>
+  <div class="op-float op-rail" role="group" aria-label={$t('floorControls.floors')} data-floor-rail>
+    <button class="op-btn op-rail-btn" aria-label={$t('floorControls.add')} title={$t('floorControls.add')} aria-haspopup="menu" aria-expanded={$popover === 'floors-add'} onclick={() => { confirmingRemove = false; togglePopover('floors-add'); }}>
       <Icon name="plus" />
     </button>
-    {#each entries as { floor, level } (floor.id)}
-      {@const current = floor.id === activeId}
-      <button class="op-btn is-square {current ? 'is-active font-bold' : ''}" aria-pressed={current} title={floor.name} aria-label={floor.name} onclick={() => pick(floor.id)}>
-        {short(floor.name, level)}
-      </button>
-    {/each}
+    <div class="op-rail-divider" aria-hidden="true"></div>
+    <div class="op-rail-storeys">
+      {#each entries as { floor, label, current } (floor.id)}
+        {#if current}
+          <div class="op-rail-current" bind:this={currentRef} data-rail-current>
+            <button class="op-btn op-rail-btn" aria-current="location" aria-haspopup="dialog" aria-expanded={$popover === 'floor-settings'}
+              aria-label={$t('chrome.floors.settingsFor', { name: floor.name })} title={floor.name} onclick={() => pick(floor.id)}>
+              {label}
+            </button>
+            {#if showSurfaces}
+              <button class="op-btn op-rail-btn op-rail-surface" aria-pressed={$activeSurface === 'ceiling'} title={$t('chrome.floors.ceiling')}
+                aria-label={$t('chrome.floors.ceilingOf', { name: floor.name })} onclick={() => chooseSurface('ceiling')} data-surface="ceiling">
+                <Icon name="ceiling" />
+              </button>
+              <button class="op-btn op-rail-btn op-rail-surface" aria-pressed={$activeSurface === 'floor'} title={$t('chrome.floors.floor')}
+                aria-label={$t('chrome.floors.floorOf', { name: floor.name })} onclick={() => chooseSurface('floor')} data-surface="floor">
+                <Icon name="floor" />
+              </button>
+            {/if}
+          </div>
+        {:else}
+          <button class="op-btn op-rail-btn" title={floor.name} aria-label={floor.name} onclick={() => pick(floor.id)}>{label}</button>
+        {/if}
+      {/each}
+    </div>
   </div>
+  <span class="sr-only" role="status" aria-live="polite">{announcement}</span>
 
   {#if $popover === 'floors-add'}
-    <div class="op-popover op-enter op-menu absolute left-full ml-3 top-0 w-80 z-50" role="menu">
+    <div class="op-popover op-enter op-menu op-rail-popover w-80" role="menu">
       <div class="op-menu-title">{$t('chrome.floors.addTitle')}</div>
       <button class="op-menu-item" onclick={() => add('outer')}><Icon name="roomShape" size={18} /><span>{$t('floorControls.exterior')}<span class="op-sub">{$t('chrome.floors.outerHint')}</span></span></button>
       <button class="op-menu-item" onclick={() => add('copy')}><Icon name="wall" size={18} /><span>{$t('floorControls.all')}<span class="op-sub">{$t('chrome.floors.allHint')}</span></span></button>
       <button class="op-menu-item" onclick={() => add('empty')}><Icon name="plus" size={18} /><span>{$t('floorControls.empty')}<span class="op-sub">{$t('chrome.floors.emptyHint')}</span></span></button>
     </div>
   {:else if $popover === 'floor-settings' && active}
-    <div class="op-popover op-enter absolute left-full ml-3 top-0 w-80 z-50 p-4 flex flex-col gap-4" role="dialog" aria-label={active.floor.name}>
+    <div class="op-popover op-enter op-rail-popover w-80 p-4 flex flex-col gap-4" role="dialog" aria-label={active.floor.name}>
       <div class="text-base font-semibold" style="color:var(--color-text-strong)">{active.floor.name}</div>
       <div class="grid grid-cols-2 gap-3">
         <label class="flex flex-col gap-1.5">

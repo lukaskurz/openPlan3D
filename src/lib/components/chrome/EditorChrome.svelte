@@ -19,14 +19,14 @@
   import ImportError from '$lib/components/ImportError.svelte';
   import ExportNotice from '$lib/components/ExportNotice.svelte';
   import ProjectCluster from './ProjectCluster.svelte';
-  import ToolStrip from './ToolStrip.svelte';
-  import ToolTray from './ToolTray.svelte';
+  import FixedToolBar from './FixedToolBar.svelte';
+  import TradeToolBar from './TradeToolBar.svelte';
   import ViewCluster from './ViewCluster.svelte';
   import FloorRail from './FloorRail.svelte';
   import BottomBar from './BottomBar.svelte';
-  import StatusPill from './StatusPill.svelte';
-  import SnapControl from './SnapControl.svelte';
-  import SelectionBar from './SelectionBar.svelte';
+  import ActionSlot from './ActionSlot.svelte';
+  import ScaleControl from './ScaleControl.svelte';
+  import SettingsPopover from './SettingsPopover.svelte';
   import Inspector from './Inspector.svelte';
   import MenuDrawer from './MenuDrawer.svelte';
   import ExportDialog from './ExportDialog.svelte';
@@ -51,23 +51,37 @@
     && ($toolGroup === 'select' || $toolGroup === 'view') && !$catalogOpen && !$popover && !$assistantOpen);
   let historyOpen = $derived($popover === 'history');
 
-  // The top row holds the project, the tool strip and the view controls side by side when they fit;
-  // otherwise the tool strip gets its own row. Measured, so it holds for any width and any content.
+  // Panels outside the chrome (Assistant, elements list) stop above the bottom bar, which is taller in portrait.
+  let bottomHeight = $state(0);
+  $effect(() => {
+    const root = document.documentElement;
+    if (bottomHeight > 0) root.style.setProperty('--op-bottom-bar-h', `${bottomHeight}px`);
+    return () => root.style.removeProperty('--op-bottom-bar-h');
+  });
+
+  // The corner groups pin to the top corners; the two tool bars are centred on the window as a pair,
+  // with the Assistant button hanging off the pair's right side. When the pair would run into a corner
+  // group, the bars get their own row under the corners. Measured, so it holds for any width and language.
   let topRow: HTMLDivElement | undefined = $state();
+  let toolPair: HTMLDivElement | undefined = $state();
   let stacked = $state(false);
   $effect(() => {
-    if (!topRow) return;
-    const row = topRow;
+    if (!topRow || !toolPair) { stacked = false; return; }
+    const row = topRow, pair = toolPair;
     const fit = () => {
-      const [left, center, right] = [...row.children] as HTMLElement[];
+      const [left, right] = [...row.children] as HTMLElement[];
       const natural = (el: HTMLElement) => Math.max(0, ...[...el.children].map(child => (child as HTMLElement).scrollWidth));
-      const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
-      // The tool strip stays centred, so both corners get the wider corner's room.
-      stacked = 2 * Math.max(natural(left), natural(right)) + natural(center) + 2 * gap > row.clientWidth;
+      const assistant = pair.querySelector<HTMLElement>('.op-assistant-slot');
+      const bars = pair.offsetWidth;
+      const extra = assistant && getComputedStyle(assistant).position === 'absolute' ? assistant.offsetWidth + 8 : 0;
+      const room = row.clientWidth / 2 - bars / 2 - 12;
+      stacked = natural(left) > room || natural(right) + extra > room;
     };
     const observer = new ResizeObserver(fit);
     observer.observe(row);
+    observer.observe(pair);
     for (const child of row.children) for (const inner of child.children) observer.observe(inner);
+    for (const child of pair.children) observer.observe(child);
     fit();
     return () => observer.disconnect();
   });
@@ -122,30 +136,46 @@
 
   <div class="op-top" bind:this={topRow}>
     <div class="op-left"><ProjectCluster /></div>
-    <div class="op-center">
-      {#if plan}<div class="op-tool-row"><ToolStrip /><AssistantButton /></div>{/if}
-      <SaveBanner />
-      {#if plan}<ToolTray />{/if}
-      {#if plan && !$assistantOpen}<CheckBar />{/if}
-    </div>
     <div class="op-right"><ViewCluster /></div>
   </div>
+  <!-- Centred on the window, not between the corners; drops to a second row when it would touch them. -->
+  <div class="op-center" class:is-below={stacked || !plan}>
+    {#if plan}
+      <div class="op-tool-pair" bind:this={toolPair} data-tool-pair>
+        <FixedToolBar />
+        <TradeToolBar />
+        <div class="op-assistant-slot"><AssistantButton /></div>
+      </div>
+    {/if}
+    <SaveBanner />
+    {#if plan && !$assistantOpen}<CheckBar />{/if}
+  </div>
 
-  {#if $viewMode === '2d' || $currentProject?.floors.length !== 1}
+  <!-- In 2D the rail always shows (it holds the storey's ceiling / floor); in 3D only when there are storeys to switch. -->
+  {#if $viewMode === '2d' || ($currentProject?.floors.length ?? 0) > 1}
     <!-- Above the bottom sheet when one is open, instead of on top of its header. -->
     <div class="op-left-rail" class:above-sheet={$planInsetBottom > 0} style:--sheet-inset="{$planInsetBottom}px"><FloorRail /></div>
   {/if}
 
-  <div class="op-bottom {historyOpen ? 'is-history' : ''}">
-    <div><BottomBar /></div>
+  <!-- Bottom: time on the left, what's happening now in the centre (action slot), precision on the right.
+       It rises above the inspector's bottom sheet when that is open. -->
+  <div class="op-bottom {historyOpen ? 'is-history' : ''}" class:above-sheet={$planInsetBottom > 0} style:--sheet-inset="{$planInsetBottom}px" bind:offsetHeight={bottomHeight}>
+    <div class="op-bottom-left"><BottomBar /></div>
     {#if !historyOpen}
-      <div>{#if plan}<StatusPill />{/if}</div>
-      <div>{#if plan}<SnapControl />{/if}</div>
+      <div class="op-bottom-center"><ActionSlot /></div>
+      <div class="op-bottom-right">
+        {#if plan}
+          <div class="op-float op-cluster" role="group" aria-label={$t('chrome.precision')} data-precision>
+            <ScaleControl />
+            <div class="op-divider-v !mx-0.5"></div>
+            <SettingsPopover />
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 </div>
 
-<SelectionBar />
 <Inspector />
 <AssistantPanel visible={$assistantOpen && plan} />
 {#if plan}<SketchLayer />{/if}
@@ -153,7 +183,7 @@
 <MenuDrawer {onerror} />
 
 {#if $elementsListOpen}
-  <aside class="op-float op-enter fixed z-[25] right-[var(--chrome-inset)] top-[84px] bottom-[84px] w-[320px] max-w-[calc(100vw-1rem)] flex flex-col overflow-hidden" aria-label={$t('chrome.view.elements')}>
+  <aside class="op-float op-enter op-elements-panel fixed z-[25] right-[var(--chrome-inset)] bottom-[84px] w-[320px] max-w-[calc(100vw-1rem)] flex flex-col overflow-hidden" aria-label={$t('chrome.view.elements')}>
     <div class="flex items-center gap-3 pl-4 pr-2 py-2 shrink-0" style="border-bottom:1px solid var(--color-border-subtle)">
       <div class="flex-1 text-base font-semibold" style="color:var(--color-text-strong)">{$t('chrome.view.elements')}</div>
       <button class="op-btn is-square" aria-label={$t('chrome.close')} onclick={() => elementsListOpen.set(false)}><Icon name="close" /></button>

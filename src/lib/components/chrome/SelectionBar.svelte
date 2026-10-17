@@ -2,13 +2,13 @@
   import { t, locale, type TranslationKey } from '$lib/i18n';
   import {
     activeFloor, currentProject, selectedElementId, selectedElementIds, selectedRoomId, selectedTool, detectedRoomsStore,
-    constraintPickMode, elevationWallId, removeElement, duplicateSelection, beginUndoGroup, endUndoGroup,
-    resizeWallLength, reverseWall, updateDoor, updateWindow, rotateFurniture, toggleFurnitureLock,
+    constraintPickMode, elevationWallId, elevationPickMode, removeElement, duplicateSelection, beginUndoGroup, endUndoGroup,
+    resizeWallLength, reverseWall, updateDoor, updateWindow, updateFurniture, rotateFurniture, toggleFurnitureLock,
     toggleSelectionLock, addGeometricConstraint, removeConstraint, wallConstraint, showPlanNotice, findGroupForElement,
   } from '$lib/stores/project';
   import type { Door, Window as Win } from '$lib/models/types';
-  import { projectSettings, formatLength } from '$lib/stores/settings';
-  import { planViewApi, selectionAnchor } from '$lib/stores/planView';
+  import { projectSettings, formatLength, formatArea } from '$lib/stores/settings';
+  import { planViewApi, selectMode } from '$lib/stores/planView';
   import { popover, togglePopover, closePopover, inspectorOpen, floorView } from '$lib/stores/chrome';
   import { furnitureName, customModelName } from '$lib/i18n/furnitureNames';
   import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
@@ -29,40 +29,12 @@
   let other = $derived(!multi && id && !wall && !door && !win && !furniture);
 
   let kind = $derived(multi ? 'multi' : wall ? 'wall' : door ? 'door' : win ? 'window' : furniture ? 'furniture' : room ? 'room' : other ? 'other' : null);
-  let visible = $derived(!!kind && !!$selectionAnchor && $selectedTool === 'select' && !$constraintPickMode && !$elevationWallId);
+  // Docked in the action slot, so it no longer follows the selection around the plan (selectionAnchor
+  // stays for the canvas) and stays put while the plan is panned.
+  let visible = $derived(!!kind && $selectedTool === 'select' && !$constraintPickMode && !$elevationWallId);
 
   let units = $derived($projectSettings.units);
   const len = (cm: number) => formatLength(cm, units);
-
-  // ── Placement: above the selection, or below it when there's no room ──
-  let barWidth = $state(0);
-  let barHeight = $state(64);
-  let viewport = $state({ w: 1024, h: 768 });
-  const TOP_RESERVED = 150;
-  let position = $derived.by(() => {
-    const a = $selectionAnchor;
-    if (!a) return { left: 0, top: 0, below: false };
-    const cx = (a.left + a.right) / 2;
-    const left = Math.max(12, Math.min(viewport.w - barWidth - 12, cx - barWidth / 2));
-    let top = a.top - barHeight - 14;
-    let below = false;
-    if (top < TOP_RESERVED) { top = a.bottom + 14; below = true; }
-    top = Math.max(TOP_RESERVED, Math.min(viewport.h - barHeight - 84, top));
-    return { left, top, below };
-  });
-
-  // Popovers open on whichever side of the bar has room for them.
-  let popHeight = $state(0);
-  let popWidth = $state(0);
-  let popBelow = $derived.by(() => {
-    const above = position.top - 12;
-    const below = viewport.h - (position.top + barHeight) - 12;
-    const preferBelow = position.below;
-    if (preferBelow) return below >= popHeight || below >= above;
-    return !(above >= popHeight || above >= below);
-  });
-  let popMaxHeight = $derived(Math.max(160, popBelow ? viewport.h - (position.top + barHeight) - 20 : position.top - 20));
-  let popAlignRight = $derived(position.left + popWidth > viewport.w - 12);
 
   // ── Actions ──
   function select(ids: string[]) {
@@ -95,6 +67,27 @@
   function run(action: string, target = id) {
     closePopover();
     $planViewApi?.runAction(action, target ?? null);
+  }
+
+  /** Open the wall face-on in the elevation view. */
+  function openElevation(wallId: string) {
+    closePopover();
+    elevationPickMode.set(false);
+    elevationWallId.set(wallId);
+  }
+
+  // Furniture size: one side at a time on the keypad.
+  let sizeAxis = $state<'width' | 'depth'>('width');
+  function applyFurnitureSize(cm: number) {
+    if (!furniture) return;
+    const axis = sizeAxis === 'width' ? 'x' : 'y';
+    const scale = furniture.scale;
+    updateFurniture(furniture.id, { [sizeAxis]: cm, scale: { ...scale, [axis]: Math.sign(scale[axis]) || 1 } });
+    closePopover();
+  }
+  function openSize() {
+    if (furniture?.locked) { showDetails(); return; }
+    togglePopover('sel-size');
   }
 
   // Wall length: which end stays put.
@@ -155,7 +148,7 @@
   }
 </script>
 
-<svelte:window bind:innerWidth={viewport.w} bind:innerHeight={viewport.h} onpointerdown={onWindowPointerDown} />
+<svelte:window onpointerdown={onWindowPointerDown} />
 
 {#snippet action(icon: IconName, label: TranslationKey, onclick: () => void, opts: { active?: boolean; danger?: boolean; expanded?: boolean; badge?: number; disabled?: boolean; data?: string } = {})}
   <button class="op-action {opts.active ? 'is-active' : ''} {opts.danger ? 'is-danger' : ''}" aria-expanded={opts.expanded} aria-pressed={opts.active} disabled={opts.disabled} onclick={onclick} data-action={opts.data}>
@@ -174,75 +167,24 @@
   </button>
 {/snippet}
 
-{#if visible}
-  <div
-    class="fixed z-40"
-    style="left:{position.left}px; top:{position.top}px;"
-    data-selection-bar={kind}
-  >
-    <div class="op-float op-enter flex items-center gap-0.5 p-1.5" bind:clientWidth={barWidth} bind:clientHeight={barHeight} role="toolbar" aria-label={$t('chrome.selection.label')}>
-      {#if kind === 'wall' && wall}
-        <button class="op-value-chip" aria-expanded={$popover === 'sel-length'} onclick={() => togglePopover('sel-length')} data-value-chip>
-          <Icon name="ruler" size={18} /><span>{len(wallLength(wall))}</span>
-        </button>
-        <div class="op-divider-v"></div>
-        {@render action('curved', 'chrome.selection.curve', () => run('toggle-curve'), { active: !!wall.curvePoint })}
-        {@render action('scissors', 'chrome.selection.split', () => run('split-wall'), { disabled: !!wall.curvePoint })}
-        {@render action('constrain', 'chrome.selection.constrain', () => togglePopover('sel-constrain'), { expanded: $popover === 'sel-constrain', badge: wallRules.length })}
-        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
-        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
-        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
-      {:else if (kind === 'door' && door) || (kind === 'window' && win)}
-        {@const opening = (door ?? win)!}
-        <button class="op-value-chip" aria-expanded={$popover === 'sel-length'} onclick={() => togglePopover('sel-length')} data-value-chip>
-          <Icon name="ruler" size={18} /><span>{len(opening.width)}</span>
-        </button>
-        <div class="op-divider-v"></div>
-        {@render action(door ? 'doorSwing' : 'windowPane', 'chrome.selection.type', () => togglePopover('sel-type'), { expanded: $popover === 'sel-type' })}
-        {#if door && door.type !== 'opening'}
-          {@render action('flip', 'chrome.selection.otherEnd', () => updateDoor(door.id, { swingDirection: door.swingDirection === 'left' ? 'right' : 'left' }))}
-          {@render action('rotate', 'chrome.selection.otherSide', () => updateDoor(door.id, { flipSide: !door.flipSide }))}
-        {/if}
-        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
-        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
-        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
-      {:else if kind === 'furniture' && furniture}
-        <button class="op-value-chip" aria-expanded={$inspectorOpen} onclick={showDetails} title={furnitureLabel} data-value-chip>
-          <Icon name="ruler" size={18} /><span>{furnitureSize ? `${Math.round(furnitureSize.width)} × ${Math.round(furnitureSize.depth)}` : furnitureLabel}</span>
-        </button>
-        <div class="op-divider-v"></div>
-        {@render action('rotate', 'chrome.selection.rotate', () => rotateFurniture(furniture.id, 90), { disabled: furniture.locked })}
-        {@render action('flip', 'chrome.selection.flip', () => run('flip-horizontal'), { disabled: furniture.locked })}
-        {@render action('palette', 'chrome.selection.look', showDetails)}
-        {@render action(furniture.locked ? 'lock' : 'unlock', furniture.locked ? 'chrome.selection.locked' : 'chrome.selection.lock', () => toggleFurnitureLock(furniture.id), { active: furniture.locked })}
-        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
-      {:else if kind === 'room' && room}
-        <button class="op-value-chip" onclick={() => { $planViewApi?.renameRoom(room.id); }} title={$t('chrome.selection.rename')} data-value-chip>
-          <Icon name="tag" size={18} /><span>{room.name || $t('layers.unnamed')}</span>
-        </button>
-        <div class="op-divider-v"></div>
-        {@render action('palette', 'chrome.selection.finish', () => run('change-floor-texture', room.id))}
-        {@render action('sliders', 'chrome.selection.details', showDetails, { active: $inspectorOpen })}
-        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
-      {:else if kind === 'multi'}
-        <span class="op-value-chip pointer-events-none"><Icon name="box" size={18} /><span>{$t('chrome.selection.count', { count: $selectedElementIds.size })}</span></span>
-        <div class="op-divider-v"></div>
-        {@render action('align', 'chrome.selection.align', () => togglePopover('sel-align'), { expanded: $popover === 'sel-align', disabled: alignable.length < 2 })}
-        {@render action('group', grouped ? 'chrome.selection.ungroup' : 'chrome.selection.group', () => run(grouped ? 'ungroup' : 'group', null))}
-        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
-        {@render action('lock', 'chrome.selection.lock', () => toggleSelectionLock($selectedElementIds))}
-        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
-      {:else}
-        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
-        {@render action('sliders', 'chrome.selection.details', showDetails, { active: $inspectorOpen })}
-        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
-      {/if}
-    </div>
+<!-- The dimension chip: what is selected and its main measure; tapping it opens numeric entry. -->
+{#snippet chip(icon: IconName, name: string, value: string, onclick: (() => void) | null, opts: { expanded?: boolean; title?: string } = {})}
+  {#if onclick}
+    <button class="op-value-chip" aria-expanded={opts.expanded} onclick={onclick} title={opts.title ?? name} data-value-chip>
+      <Icon name={icon} size={18} />{#if name}<span class="op-chip-name">{name}</span>{/if}{#if name && value}<span aria-hidden="true">·</span>{/if}{#if value}<span class="op-chip-value">{value}</span>{/if}
+    </button>
+  {:else}
+    <span class="op-value-chip pointer-events-none" data-value-chip>
+      <Icon name={icon} size={18} /><span class="op-chip-value">{value}</span>
+    </span>
+  {/if}
+{/snippet}
 
-    <!-- Popovers hang off the bar, on the side away from the selection. -->
+{#if visible}
+  <div class="op-slot-stack" data-selection-bar={kind}>
+    <!-- Popovers open upward from the docked bar. -->
     {#if $popover?.startsWith('sel-')}
-      <div class="absolute {popAlignRight ? 'right-0' : 'left-0'} {popBelow ? 'top-full mt-2' : 'bottom-full mb-2'} z-50 op-scroll" style="max-height:{popMaxHeight}px">
-        <div bind:clientHeight={popHeight} bind:clientWidth={popWidth}>
+      <div class="op-slot-pop">
         {#if $popover === 'sel-length' && wall}
           <Keypad title={$t('chrome.selection.wallLength')} valueCm={wallLength(wall)} units={units} applyLabel={$t('chrome.apply')} onapply={applyWallLength} onclose={closePopover}>
             <div class="flex flex-col gap-1.5">
@@ -255,8 +197,17 @@
           </Keypad>
         {:else if $popover === 'sel-length' && (door || win)}
           <Keypad title={$t('chrome.selection.width')} valueCm={(door ?? win)!.width} units={units} applyLabel={$t('chrome.apply')} onapply={applyOpeningWidth} onclose={closePopover} />
+        {:else if $popover === 'sel-size' && furniture && furnitureSize}
+          {#key sizeAxis}
+            <Keypad title={$t('chrome.selection.size')} subtitle={furnitureLabel} valueCm={furnitureSize[sizeAxis]} units={units} applyLabel={$t('chrome.apply')} onapply={applyFurnitureSize} onclose={closePopover}>
+              <div class="op-seg">
+                <button aria-pressed={sizeAxis === 'width'} onclick={() => sizeAxis = 'width'}>{$t('chrome.selection.width')} <span class="text-xs opacity-70 tabular-nums">{len(furnitureSize.width)}</span></button>
+                <button aria-pressed={sizeAxis === 'depth'} onclick={() => sizeAxis = 'depth'}>{$t('furnitureProperties.depth')} <span class="text-xs opacity-70 tabular-nums">{len(furnitureSize.depth)}</span></button>
+              </div>
+            </Keypad>
+          {/key}
         {:else if $popover === 'sel-constrain' && wall}
-          <div class="op-popover op-enter op-menu w-72" role="menu">
+          <div class="op-popover op-enter op-menu w-72 max-w-full" role="menu">
             <div class="op-menu-title">{$t('chrome.constrain.thisWall')}</div>
             {@render menuItem('constrain', $t('constraintKinds.vertical'), () => toggleRule('vertical'), { check: wallRules.includes('vertical') })}
             {@render menuItem('constrain', $t('constraintKinds.horizontal'), () => toggleRule('horizontal'), { check: wallRules.includes('horizontal') })}
@@ -267,7 +218,7 @@
             {@render menuItem('constrain', $t('chrome.constrain.perpendicular'), () => pickSecondWall('perpendicular'))}
           </div>
         {:else if $popover === 'sel-type' && (door || win)}
-          <div class="op-popover op-enter op-menu w-64 op-scroll max-h-[50vh]" role="menu">
+          <div class="op-popover op-enter op-menu w-64 max-w-full" role="menu">
             {#if door}
               {#each DOOR_TYPES as type}
                 {@render menuItem('doorSwing', $t(DOOR_LABEL[type]), () => { updateDoor(door.id, { type }); closePopover(); }, { check: door.type === type })}
@@ -279,7 +230,7 @@
             {/if}
           </div>
         {:else if $popover === 'sel-align'}
-          <div class="op-popover op-enter p-2 grid grid-cols-4 gap-1 w-[17rem]" role="menu">
+          <div class="op-popover op-enter p-2 grid grid-cols-4 gap-1 w-[17rem] max-w-full" role="menu">
             {#each ALIGN as item}
               <button class="op-btn is-square !w-auto !h-14 flex-col !gap-1 text-[11px] font-medium" title={$t(item.label)} aria-label={$t(item.label)}
                 disabled={item.op.startsWith('distribute') ? alignable.length < 3 : alignable.length < 2}
@@ -289,14 +240,15 @@
             {/each}
           </div>
         {:else if $popover === 'sel-more'}
-          <div class="op-popover op-enter op-menu w-72" role="menu">
+          <div class="op-popover op-enter op-menu w-72 max-w-full" role="menu">
             {#if wall}
-              {@render menuItem('floors', $t('chrome.selection.elevation'), () => { closePopover(); elevationWallId.set(wall.id); })}
+              {@render menuItem('curved', $t('chrome.selection.curve'), () => run('toggle-curve'), { check: !!wall.curvePoint })}
+              {@render menuItem('constrain', $t('chrome.selection.constrain'), () => togglePopover('sel-constrain'), { trailing: wallRules.length ? String(wallRules.length) : undefined })}
+              {@render menuItem('duplicate', $t('chrome.selection.duplicate'), () => { duplicate(); closePopover(); })}
               {@render menuItem('flip', $t('chrome.selection.reverse'), () => { reverseWall(wall.id); closePopover(); })}
               {@render menuItem('copy', $t('chrome.selection.copy'), () => { $planViewApi?.copySelection(); closePopover(); })}
-              {@render menuItem('sliders', $t('chrome.selection.details'), showDetails)}
             {:else if door || win}
-              {@render menuItem('floors', $t('chrome.selection.elevation'), () => { closePopover(); elevationWallId.set((door ?? win)!.wallId); })}
+              {@render menuItem('floors', $t('chrome.selection.elevation'), () => openElevation((door ?? win)!.wallId))}
               {@render menuItem('copy', $t('chrome.selection.copy'), () => { $planViewApi?.copySelection(); closePopover(); })}
               {@render menuItem('sliders', $t('chrome.selection.details'), showDetails)}
             {:else if furniture}
@@ -313,8 +265,61 @@
             {@render menuItem('trash', room ? $t('contextMenu.deleteRoom') : $t('chrome.delete'), deleteSelection, { danger: true })}
           </div>
         {/if}
-        </div>
       </div>
     {/if}
+
+    <div class="op-float op-enter op-slot-bar op-sel-bar" role="toolbar" aria-label={$t('chrome.selection.label')}>
+      {#if $selectMode !== 'tap'}
+        <!-- Box / Add select stay on until turned off here. -->
+        {@render action($selectMode === 'box' ? 'box' : 'plus', $selectMode === 'box' ? 'chrome.select.box' : 'chrome.select.add', () => selectMode.set('tap'), { active: true, data: 'select-mode' })}
+        <div class="op-divider-v"></div>
+      {/if}
+      {#if kind === 'wall' && wall}
+        {@render chip('ruler', $t('chrome.inspector.wall'), len(wallLength(wall)), () => togglePopover('sel-length'), { expanded: $popover === 'sel-length' })}
+        <div class="op-divider-v"></div>
+        {@render action('scissors', 'chrome.selection.split', () => run('split-wall'), { disabled: !!wall.curvePoint })}
+        {@render action('floors', 'chrome.selection.elevationShort', () => openElevation(wall.id), { data: 'elevation' })}
+        {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' || $popover === 'sel-constrain', badge: wallRules.length })}
+      {:else if (kind === 'door' && door) || (kind === 'window' && win)}
+        {@const opening = (door ?? win)!}
+        {@render chip('ruler', $t(door ? 'chrome.inspector.door' : 'chrome.inspector.window'), len(opening.width), () => togglePopover('sel-length'), { expanded: $popover === 'sel-length' })}
+        <div class="op-divider-v"></div>
+        {@render action(door ? 'doorSwing' : 'windowPane', 'chrome.selection.type', () => togglePopover('sel-type'), { expanded: $popover === 'sel-type' })}
+        {#if door && door.type !== 'opening'}
+          {@render action('flip', 'chrome.selection.otherEnd', () => updateDoor(door.id, { swingDirection: door.swingDirection === 'left' ? 'right' : 'left' }))}
+          {@render action('rotate', 'chrome.selection.otherSide', () => updateDoor(door.id, { flipSide: !door.flipSide }))}
+        {/if}
+        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
+        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'furniture' && furniture}
+        {@render chip('ruler', furnitureLabel, furnitureSize ? `${Math.round(furnitureSize.width)} × ${Math.round(furnitureSize.depth)}` : '', openSize, { expanded: $popover === 'sel-size' })}
+        <div class="op-divider-v"></div>
+        {@render action('rotate', 'chrome.selection.rotate', () => rotateFurniture(furniture.id, 90), { disabled: furniture.locked })}
+        {@render action('flip', 'chrome.selection.flip', () => run('flip-horizontal'), { disabled: furniture.locked })}
+        {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
+        {@render action(furniture.locked ? 'lock' : 'unlock', furniture.locked ? 'chrome.selection.locked' : 'chrome.selection.lock', () => toggleFurnitureLock(furniture.id), { active: furniture.locked })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'room' && room}
+        {@render chip('tag', room.name || $t('layers.unnamed'), formatArea(room.area, units), () => { $planViewApi?.renameRoom(room.id); }, { title: $t('chrome.selection.rename') })}
+        <div class="op-divider-v"></div>
+        {@render action('palette', 'chrome.selection.finish', () => run('change-floor-texture', room.id))}
+        {@render action('sliders', 'chrome.selection.details', showDetails, { active: $inspectorOpen })}
+        {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'multi'}
+        {@render chip('box', '', $t('chrome.selection.count', { count: $selectedElementIds.size }), null)}
+        <div class="op-divider-v"></div>
+        {@render action('align', 'chrome.selection.align', () => togglePopover('sel-align'), { expanded: $popover === 'sel-align', disabled: alignable.length < 2 })}
+        {@render action('group', grouped ? 'chrome.selection.ungroup' : 'chrome.selection.group', () => run(grouped ? 'ungroup' : 'group', null))}
+        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
+        {@render action('lock', 'chrome.selection.lock', () => toggleSelectionLock($selectedElementIds))}
+        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
+      {:else}
+        {@render action('duplicate', 'chrome.selection.duplicate', duplicate)}
+        {@render action('sliders', 'chrome.selection.details', showDetails, { active: $inspectorOpen })}
+        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
+      {/if}
+    </div>
   </div>
 {/if}

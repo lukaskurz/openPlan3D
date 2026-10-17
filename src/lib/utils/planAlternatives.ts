@@ -23,6 +23,42 @@ export function nextAlternativeLetter(project: Project, nameFor: (letter: string
   }
 }
 
+/** The n-th code letter: A … Z, then AA, AB, … like `nextAlternativeLetter`. */
+function codeLetter(i: number): string {
+  return i < 26 ? String.fromCharCode(65 + i) : String.fromCharCode(65 + Math.floor(i / 26) - 1) + String.fromCharCode(65 + i % 26);
+}
+
+/**
+ * Short codes for the version badge ('A', 'B', …), derived until codes are stored
+ * (spec §4.7 migration rule): a name that is exactly one letter A–Z keeps that
+ * letter, as does a default name (`nameFor(letter)`, e.g. "Option C") when given;
+ * every other alternative gets the next unused letter in list order.
+ * Returns id → code.
+ */
+export function alternativeCodes(alternatives: readonly Pick<PlanAlternative, 'id' | 'name'>[], nameFor?: (letter: string) => string): Map<string, string> {
+  const codes = new Map<string, string>();
+  const used = new Set<string>();
+  const ownLetter = (name: string): string | null => {
+    const trimmed = name.trim();
+    if (/^[A-Za-z]$/.test(trimmed)) return trimmed.toUpperCase();
+    if (!nameFor) return null;
+    for (let i = 0; i < 26; i++) if (nameFor(codeLetter(i)) === trimmed) return codeLetter(i);
+    return null;
+  };
+  for (const alt of alternatives) {
+    const letter = ownLetter(alt.name);
+    if (letter && !used.has(letter)) { codes.set(alt.id, letter); used.add(letter); }
+  }
+  let next = 0;
+  for (const alt of alternatives) {
+    if (codes.has(alt.id)) continue;
+    while (used.has(codeLetter(next))) next++;
+    codes.set(alt.id, codeLetter(next));
+    used.add(codeLetter(next));
+  }
+  return codes;
+}
+
 /** Put the live floors away into the active alternative's entry. */
 function stash(project: Project, now: Date, thumbnail?: string) {
   const current = activeAlternative(project);

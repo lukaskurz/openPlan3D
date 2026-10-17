@@ -7,9 +7,10 @@ import type { Floor } from '$lib/models/types';
  * Only one popover is open at a time, so opening one closes the others.
  */
 export type ChromePopover =
-  | 'view' | 'alternatives' | 'floors-add' | 'floor-settings' | 'snap-settings'
+  | 'floors-add' | 'floor-settings'
   | 'sel-length' | 'sel-constrain' | 'sel-more' | 'sel-type' | 'sel-align' | 'sel-size' | 'sel-colour'
   | 'wall-length' | 'wall-angle' | 'room-shapes' | 'history'
+  | 'versions' | 'trade' | 'show' | 'scale' | 'settings'
   | null;
 
 export const popover = writable<ChromePopover>(null);

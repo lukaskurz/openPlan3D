@@ -22,6 +22,10 @@
     door: 'M13 4h3a2 2 0 0 1 2 2v14M2 20h3M13 20h9M10 12v.01M13 4.562v16.157a1 1 0 0 1-1.242.97L5 20V5.562a2 2 0 0 1 1.515-1.94l4-1A2 2 0 0 1 13 4.561Z',
     stairs: 'M3 21h5v-5h5v-5h5V6h3',
     ruler: 'M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0ZM14.5 12.5l2-2M11.5 9.5l2-2M8.5 6.5l2-2M17.5 15.5l2-2',
+    /** Electrical trade. */
+    bolt: 'M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z',
+    /** Plumbing trade: a pipe elbow with a flange at each end. */
+    pipe: 'M3 8h7a6 6 0 0 1 6 6v7M3 14h6a1 1 0 0 1 1 1v6M3 6v10M8 21h10',
     sofa: 'M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V11a2 2 0 0 0-4 0zM4 18v2M20 18v2M12 4v9',
     straight: 'M4 20 20 4',
     curved: 'M4 20C4 10 10 4 20 4',
@@ -86,6 +90,10 @@
     alert: 'M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4M12 17h.01',
     backspace: 'M21 4H8l-7 8 7 8h13a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zM18 9l-6 6M12 9l6 6',
     projects: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
+    /** A ceiling line with a pendant lamp hanging from it. */
+    ceiling: 'M3 4h18M12 4v5M7 14a5 5 0 0 1 10 0zM10.5 17.5h3',
+    /** A floor line with a block standing on it. */
+    floor: 'M3 20h18M8 20v-8h8v8',
   } as const;
   export type IconName = keyof typeof ICONS;
 </script>
