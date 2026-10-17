@@ -20,7 +20,7 @@ import { switchSurface } from './surface';
  * The tools in the strip. View moves around and taps to look at things without
  * dragging anything; Select edits. The drawing tools open into their own options.
  */
-export type ToolGroup = 'view' | 'select' | 'wall' | 'openings' | 'structure' | 'annotate' | 'furniture'
+export type ToolGroup = 'view' | 'select' | 'wall' | 'openings' | 'structure' | 'annotate' | 'section' | 'furniture'
   | 'ceilingHeight' | 'light' | 'fan' | 'smoke'
   | 'pipe' | 'fixture' | 'drain'
   | 'outlet' | 'switch' | 'wallLight' | 'link';
@@ -61,6 +61,7 @@ export const toolGroup = derived(
     if ($tool === 'door' || $tool === 'window') return 'openings';
     if ($tool === 'measure' || $tool === 'annotate' || $tool === 'text') return 'annotate';
     if ($tool === 'pipe') return 'pipe';
+    if ($tool === 'section') return 'section';
     // The Fixture tool is the catalog limited to plumbing items.
     const furniture = $scope === 'plumbing' ? 'fixture' : 'furniture';
     if ($placing) { const group = groupForItem($placing); return group === 'furniture' ? furniture : group; }
@@ -175,6 +176,11 @@ export function chooseGroup(group: ToolGroup) {
     case 'annotate':
       clearPlacing();
       activateMeasurementTool('measure');
+      break;
+    case 'section':
+      // A fixed tool: draws on any trade and surface (spec §5.4).
+      clearPlacing();
+      selectedTool.set('section');
       break;
     case 'furniture':
       clearPlacing();

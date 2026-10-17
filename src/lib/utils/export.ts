@@ -18,7 +18,7 @@ import { doorSymbol } from './doorSymbol';
 import { planOpening } from './planOpening';
 import { wallPlanBounds } from './wallPlanGeometry';
 import { wallDimensionLabel } from './wallDimensionLabel';
-import type { Project, Floor, FurnitureItem } from '$lib/models/types';
+import type { Project, Floor, FurnitureItem, PlanSection } from '$lib/models/types';
 import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { resolveRooms, getRoomPolygon, roomLabelPosition } from '$lib/utils/roomDetection';
 import { drawStair, drawFurnitureItem, drawColumn, drawDoorOnWall, drawWindowOnWall, drawEntourageItems, drawTextAnnotations, drawAnnotations, drawPersistedMeasurements } from '$lib/utils/canvasRenderer';
@@ -32,6 +32,8 @@ import jsPDF from 'jspdf';
 import { escapeXml } from './exportText';
 import { drawPipes, pipesSvg } from './pipeRenderer';
 import { pipePlanBounds } from './pipes';
+import { computeSection, type SectionModel } from './sectionCut';
+import { sectionMargins, sectionPrimitives, sectionStyle, sectionSvg, sectionViewBox } from './sectionSvg';
 
 /** SVG strokes for the shared door symbol parts (doorSymbol.ts). */
 const DOOR_STROKES = {
@@ -665,6 +667,63 @@ export async function exportPDF(project: Project, language: Locale = 'en', visib
   return renderPDF(snapshot,preparedImages,capture,language,visibility);
 }
 
+const PDF_MARGIN = 10;
+const PDF_TITLE_BLOCK_H = 22;
+
+/** Double page border inside the margin (every PDF page). */
+function drawPdfPageBorder(pdf: jsPDF) {
+  const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), margin = PDF_MARGIN;
+  pdf.setDrawColor(40);
+  pdf.setLineWidth(0.5);
+  pdf.rect(margin, margin, pw - margin * 2, ph - margin * 2);
+  // inner border
+  pdf.setLineWidth(0.15);
+  pdf.rect(margin + 1, margin + 1, pw - margin * 2 - 2, ph - margin * 2 - 2);
+}
+
+/** Title block along the bottom: title and subtitle, date, units (and the scale when given), branding. */
+function drawPdfTitleBlock(pdf: jsPDF, info: { title: string; subtitle: string; description?: string; language: Locale; units: 'metric' | 'imperial'; scale?: string }) {
+  const label = (key: TranslationKey, variables?: Record<string, string | number>) => translate(info.language, key, variables);
+  const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight(), margin = PDF_MARGIN, titleBlockH = PDF_TITLE_BLOCK_H;
+  const tbY = ph - margin - titleBlockH;
+  const tbW = pw - margin * 2;
+  pdf.setDrawColor(40);
+  pdf.setLineWidth(0.4);
+  pdf.rect(margin, tbY, tbW, titleBlockH);
+  // vertical dividers
+  const col1 = margin + tbW * 0.45;
+  const col2 = margin + tbW * 0.7;
+  pdf.line(col1, tbY, col1, tbY + titleBlockH);
+  pdf.line(col2, tbY, col2, tbY + titleBlockH);
+
+  // Project name
+  pdf.setFontSize(12);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text(info.title, margin + 4, tbY + 9);
+  pdf.setFontSize(8);
+  pdf.setFont('helvetica', 'normal');
+  pdf.text(info.subtitle, margin + 4, tbY + 15);
+  if (info.description) {
+    pdf.setFontSize(7);
+    pdf.text(info.description.substring(0, 60), margin + 4, tbY + 19);
+  }
+
+  // Date / units / scale
+  const today = new Date().toLocaleDateString(info.language === 'pt' ? 'pt-BR' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+  pdf.setFontSize(8);
+  pdf.text(label('pdf.date', { date: today }), col1 + 4, tbY + 9);
+  pdf.text(label('pdf.units', { units: label(info.units === 'imperial' ? 'settings.imperial' : 'settings.metric') }), col1 + 4, tbY + 15);
+  if (info.scale) pdf.text(info.scale, col1 + 4, tbY + 20);
+
+  // Branding
+  pdf.setFontSize(9);
+  pdf.setFont('helvetica', 'bold');
+  pdf.text('openplan3d.com', col2 + 4, tbY + 9);
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(7);
+  pdf.text(label('pdf.createdWith'), col2 + 4, tbY + 15);
+}
+
 function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImageElement>, capture: {width:number;height:number;image?:string}|null, language: Locale, visibility: PlanExportVisibility) {
   const floor = visibleActiveFloor(project, visibility);
   if (!floor) return;
@@ -679,57 +738,15 @@ function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImag
   const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
   const pw = pdf.internal.pageSize.getWidth();   // ~297
   const ph = pdf.internal.pageSize.getHeight();   // ~210
-  const margin = 10;
-  const titleBlockH = 22;
+  const margin = PDF_MARGIN;
+  const titleBlockH = PDF_TITLE_BLOCK_H;
 
   // ── helpers ──
-  function drawPageBorder() {
-    pdf.setDrawColor(40);
-    pdf.setLineWidth(0.5);
-    pdf.rect(margin, margin, pw - margin * 2, ph - margin * 2);
-    // inner border
-    pdf.setLineWidth(0.15);
-    pdf.rect(margin + 1, margin + 1, pw - margin * 2 - 2, ph - margin * 2 - 2);
-  }
-
-  function drawTitleBlock() {
-    const tbY = ph - margin - titleBlockH;
-    const tbW = pw - margin * 2;
-    pdf.setDrawColor(40);
-    pdf.setLineWidth(0.4);
-    pdf.rect(margin, tbY, tbW, titleBlockH);
-    // vertical dividers
-    const col1 = margin + tbW * 0.45;
-    const col2 = margin + tbW * 0.7;
-    pdf.line(col1, tbY, col1, tbY + titleBlockH);
-    pdf.line(col2, tbY, col2, tbY + titleBlockH);
-
-    // Project name
-    pdf.setFontSize(12);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text(project.name || label('library.untitled'), margin + 4, tbY + 9);
-    pdf.setFontSize(8);
-    pdf.setFont('helvetica', 'normal');
-    pdf.text(floor.name, margin + 4, tbY + 15);
-    if (project.description) {
-      pdf.setFontSize(7);
-      pdf.text(project.description.substring(0, 60), margin + 4, tbY + 19);
-    }
-
-    // Date / scale
-    const today = new Date().toLocaleDateString(language === 'pt' ? 'pt-BR' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-    pdf.setFontSize(8);
-    pdf.text(label('pdf.date', { date: today }), col1 + 4, tbY + 9);
-    pdf.text(label('pdf.units', { units: label(settings.units === 'imperial' ? 'settings.imperial' : 'settings.metric') }), col1 + 4, tbY + 15);
-
-    // Branding
-    pdf.setFontSize(9);
-    pdf.setFont('helvetica', 'bold');
-    pdf.text('openplan3d.com', col2 + 4, tbY + 9);
-    pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(7);
-    pdf.text(label('pdf.createdWith'), col2 + 4, tbY + 15);
-  }
+  const drawPageBorder = () => drawPdfPageBorder(pdf);
+  const drawTitleBlock = () => drawPdfTitleBlock(pdf, {
+    title: project.name || label('library.untitled'), subtitle: floor.name, description: project.description,
+    language, units: settings.units,
+  });
 
   // ── Page 1: Floor Plan ──
   drawPageBorder();
@@ -971,4 +988,112 @@ function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImag
 
   pdf.save(`${project.name || 'floorplan'}.pdf`);
   return { omitted3D };
+}
+
+// ── Sections (spec §5.4) ─────────────────────────────────────────────
+
+/** File name for a section export, e.g. "House - Section A.svg". */
+function sectionFilename(project: Project, section: PlanSection, extension: string, language: Locale) {
+  return `${project.name || 'floorplan'} - ${translate(language, 'sectionView.file', { code: section.code })}.${extension}`;
+}
+
+function sectionLabels(section: PlanSection, language: Locale) {
+  return { title: translate(language, 'sectionView.title', { code: section.code }), empty: translate(language, 'sectionView.empty') };
+}
+
+/** The section as an SVG file (vector, light theme). Returns whether a file was downloaded. */
+export function exportSectionSVG(project: Project, section: PlanSection, language: Locale = 'en'): boolean {
+  const model = computeSection(project, section);
+  const svg = `<?xml version="1.0" encoding="UTF-8"?>\n${sectionSvg(model, { units: get(projectSettings).units, labels: sectionLabels(section, language), theme: 'light' })}\n`;
+  download(new Blob([svg], { type: 'image/svg+xml' }), sectionFilename(project, section, 'svg', language));
+  return true;
+}
+
+/** Paper size of one annotation unit in a section PDF, mm (10 au text ≈ 8.5 pt). */
+const SECTION_PDF_AU = 0.3;
+/** Scales tried in order before fitting the drawing to the page. */
+const SECTION_PDF_SCALES = [50, 100];
+
+/**
+ * Layout of a section on the PDF drawing area: the first of 1:50 and 1:100 that fits,
+ * else the drawing fitted to the area. `k` is paper mm per model cm.
+ */
+export function sectionPdfLayout(model: SectionModel, labels: { title: string; empty?: string }, units: 'metric' | 'imperial', area: { w: number; h: number }) {
+  const options = { units, labels };
+  const m = sectionMargins(model, options);
+  const w = Math.max(1, model.bounds.maxU - model.bounds.minU), h = Math.max(1, model.bounds.maxZ - model.bounds.minZ);
+  const annW = (m.left + m.right) * SECTION_PDF_AU, annH = (m.top + m.bottom) * SECTION_PDF_AU;
+  const fits = (k: number) => w * k + annW <= area.w && h * k + annH <= area.h;
+  const scale = SECTION_PDF_SCALES.find(n => fits(10 / n));
+  const k = scale ? 10 / scale : Math.max(1e-4, Math.min((area.w - annW) / w, (area.h - annH) / h));
+  const textScale = SECTION_PDF_AU / k;
+  return { k, scale: scale ?? null, denominator: Math.round(10 / k), textScale, box: sectionViewBox(model, options, textScale) };
+}
+
+function hexColor(value: string | undefined): string | undefined {
+  return value && /^#[0-9a-f]{6}$/i.test(value) ? value : undefined;
+}
+
+/** The section on an A4 landscape page with vector primitives, the border and the title block. */
+export function exportSectionPDF(project: Project, section: PlanSection, language: Locale = 'en') {
+  const units = get(projectSettings).units;
+  const model = computeSection(project, section);
+  const labels = sectionLabels(section, language);
+  const pdf = new jsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+  const pw = pdf.internal.pageSize.getWidth(), ph = pdf.internal.pageSize.getHeight();
+  const area = { x: PDF_MARGIN + 4, y: PDF_MARGIN + 4, w: pw - PDF_MARGIN * 2 - 8, h: ph - PDF_MARGIN * 2 - PDF_TITLE_BLOCK_H - 8 };
+  const layout = sectionPdfLayout(model, labels, units, area);
+  const { k, textScale, box } = layout;
+  // Centre the drawing in the area.
+  const ox = area.x + (area.w - box.w * k) / 2 - box.x * k, oy = area.y + (area.h - box.h * k) / 2 - box.y * k;
+  const X = (x: number) => ox + x * k, Y = (y: number) => oy + y * k;
+  const PX = 0.25; // mm per stroke px
+  // Standard PDF fonts are WinAnsi: replace the typographic minus.
+  const pdfText = (text: string) => text.replace(/−/g, '-');
+
+  drawPdfPageBorder(pdf);
+  for (const p of sectionPrimitives(model, { units, labels }, textScale)) {
+    if (p.role === 'bg') continue;
+    const style = sectionStyle(p.role, 'light');
+    const fill = hexColor(p.shape === 'circle' ? p.color ?? style.fill : style.fill);
+    const stroke = hexColor(style.stroke);
+    if (fill) pdf.setFillColor(fill);
+    if (stroke) { pdf.setDrawColor(stroke); pdf.setLineWidth((style.width ?? 1) * PX); }
+    pdf.setLineDashPattern(style.dash ? style.dash.map(d => d * PX) : [], 0);
+    const mode = fill && stroke ? 'FD' : fill ? 'F' : 'S';
+    switch (p.shape) {
+      case 'rect': pdf.rect(X(p.x), Y(p.y), Math.max(0, p.w * k), Math.max(0, p.h * k), mode); break;
+      case 'polygon': {
+        if (p.points.length < 3) break;
+        const [x0, y0] = p.points[0];
+        const deltas = p.points.slice(1).map(([x, y], i) => [(x - p.points[i][0]) * k, (y - p.points[i][1]) * k]);
+        pdf.lines(deltas, X(x0), Y(y0), [1, 1], mode, true);
+        break;
+      }
+      case 'line': if (stroke) pdf.line(X(p.x1), Y(p.y1), X(p.x2), Y(p.y2)); break;
+      case 'circle': pdf.circle(X(p.cx), Y(p.cy), p.r * k, mode); break;
+      case 'text': {
+        const color = hexColor(style.fill) ?? '#000000';
+        pdf.setTextColor(color);
+        pdf.setFont('helvetica', p.bold ? 'bold' : 'normal');
+        pdf.setFontSize(p.size * SECTION_PDF_AU * 72 / 25.4);
+        const text = pdfText(p.text);
+        if (p.rotate) {
+          // Vertical, reading upwards, centred on (x, y).
+          const width = pdf.getTextWidth(text) || 0;
+          pdf.text(text, X(p.x), Y(p.y) + width / 2, { angle: 90 });
+        } else {
+          pdf.text(text, X(p.x), Y(p.y), { align: p.anchor === 'middle' ? 'center' : p.anchor === 'end' ? 'right' : 'left' });
+        }
+        break;
+      }
+    }
+  }
+  pdf.setLineDashPattern([], 0);
+  pdf.setTextColor(0);
+  const scale = layout.scale ? translate(language, 'sectionView.pdfScale', { scale: `1:${layout.scale}` })
+    : translate(language, 'sectionView.pdfScaleFit', { scale: `1:${layout.denominator}` });
+  drawPdfTitleBlock(pdf, { title: project.name || translate(language, 'library.untitled'), subtitle: pdfText(labels.title), description: project.description, language, units, scale });
+  pdf.save(sectionFilename(project, section, 'pdf', language));
+  return { scale: layout.scale, denominator: layout.denominator };
 }

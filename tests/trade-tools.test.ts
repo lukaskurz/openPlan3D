@@ -9,8 +9,8 @@ import {
 } from '$lib/components/chrome/tradeTools';
 
 describe('tool bar data', () => {
-  it('the fixed bar is Pan, Select, Measure in that order', () => {
-    expect(FIXED_TOOLS.map(tool => tool.id)).toEqual(['view', 'select', 'annotate']);
+  it('the fixed bar is Pan, Select, Measure, Section in that order', () => {
+    expect(FIXED_TOOLS.map(tool => tool.id)).toEqual(['view', 'select', 'annotate', 'section']);
   });
 
   it('Furnishing on the floor offers today’s drawing tools', () => {

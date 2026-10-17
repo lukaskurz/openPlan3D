@@ -8,6 +8,8 @@ import { dimensionPlanGeometry } from './dimensionPlanGeometry';
  * Extracted from FloorPlanCanvas.svelte.
  */
 import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Annotation } from '$lib/models/types';
+import type { PlanSection } from '$lib/models/types';
+import { sectionMarkerGeometry } from './sectionPlan';
 import type { Room } from '$lib/models/types';
 import type { CanvasState } from '$lib/utils/canvasInteraction';
 import type { ProjectSettings } from '$lib/stores/settings';
@@ -1276,6 +1278,72 @@ export function drawPersistedMeasurements(cs: CanvasState, floor: Floor, selecte
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     ctx.fillText(formatLength(dist, dimSettings.units), mx, my - 6);
   }
+}
+
+// ── Section markers (spec §3.5, §5.4) ────────────────────────────────
+
+const SECTION_INK = '#334155';
+const SECTION_ACCENT = '#2563eb';
+
+/**
+ * Section cut lines: a dash-dot chain line, a bubble with the code at each end and an
+ * arrowhead beside each bubble pointing the way the section looks. Sizes are in screen
+ * pixels whatever the zoom; `selectedId` (or a draft) is drawn in the accent colour.
+ */
+export function drawSectionMarkers(cs: CanvasState, sections: readonly PlanSection[], selectedId: string | null): void {
+  const { ctx, zoom } = cs;
+  for (const section of sections) {
+    const geometry = sectionMarkerGeometry(section, zoom);
+    if (!geometry) continue;
+    const selected = section.id === selectedId;
+    const color = selected ? SECTION_ACCENT : SECTION_INK;
+    const s = wts(cs, geometry.start.x, geometry.start.y), e = wts(cs, geometry.end.x, geometry.end.y);
+    ctx.save();
+    if (selected) {
+      // A soft halo under the selected cut so it reads as picked on a busy plan.
+      ctx.strokeStyle = 'rgba(37, 99, 235, 0.18)';
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = selected ? 2 : 1.5;
+    ctx.lineCap = 'butt';
+    ctx.setLineDash([16, 4, 3, 4]);
+    ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    for (const arrow of geometry.arrows) {
+      const [tip, a, b] = arrow.map(p => wts(cs, p.x, p.y));
+      ctx.beginPath(); ctx.moveTo(tip.x, tip.y); ctx.lineTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.closePath(); ctx.fill();
+    }
+    const radius = geometry.bubbles[0].radius * zoom;
+    const size = geometry.code.length > 2 ? 8 : geometry.code.length > 1 ? 10 : 12;
+    for (const bubble of geometry.bubbles) {
+      const c = wts(cs, bubble.center.x, bubble.center.y);
+      ctx.beginPath(); ctx.arc(c.x, c.y, radius, 0, Math.PI * 2);
+      ctx.fillStyle = selected ? SECTION_ACCENT : '#ffffff';
+      ctx.fill();
+      ctx.lineWidth = selected ? 2 : 1.5;
+      ctx.strokeStyle = color;
+      ctx.stroke();
+      ctx.fillStyle = selected ? '#ffffff' : SECTION_INK;
+      ctx.font = `bold ${size}px sans-serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(geometry.code, c.x, c.y + 0.5);
+    }
+    ctx.restore();
+  }
+}
+
+/** The Section tool's first point before the line has an end: a small accent dot. */
+export function drawSectionStart(cs: CanvasState, start: Point): void {
+  const { ctx } = cs;
+  const p = wts(cs, start.x, start.y);
+  ctx.save();
+  ctx.fillStyle = SECTION_ACCENT;
+  ctx.beginPath(); ctx.arc(p.x, p.y, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
 }
 
 // ── Text annotations ─────────────────────────────────────────────────

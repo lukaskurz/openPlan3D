@@ -16,11 +16,12 @@ export interface BarTool {
   title?: TranslationKey;
 }
 
-/** Pan, Select, Measure. Section joins in a later package as one more entry. */
+/** Pan, Select, Measure, Section (spec §3.2). */
 export const FIXED_TOOLS: readonly BarTool[] = [
   { id: 'view', icon: 'pan', label: 'chrome.tool.view', title: 'chrome.tool.viewHint' },
   { id: 'select', icon: 'select', label: 'chrome.tool.select' },
   { id: 'annotate', icon: 'ruler', label: 'chrome.tool.annotate' },
+  { id: 'section', icon: 'section', label: 'chrome.tool.section', title: 'chrome.tool.sectionHint' },
 ];
 
 /** The tools each trade offers on each surface (spec §3.3). */

@@ -21,6 +21,7 @@ const reasons: Extract<TranslationKey, `projectValidation.${string}`>[] = [
   'projectValidation.validDate',
   'projectValidation.duplicateAlternative',
   'projectValidation.alternative',
+  'projectValidation.duplicateSection',
 ];
 const suffixes = reasons.map(key => ({ key, text: ` ${translate('en', key)}.` }));
 

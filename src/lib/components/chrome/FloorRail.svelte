@@ -1,6 +1,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n';
-  import { currentProject, addFloor, removeFloor, setActiveFloor, updateFloorElevation, updateFloorSlabThickness, layerVisibility, viewMode, elevationWallId, type FloorSeed } from '$lib/stores/project';
+  import { currentProject, addFloor, removeFloor, setActiveFloor, updateFloorElevation, updateFloorSlabThickness, layerVisibility, viewMode, sideViewOpen, type FloorSeed } from '$lib/stores/project';
   import { activeSurface, type Surface } from '$lib/stores/workContext';
   import { railStoreys } from '$lib/utils/floorRail';
   import { popover, togglePopover, closePopover } from '$lib/stores/chrome';
@@ -12,7 +12,7 @@
   let entries = $derived(railStoreys($currentProject?.floors ?? [], activeId));
   let active = $derived(entries.find(entry => entry.current));
   // Ceiling and floor are surfaces of the plan; 3D and wall elevations have no use for them.
-  let showSurfaces = $derived($viewMode === '2d' && !$elevationWallId);
+  let showSurfaces = $derived($viewMode === '2d' && !$sideViewOpen);
   let confirmingRemove = $state(false);
   let announcement = $state('');
 

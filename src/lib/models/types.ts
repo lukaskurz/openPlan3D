@@ -406,4 +406,23 @@ export interface Project {
    * alternative, including the active one named by `activeAlternativeId`. */
   alternatives?: PlanAlternative[];
   activeAlternativeId?: string;
+  /** Section cut lines. Project-level because a cut passes through every storey;
+   * shared by all plan alternatives so they can be compared at the same cut. */
+  sections?: PlanSection[];
+}
+
+/**
+ * A section cut drawn on the plan (cm, plan coordinates, y down).
+ * With dir = (end − start) / |end − start| and leftNormal = (−dir.y, dir.x),
+ * the section looks along `look * leftNormal`.
+ */
+export interface PlanSection {
+  id: string;
+  /** Short code shown in the markers and the viewer title: 'A', 'B', … then 'AA'. */
+  code: string;
+  start: Point;
+  end: Point;
+  look: 1 | -1;
+  /** Storeys the markers show on; missing = every storey the line crosses. Unknown ids are ignored. */
+  floorIds?: string[];
 }

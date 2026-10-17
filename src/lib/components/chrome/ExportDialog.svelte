@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
-  import { t, type TranslationKey } from '$lib/i18n';
+  import { t, locale, type TranslationKey } from '$lib/i18n';
+  import { get } from 'svelte/store';
+  import { currentProject, openSectionId } from '$lib/stores/project';
+  import { exportSectionPDF, exportSectionSVG } from '$lib/utils/export';
   import { modalDialog } from '$lib/utils/modalDialog';
   import { dialog } from '$lib/stores/chrome';
   import { exportAs, type ExportFormat } from './actions';
@@ -26,6 +29,16 @@
   let busy = $state(false);
 
   function close() { dialog.set(null); }
+
+  // With a section open, PDF and SVG can also export just that section.
+  let openSection = $derived($openSectionId ? $currentProject?.sections?.find(s => s.id === $openSectionId) ?? null : null);
+  function runSection() {
+    const project = get(currentProject);
+    if (!project || !openSection) return;
+    if (chosen === 'svg') exportSectionSVG(project, openSection, get(locale));
+    else exportSectionPDF(project, openSection, get(locale));
+    close();
+  }
 
   async function run() {
     busy = true;
@@ -64,6 +77,9 @@
         <div class="flex gap-2 justify-end flex-wrap">
           {#if chosen === 'pdf'}
             <button class="op-btn is-outline" onclick={() => dialog.set('print')}><Icon name="printer" size={18} />{$t('chrome.export.printLayout')}</button>
+          {/if}
+          {#if openSection && (chosen === 'pdf' || chosen === 'svg')}
+            <button class="op-btn is-outline" onclick={runSection} data-export-section>{$t('sectionView.exportThis', { code: openSection.code })}</button>
           {/if}
           <button class="op-btn is-primary" disabled={busy} onclick={run} data-export-run>{$t('chrome.export.run', { format: $t(format.label) })}</button>
         </div>

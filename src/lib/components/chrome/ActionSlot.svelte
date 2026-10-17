@@ -1,7 +1,7 @@
 <script lang="ts">
   import { t, type TranslationKey } from '$lib/i18n';
   import {
-    viewMode, elevationWallId, elevationPickMode, doorJoinMode, calibrationMode, calibrationPoints, constraintPickMode,
+    viewMode, sideViewOpen, elevationPickMode, doorJoinMode, calibrationMode, calibrationPoints, constraintPickMode,
     detectedRoomsStore, selectedElementId, selectedElementIds, selectedRoomId, selectedTool, placingFurnitureId,
     currentProject,
   } from '$lib/stores/project';
@@ -22,7 +22,7 @@
    * and Done, 4. the status line.
    */
 
-  let plan = $derived($viewMode === '2d' && !$elevationWallId);
+  let plan = $derived($viewMode === '2d' && !$sideViewOpen);
   let rooms = $derived($detectedRoomsStore);
 
   interface Overlay { text: string; cancel: () => void; kind: string }

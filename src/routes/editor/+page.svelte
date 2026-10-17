@@ -9,7 +9,7 @@
   import { replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { reportLoadingFailure } from '$lib/services/deployment';
-  import { currentProject, viewMode, selectedElementId, selectedRoomId, createDefaultProject, loadProject, elevationWallId, elevationPickMode } from '$lib/stores/project';
+  import { currentProject, viewMode, selectedElementId, selectedRoomId, createDefaultProject, loadProject, elevationWallId, elevationPickMode, openSectionId } from '$lib/stores/project';
   import { USER_GUIDE_URL } from '$lib/stores/exportNotice';
   import { interchangeProjectName } from '$lib/utils/interchange';
   import { localStore, storageErrorMessage, downloadLibraryBackup } from '$lib/services/datastore';
@@ -18,6 +18,7 @@
   import FloorPlanCanvas from '$lib/components/editor/FloorPlanCanvas.svelte';
   import CommandPalette from '$lib/components/editor/CommandPalette.svelte';
   import ElevationView from '$lib/components/editor/ElevationView.svelte';
+  import SectionView from '$lib/components/editor/SectionView.svelte';
   import OnboardingTooltip from '$lib/components/OnboardingTooltip.svelte';
   import EditorChrome from '$lib/components/chrome/EditorChrome.svelte';
   import { dialog, elementsListOpen } from '$lib/stores/chrome';
@@ -213,6 +214,9 @@
       <FloorPlanCanvas />
       {#if $elevationWallId}
         <ElevationView />
+      {/if}
+      {#if $openSectionId}
+        <SectionView />
       {/if}
     {:else}
       {#if ThreeViewer}

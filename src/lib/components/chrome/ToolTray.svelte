@@ -294,6 +294,12 @@
       <div class="op-divider-v"></div>
       {@render done()}
     </div>
+  {:else if $toolGroup === 'section'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint('chrome.hint.section')}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
   {:else if $toolGroup === 'ceilingHeight'}
     <div class="op-float op-enter op-slot-bar" data-tool-tray>
       {@render hint('chrome.hint.ceilingHeight')}

@@ -47,6 +47,10 @@
     columnRound: 'M12 18a6 6 0 1 0 0-12 6 6 0 0 0 0 12z',
     columnSquare: 'M6 6h12v12H6z',
     measure: 'M2 12h20M2 9v6M22 9v6M7 11v2M12 10v4M17 11v2',
+    /** Section: a dash-dot cut line with an arrowhead at each end, both pointing the way it looks. */
+    section: 'M2 16h4M9 16h1M13 16h4M20 16h2M4 16V6M1.5 8.5 4 6l2.5 2.5M20 16V6M17.5 8.5 20 6l2.5 2.5',
+    /** Look the other way: two opposed arrows. */
+    lookFlip: 'M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4',
     dimension: 'M3 7h18M3 4v6M21 4v6M7 14h10M7 20h10M12 14v6',
     text: 'M4 7V4h16v3M12 4v16M8 20h8',
     undo: 'M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11',

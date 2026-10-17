@@ -3,6 +3,7 @@ import { validateItemDetails, validateRetainedDetailState } from './itemDetails'
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
 import { CODE, ensureAlternativeCodes } from './planAlternatives';
+import { nextSectionCode } from './sectionPlan';
 
 /** Highest ceiling height accepted in `floor.roomCeilingHeights`, in cm (matches utils/ceilingHeights.ts). */
 const MAX_CEILING_HEIGHT = 100_000;
@@ -299,6 +300,33 @@ export function readProject(value: unknown): Project {
     }
     ensureAlternativeCodes(project! as Project);
   } else delete project!.activeAlternativeId;
+  if (project!.sections !== undefined) {
+    // Section cuts (spec §4.8) are shared by every alternative, so their storeys may be any alternative's.
+    const knownFloors = new Set<string>([...floorIds, ...(project!.alternatives ?? []).flatMap((alt: any) => alt.floors.map((floor: any) => floor.id))]);
+    const seen = new Set<string>();
+    const sections = list(project!, 'sections', 'document');
+    for (const [i, item] of sections.entries()) {
+      const path = `sections[${i}]`;
+      record(item, path); text(item.id, `${path}.id`, true);
+      if (seen.has(item.id)) fail(`${path}.id`, 'duplicates another section');
+      seen.add(item.id);
+      point(item.start, `${path}.start`); point(item.end, `${path}.end`);
+      defaults(item, { look: 1 }); choice(item.look, [1, -1] as any, `${path}.look`);
+      if (item.floorIds !== undefined) {
+        ids(item.floorIds, `${path}.floorIds`);
+        item.floorIds = [...new Set<string>(item.floorIds)].filter(id => knownFloors.has(id));
+        if (!item.floorIds.length) delete item.floorIds;
+      }
+    }
+    // A cut without length shows nothing; codes are repaired rather than rejected (missing, blank or repeated).
+    project!.sections = sections.filter(item => item.start.x !== item.end.x || item.start.y !== item.end.y);
+    const codes = new Set<string>();
+    for (const item of project!.sections) {
+      if (typeof item.code === 'string' && item.code.trim() && !codes.has(item.code.trim())) item.code = item.code.trim();
+      else item.code = nextSectionCode([...codes, ...project!.sections.map((other: any) => typeof other.code === 'string' ? other.code.trim() : undefined)]);
+      codes.add(item.code);
+    }
+  }
   if (project!.customEntourage !== undefined) {
     const seen = new Set<string>();
     for (const [i, item] of list(project!, 'customEntourage', 'document').entries()) {

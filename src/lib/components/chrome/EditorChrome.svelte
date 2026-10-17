@@ -3,7 +3,7 @@
   import { get } from 'svelte/store';
   import { t } from '$lib/i18n';
   import { modalDialog, hasOpenModal } from '$lib/utils/modalDialog';
-  import { currentProject, activeFloor, viewMode, elevationWallId, layerVisibility } from '$lib/stores/project';
+  import { currentProject, activeFloor, viewMode, sideViewOpen, layerVisibility } from '$lib/stores/project';
   import { saveState, autoSave, initAutoSave } from '$lib/stores/saveStatus';
   import { initVersionHistory, stopVersionHistory } from '$lib/stores/versionHistory';
   import { hasPlanContent } from '$lib/utils/planContentBounds';
@@ -44,7 +44,7 @@
   let errorMessage = $state<string | null>(null);
   const onerror = (message: string) => { errorMessage = message; };
 
-  let plan = $derived($viewMode === '2d' && !$elevationWallId);
+  let plan = $derived($viewMode === '2d' && !$sideViewOpen);
   let floorBelow = $derived(getFloorBelow($currentProject));
   let emptyPlan = $derived(plan && !!$floorView && !hasPlanContent($floorView)
     && !($layerVisibility.floorBelow && floorBelow && hasPlanContent(floorBelow))

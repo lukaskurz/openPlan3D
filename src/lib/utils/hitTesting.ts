@@ -330,3 +330,6 @@ export function findEntourageAt(
   }
   return null;
 }
+
+/** Section markers are project-level; their hit test lives with their geometry. */
+export { hitTestSectionMarker, type SectionHit } from './sectionPlan';

@@ -2,8 +2,8 @@
   import { prefersTouch } from '$lib/utils/inputDevice';
   import { t } from '$lib/i18n';
   import { onDestroy } from 'svelte';
-  import { hasOpenModal, popupOwnsEscape } from '$lib/utils/modalDialog';
-  import { isEditingField } from '$lib/utils/shortcuts';
+  import { listenSideViewKeys } from '$lib/utils/sideViewKeys';
+  import { beyondItems, sectionFrame, wallElevationSection, type BeyondItem } from '$lib/utils/sectionCut';
   /**
    * ElevationView — integrated face-on view + editor for a single wall.
    * Fills the canvas area (replaces the plan canvas while active — sidebars stay).
@@ -17,7 +17,7 @@
    * empty wall selects the wall itself. A slim header bar cycles through walls.
    * Escape (or the TopBar Plan/Elevation toggle) returns to the plan view.
    */
-  import { activeFloor, elevationWallId, selectedElementId, selectedElementIds, selectedRoomId, updateDoor, updateWindow, updateFurniture, beginUndoGroup, endUndoGroup } from '$lib/stores/project';
+  import { currentProject, activeFloor, elevationWallId, selectedElementId, selectedElementIds, selectedRoomId, updateDoor, updateWindow, updateFurniture, beginUndoGroup, endUndoGroup } from '$lib/stores/project';
   import type { FurnitureItem } from '$lib/models/types';
   import { effectiveElevation } from '$lib/utils/mounting';
   import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
@@ -70,6 +70,22 @@
     const f = $activeFloor;
     if (!wall || !f) return [] as FurnitureItem[];
     return f.furniture.filter((item) => item.wallId === wall!.id);
+  });
+
+  /**
+   * Furniture standing in front of this face (within a metre of it), seen as in a section
+   * placed just inside the wall: drawn as faint outlines for reference, not editable here.
+   * Straight walls only (the section uses the wall's chord).
+   */
+  let nearbyCache: BeyondItem[] = [];
+  let nearbyItems = $derived.by(() => {
+    const f = $activeFloor, project = $currentProject;
+    // Dragging an opening changes nothing in front of the wall: skip the room detection per frame.
+    if (dragging) return nearbyCache;
+    if (!wall || !f || !project || wall.curvePoint) return (nearbyCache = []);
+    const hosted = new Set(hostedItems.map((item) => item.id));
+    return (nearbyCache = beyondItems(project, sectionFrame(wallElevationSection(wall, 1, 100)), f, 0, { clipDepth: 200 })
+      .filter((shape): shape is BeyondItem => shape.kind === 'item' && !hosted.has(shape.itemId)));
   });
 
   /** Wall length in cm (samples curved walls like the properties panel does) */
@@ -150,34 +166,10 @@
     elevationWallId.set(null);
   }
 
-  // Escape returns to the plan view. Registered in the capture phase so the
-  // plan canvas's own window-level Escape handling doesn't also fire.
+  // Escape returns to the plan view; Undo/Redo first closes the elevation's drag group.
   $effect(() => {
     if (!$elevationWallId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (hasOpenModal()) return;
-      // Close the elevation group before the plan's bubbling history handler.
-      // Text fields retain their own native Undo/Redo behavior.
-      if (!isEditingField(e.target) && (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'y')) {
-        endDrag();
-      }
-      if (e.key === 'Escape') {
-        // A focused field or an open menu or panel takes Escape first (see keepFromPlan).
-        if (isEditingField(e.target) || popupOwnsEscape(e.target)) return;
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        backToPlan();
-      }
-    };
-    // Escape left to a field, menu or panel still stops short of the plan canvas:
-    // document bubbling runs before its window-level handler.
-    const keepFromPlan = (e: KeyboardEvent) => { if (e.key === 'Escape' && !hasOpenModal()) e.stopPropagation(); };
-    window.addEventListener('keydown', onKey, true);
-    document.addEventListener('keydown', keepFromPlan);
-    return () => {
-      window.removeEventListener('keydown', onKey, true);
-      document.removeEventListener('keydown', keepFromPlan);
-    };
+    return listenSideViewKeys(backToPlan, () => endDrag());
   });
 
   // ── Canvas + geometry ─────────────────────────────────────────────
@@ -427,6 +419,7 @@
     const u = units;
     const rects = openingRects();
     const items = hostedRects();
+    const nearby = nearbyItems;
     if (!c) return;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     c.width = Math.max(1, Math.round(cw * dpr));
@@ -476,6 +469,24 @@
     }
     ctx.stroke();
     ctx.restore();
+
+    // Furniture in front of the face, faint and dashed (reference only).
+    if (nearby.length) {
+      ctx.save();
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      for (const item of nearby) {
+        ctx.strokeRect(xAt(item.u0), yAt(item.z1), (item.u1 - item.u0) * scale, (item.z1 - item.z0) * scale);
+        if (item.hang) {
+          ctx.beginPath();
+          ctx.moveTo(xAt(item.hang.u), yAt(item.hang.z0));
+          ctx.lineTo(xAt(item.hang.u), yAt(item.hang.z1));
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
 
     // Openings (doors first, then windows on top — same order as hit testing)
     for (const r of rects) {

@@ -1,18 +1,19 @@
 <script lang="ts">
   import { t, type TranslationKey } from '$lib/i18n';
-  import { viewMode, elevationWallId, elevationPickMode, layerVisibility } from '$lib/stores/project';
+  import { viewMode, elevationWallId, openSectionId, elevationPickMode, layerVisibility } from '$lib/stores/project';
   import { projectSettings } from '$lib/stores/settings';
   import { planDisplay } from '$lib/stores/planView';
   import { popover, togglePopover, closePopover, elementsListOpen } from '$lib/stores/chrome';
   import Icon from './Icon.svelte';
 
-  /** A wall elevation belongs to the plan side: 2D stays pressed, and tapping it goes back to the plan. */
+  /** A wall elevation or a section belongs to the plan side: 2D stays pressed, and tapping it goes back to the plan. */
   let is3d = $derived($viewMode === '3d');
   let open = $derived($popover === 'show');
 
   function show2D() {
     viewMode.set('2d');
     elevationWallId.set(null);
+    openSectionId.set(null);
     elevationPickMode.set(false);
     closePopover();
   }
@@ -23,7 +24,7 @@
     closePopover();
   }
 
-  type Layer = 'roomLabels' | 'constraints' | 'underlay' | 'floorBelow' | 'furniture';
+  type Layer = 'roomLabels' | 'constraints' | 'underlay' | 'sections' | 'floorBelow' | 'furniture';
   const layer = (key: Layer) => ({ on: $layerVisibility[key], toggle: () => layerVisibility.update(v => ({ ...v, [key]: !v[key] })) });
 
   type Row = { label: TranslationKey; on: boolean; toggle: () => void; key: string };
@@ -33,6 +34,7 @@
     { key: 'measurements', label: 'chrome.view.measurements', on: $layerVisibility.measurements && $layerVisibility.annotations, toggle: () => layerVisibility.update(v => { const on = !(v.measurements && v.annotations); return { ...v, measurements: on, annotations: on }; }) },
     { key: 'rules', label: 'chrome.view.rules', ...layer('constraints') },
     { key: 'drawings', label: 'chrome.view.drawings', ...layer('underlay') },
+    { key: 'sections', label: 'chrome.view.sections', ...layer('sections') },
     { key: 'grid', label: 'chrome.view.grid', on: $planDisplay.grid, toggle: () => planDisplay.update(d => ({ ...d, grid: !d.grid })) },
     { key: 'rulers', label: 'chrome.view.rulers', on: $planDisplay.rulers, toggle: () => planDisplay.update(d => ({ ...d, rulers: !d.rulers })) },
     { key: 'minimap', label: 'chrome.view.minimap', on: $planDisplay.minimap, toggle: () => planDisplay.update(d => ({ ...d, minimap: !d.minimap })) },

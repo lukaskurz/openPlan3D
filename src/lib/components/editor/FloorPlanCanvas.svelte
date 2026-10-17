@@ -11,8 +11,9 @@
   import { planContentBounds, hasPlanContent } from '$lib/utils/planContentBounds';
   import { connectedWallEndpoints } from '$lib/utils/wallEditing';
   import { createDrawScheduler } from '$lib/utils/drawScheduler';
-  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, moveWallItemDuringDrag, updateFurniture, toggleSwitchLinkTarget, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors } from '$lib/stores/project';
-  import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
+  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, moveWallItemDuringDrag, updateFurniture, toggleSwitchLinkTarget, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors, sideViewOpen, addSection, updateSection } from '$lib/stores/project';
+  import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef, PlanSection, Project } from '$lib/models/types';
+  import { MIN_SECTION_LENGTH, SECTION_BUBBLE_HIT_PX, SECTION_LINE_HIT_PX, hitTestSectionMarker, nextSectionCode, sectionOnFloor, snapSectionEnd } from '$lib/utils/sectionPlan';
   import type { Floor, Room } from '$lib/models/types';
   import { resolveRoomGeometry, roomLabelPosition, roomCentroid } from '$lib/utils/roomDetection';
   import { roomHoles } from '$lib/utils/roomNesting';
@@ -44,14 +45,14 @@
   import { angleSnapWithin, resizeFurnitureFromHandle, snap as _snap, type CanvasState } from '$lib/utils/canvasInteraction';
   import { checkResult, type CheckResult } from '$lib/assistant/checks';
   import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, planInsetBottom, type SelectMode, type SnapOptions } from '$lib/stores/planView';
-  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect } from '$lib/utils/canvasRenderer';
+  import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect, drawSectionMarkers, drawSectionStart } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { translatedOpeningPosition } from '$lib/utils/openingTranslation';
   import { translatedWallGeometry, wallGeometryOf, type WallGeometry } from '$lib/utils/wallTranslation';
   import { marqueeSelectionIds } from '$lib/utils/marqueeSelection';
   import { isTracingImageType } from '$lib/utils/tracingImage';
   import { activeTrade, activeSurface, type Trade, type Surface } from '$lib/stores/workContext';
-  import { ceilingPick, linkPick, linkSwitchId, placementHeight } from '$lib/components/chrome/tools';
+  import { ceilingPick, linkPick, linkSwitchId, placementHeight, chooseGroup } from '$lib/components/chrome/tools';
   import { drawSwitchLinks, hitTestSwitchLink, isSwitch, isSwitchTarget, linksControlling } from '$lib/utils/switchLinks';
   import { furnitureTrade } from '$lib/utils/furnitureCatalog';
   import { popover } from '$lib/stores/chrome';
@@ -143,6 +144,19 @@
   let measureEnd: Point | null = $state(null);
   let measuring = $derived(currentTool === 'measure');
   let selectedMeasurementId: string | null = $state(null);
+
+  // Section tool (spec §5.4): press-drag-release (touch) or click-click (mouse) draws the cut.
+  let sectioning = $derived(currentTool === 'section');
+  let sectionStart: Point | null = $state(null);
+  let sectionEnd: Point | null = $state(null);
+  /** The press that set the start (`first`) or, on touch, the press that will set the end. */
+  let sectionPress: { x: number; y: number; first: boolean } | null = null;
+  let sectionDragged = false;
+  let sectionCommittedAt = 0;
+  /** A section marker being dragged in Select: one end (with angle snap) or the whole line. */
+  let draggingSection: { id: string; part: 'start' | 'end' | 'line'; start: Point; end: Point; press: Point; started: boolean } | null = $state(null);
+  let currentProjectValue: Project | null = null;
+  let sectionCache: { project: Project | null; floor: Floor | null; list: PlanSection[] } = { project: null, floor: null, list: [] };
 
   // Annotation tool (dimension annotations)
   let annotating = $derived(currentTool === 'annotate');
@@ -2033,6 +2047,8 @@
     if (measureStart && measuring) drawMeasurement();
     // Annotations
     if (layerVis.annotations && floor) drawAnnotations(floor);
+    // Section markers (every trade and surface), then the Section tool's draft
+    if (floor) drawSections();
     // Annotation preview
     if (annotating && annotationStart) drawAnnotationPreview();
     // Parametric dimensions and constraint badges
@@ -2339,6 +2355,7 @@
         initialFitDone = saved?.fitted ?? false;
         measureStart = null;
         measureEnd = null;
+        resetSectionDraft();
         annotationStart = null;
         editingDimensionId = null;
         dimensionPicks = [];
@@ -2377,6 +2394,7 @@
         placingColumn.set(false);
         measureStart = null;
         measureEnd = null;
+        resetSectionDraft();
         annotationStart = null;
         editingDimensionId = null;
         wallStart = null;
@@ -2396,6 +2414,7 @@
     const unsub11 = placingStair.subscribe((v) => { isPlacingStair = v; markDirty(); });
     const unsubEnt1 = placingEntourageId.subscribe((id) => { currentEntourageDefId = id; if (id) { placingStair.set(false); placingColumn.set(false); } markDirty(); });
     const unsubEnt2 = currentProject.subscribe((pr) => {
+      currentProjectValue = pr;
       if (clipboard && clipboard.projectId !== pr?.id) clipboard = null;
       customEntourageDefs = pr?.customEntourage;
       floorBelow = getFloorBelow(pr);
@@ -2425,7 +2444,7 @@
     const unsub12 = calibrationMode.subscribe((v) => { isCalibrating = v; markDirty(); });
     const unsub13 = calibrationPoints.subscribe((pts) => { calPoints = pts; markDirty(); });
     const unsub_multi = selectedElementIds.subscribe((ids) => { currentSelectedIds = ids; markDirty(); });
-    const unsub_elevopen = elevationWallId.subscribe((id) => { elevationOpen = !!id; markDirty(); });
+    const unsub_elevopen = sideViewOpen.subscribe((open) => { elevationOpen = open; markDirty(); });
     const unsub_elevpick = elevationPickMode.subscribe((v) => { pickingElevation = v; markDirty(); });
     const unsub_join = doorJoinMode.subscribe((v) => { joinMode = v; joinHint = 'doorJoin.hint'; markDirty(); });
     let backgroundSource: string | undefined;
@@ -2663,7 +2682,8 @@
   function toggleSelectionTarget(id: string) {
     const ids = new Set(currentSelectedIds);
     for (const selected of [currentSelectedId, selectedMeasurementId, selectedAnnotationId, selectedTextAnnotationId]) {
-      if (selected) ids.add(selected);
+      // A section is never part of a multi-selection (it lives on the project, not the floor).
+      if (selected && !currentProjectValue?.sections?.some(section => section.id === selected)) ids.add(selected);
     }
     if (ids.has(id)) ids.delete(id); else ids.add(id);
     clearAuxiliarySelection();
@@ -3032,6 +3052,11 @@
       return;
     }
 
+    if (sectioning) {
+      sectionToolPress(wp, e);
+      return;
+    }
+
     // Dimension tool: corners and walls make parametric dimensions; free points make plain annotations.
     if (annotating && !annotationStart && dimensionToolClick(wp, sx, sy, e)) return;
     if (annotating) {
@@ -3093,6 +3118,17 @@
       }
       // Click elsewhere deselects guide
       selectedGuideId = null;
+    }
+
+    // Section markers (select, and View taps): a bubble or the line selects the section; dragging moves it.
+    if (tool === 'select' && currentFloor && !isCeilingPick && !isLinkPick && !isCalibrating) {
+      const hit = sectionAt(wp);
+      const section = hit ? currentProjectValue?.sections?.find(item => item.id === hit.id) : undefined;
+      if (hit && section) {
+        selectSection(section.id);
+        draggingSection = { id: section.id, part: hit.part, start: { ...section.start }, end: { ...section.end }, press: wp, started: false };
+        return;
+      }
     }
 
     // Measurement click detection (select)
@@ -3463,6 +3499,8 @@
   function onDblClick(e: MouseEvent) {
     // Looking around never opens editing (renaming a room, finishing walls).
     if ($panMode) return;
+    // The click that ended a section line is not the start of an edit.
+    if (Date.now() - sectionCommittedAt < 600) return;
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -3576,6 +3614,25 @@
       const c = currentFloor.constraints?.find(c => c.id === draggingConstraintId);
       const offset = c ? dimensionOffset(c, currentFloor.walls, mousePos) : undefined;
       if (offset !== undefined) updateConstraint(draggingConstraintId, { offset });
+      markDirty();
+      return;
+    }
+
+    if (draggingSection) {
+      const drag = draggingSection;
+      if (!drag.started) {
+        if (Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) < 3) return;
+        beginUndoGroup();
+        drag.started = true;
+      }
+      if (drag.part === 'line') {
+        const dx = snap(mousePos.x - drag.press.x), dy = snap(mousePos.y - drag.press.y);
+        updateSection(drag.id, { start: { x: drag.start.x + dx, y: drag.start.y + dy }, end: { x: drag.end.x + dx, y: drag.end.y + dy } });
+      } else {
+        const fixed = drag.part === 'start' ? drag.end : drag.start;
+        const p = snapSectionEnd(fixed, { x: snap(mousePos.x), y: snap(mousePos.y) }, snapBypass);
+        if (Math.hypot(p.x - fixed.x, p.y - fixed.y) >= MIN_SECTION_LENGTH) updateSection(drag.id, { [drag.part]: p });
+      }
       markDirty();
       return;
     }
@@ -3923,6 +3980,11 @@
     if (measuring && measureStart) {
       measureEnd = { ...mousePos };
     }
+
+    if (sectioning && sectionStart) {
+      sectionEnd = snapSectionEnd(sectionStart, { x: snap(mousePos.x), y: snap(mousePos.y) }, snapBypass);
+      if (sectionPress && Math.hypot(e.clientX - sectionPress.x, e.clientY - sectionPress.y) > 10) sectionDragged = true;
+    }
   }
 
   function onMouseUp(e: MouseEvent) {
@@ -3944,6 +4006,12 @@
     canvasGestureActive = false;
     isPanning = false;
     draggingGuideId = null;
+
+    if (draggingSection) {
+      if (draggingSection.started) endUndoGroup('Moved section');
+      draggingSection = null;
+    }
+    if (sectionPress) sectionToolRelease();
 
     if (draggingConstraintId) {
       if (constraintDragStarted) endUndoGroup('Edited constraint');
@@ -4500,6 +4568,7 @@
       textAnnotationMode = false;
       measureStart = null;
       measureEnd = null;
+      resetSectionDraft();
       annotationStart = null;
       dimensionPicks = [];
       dimensionHover = null;
@@ -4676,6 +4745,101 @@
         selectedTool.set('select');
       }
     }
+  }
+
+  // ── Sections ─────────────────────────────────────────────────────
+  /** Sections whose markers show on the current floor (cached per project and floor state). */
+  function floorSections(): PlanSection[] {
+    const project = currentProjectValue, floor = currentFloor;
+    if (!project?.sections?.length || !floor) return [];
+    if (sectionCache.project !== project || sectionCache.floor !== floor) {
+      sectionCache = { project, floor, list: project.sections.filter(section => sectionOnFloor(section, floor, project)) };
+    }
+    return sectionCache.list;
+  }
+
+  /** The section marker under a plan point, when markers are shown. */
+  function sectionAt(wp: Point) {
+    if (!layerVis.sections) return null;
+    return hitTestSectionMarker(wp, floorSections(), zoom, {
+      bubblePx: handleTolerance(SECTION_BUBBLE_HIT_PX),
+      linePx: touchPress === 'finger' ? 14 : SECTION_LINE_HIT_PX,
+    });
+  }
+
+  function selectSection(id: string) {
+    clearAuxiliarySelection();
+    selectedElementIds.set(new Set());
+    selectedRoomId.set(null);
+    selectedElementId.set(id);
+  }
+
+  function drawSections() {
+    const cs = getCS();
+    if (layerVis.sections) {
+      const shown = floorSections();
+      // The selected section stays visible while it is selected, even off this storey's content.
+      const selected = currentSelectedId ? currentProjectValue?.sections?.find(section => section.id === currentSelectedId) : undefined;
+      drawSectionMarkers(cs, selected && !shown.includes(selected) ? [...shown, selected] : shown, currentSelectedId);
+    }
+    if (sectioning && sectionStart) {
+      if (sectionEnd && Math.hypot(sectionEnd.x - sectionStart.x, sectionEnd.y - sectionStart.y) > 0) {
+        const code = nextSectionCode((currentProjectValue?.sections ?? []).map(section => section.code));
+        drawSectionMarkers(cs, [{ id: '', code, start: sectionStart, end: sectionEnd, look: 1 }], '');
+      } else drawSectionStart(cs, sectionStart);
+    }
+  }
+
+  function resetSectionDraft() {
+    sectionStart = null;
+    sectionEnd = null;
+    sectionPress = null;
+    sectionDragged = false;
+  }
+
+  /** Mouse: the first click sets the start, the second the end. Touch: a drag draws the line; a tap then another also works. */
+  function sectionToolPress(wp: Point, e: MouseEvent) {
+    const point = { x: snap(wp.x), y: snap(wp.y) };
+    if (!sectionStart) {
+      sectionStart = point;
+      sectionEnd = null;
+      sectionPress = { x: e.clientX, y: e.clientY, first: true };
+      sectionDragged = false;
+    } else if (touchPress) {
+      // A finger ends the line on release, so the first finger of a pinch adds nothing.
+      sectionEnd = snapSectionEnd(sectionStart, point, snapBypass);
+      sectionPress = { x: e.clientX, y: e.clientY, first: false };
+    } else {
+      commitSection(sectionStart, snapSectionEnd(sectionStart, point, snapBypass));
+    }
+    markDirty();
+  }
+
+  function sectionToolRelease() {
+    const press = sectionPress!;
+    sectionPress = null;
+    if (!sectioning || !sectionStart) return;
+    // A second finger landed (a pinch): drop what this press started.
+    if (singleTouchActive) {
+      if (press.first) resetSectionDraft();
+      return;
+    }
+    if ((!press.first || sectionDragged) && sectionEnd) commitSection(sectionStart, sectionEnd);
+    sectionDragged = false;
+  }
+
+  /** Create the section (ignoring cuts under 20 cm), select it and go back to Select. */
+  function commitSection(start: Point, end: Point) {
+    resetSectionDraft();
+    markDirty();
+    // The tap or click that ends the line must not pair with the next one into a double click (rename, …).
+    lastTapTime = 0;
+    sectionCommittedAt = Date.now();
+    if (Math.hypot(end.x - start.x, end.y - start.y) < MIN_SECTION_LENGTH) return;
+    const id = addSection(start, end);
+    if (!id) return;
+    chooseGroup('select');
+    selectSection(id);
   }
 
   function placeMeasurementPoint(point: Point) {
@@ -4959,6 +5123,7 @@
     draggingStairId ? 'move' :
     draggingColumnId ? 'move' :
     draggingTextAnnotationId ? 'move' :
+    draggingSection ? 'move' :
     draggingWallParallel ? 'move' :
     draggingCurveHandle ? 'crosshair' :
     draggingWallEndpoint ? 'crosshair' :

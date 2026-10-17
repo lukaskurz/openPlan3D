@@ -2,7 +2,7 @@
   import { t, locale, type TranslationKey } from '$lib/i18n';
   import {
     activeFloor, currentProject, selectedElementId, selectedElementIds, selectedRoomId, selectedTool, detectedRoomsStore,
-    constraintPickMode, elevationWallId, elevationPickMode, removeElement, duplicateSelection, beginUndoGroup, endUndoGroup,
+    constraintPickMode, elevationWallId, elevationPickMode, sideViewOpen, openSectionId, flipSection, removeElement, duplicateSelection, beginUndoGroup, endUndoGroup,
     resizeWallLength, reverseWall, updateDoor, updateWindow, updateFurniture, rotateFurniture, toggleFurnitureLock,
     toggleSelectionLock, addGeometricConstraint, removeConstraint, wallConstraint, showPlanNotice, findGroupForElement,
     setRoomCeilingHeight,
@@ -38,12 +38,14 @@
   let pipe = $derived(!multi && id ? floor?.pipes?.find(p => p.id === id) : undefined);
   let room = $derived(!multi && !id && $selectedRoomId ? $detectedRoomsStore.find(r => r.id === $selectedRoomId) : undefined);
   let link = $derived(!multi && id ? floor?.switchLinks?.find(l => l.id === id) : undefined);
-  let other = $derived(!multi && id && !wall && !door && !win && !furniture && !pipe && !link);
+  /** A section cut (project-level, so not on the floor): resolved before 'other'. */
+  let section = $derived(!multi && id ? $currentProject?.sections?.find(s => s.id === id) : undefined);
+  let other = $derived(!multi && id && !wall && !door && !win && !furniture && !pipe && !link && !section);
 
-  let kind = $derived(multi ? 'multi' : wall ? 'wall' : door ? 'door' : win ? 'window' : furniture ? 'furniture' : pipe ? 'pipe' : link ? 'link' : room ? 'room' : other ? 'other' : null);
+  let kind = $derived(multi ? 'multi' : wall ? 'wall' : door ? 'door' : win ? 'window' : furniture ? 'furniture' : pipe ? 'pipe' : link ? 'link' : section ? 'section' : room ? 'room' : other ? 'other' : null);
   // Docked in the action slot, so it no longer follows the selection around the plan (selectionAnchor
   // stays for the canvas) and stays put while the plan is panned.
-  let visible = $derived(!!kind && $selectedTool === 'select' && !$constraintPickMode && !$elevationWallId);
+  let visible = $derived(!!kind && $selectedTool === 'select' && !$constraintPickMode && !$sideViewOpen);
 
   let units = $derived($projectSettings.units);
   const len = (cm: number) => formatLength(cm, units);
@@ -396,6 +398,14 @@
         {@render chip('link', $t('chrome.selection.link'), linkLabel, () => startLinkTool(link.switchId))}
         <div class="op-divider-v"></div>
         {@render action('link', 'chrome.tool.link', () => startLinkTool(link.switchId), { data: 'edit-link' })}
+        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
+      {:else if kind === 'section' && section}
+        <!-- A section marker (spec §3.8): `Section A–A`; Open shows it in the section viewer. -->
+        {@const openSection = () => { closePopover(); elevationPickMode.set(false); openSectionId.set(section.id); }}
+        {@render chip('section', '', $t('chrome.selection.sectionName', { code: section.code }), openSection, { title: $t('chrome.selection.openSection') })}
+        <div class="op-divider-v"></div>
+        {@render action('eye', 'chrome.selection.openSection', openSection, { data: 'open-section' })}
+        {@render action('lookFlip', 'chrome.selection.lookOtherWay', () => flipSection(section.id), { data: 'flip-section' })}
         {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
       {:else if kind === 'room' && ceilingRoom}
         <!-- The ceiling: a room is selected to set its ceiling height. -->

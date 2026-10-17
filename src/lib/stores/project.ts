@@ -4,7 +4,8 @@ import { splitWallGeometry } from '$lib/utils/splitWallGeometry';
 import { wallPathProfile } from '$lib/utils/wallProfiles';
 import { duplicatePlanSelection, pastePlanSelection, shiftedOpeningPosition } from '$lib/utils/duplicateSelection';
 import { writable, derived, get, type Writable } from 'svelte/store';
-import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState, Pipe } from '$lib/models/types';
+import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState, Pipe, PlanSection } from '$lib/models/types';
+import { nextSectionCode } from '$lib/utils/sectionPlan';
 import { minPipePoints, validPipeData } from '$lib/utils/pipes';
 import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
@@ -54,7 +55,7 @@ export const activeFloor = derived(currentProject, ($p) => {
   return $p.floors.find((f) => f.id === $p.activeFloorId) ?? $p.floors[0] ?? null;
 });
 
-export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture' | 'text' | 'measure' | 'annotate' | 'pipe';
+export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture' | 'text' | 'measure' | 'annotate' | 'pipe' | 'section';
 export const selectedTool = writable<Tool>('select');
 
 /** Shared activation for the sidebar and keyboard measurement tools. */
@@ -232,7 +233,11 @@ function pruneFloorContext(project: Project) {
     const id = get(store);
     if (id !== null && !known.has(id)) store.set(null);
   };
+  // Sections are project-level: one stays selected (and open) while the project still has it.
+  const sectionIds = new Set((project.sections ?? []).map(section => section.id));
+  for (const id of sectionIds) ids.add(id);
   prune(selectedElementId, ids);
+  prune(openSectionId, sectionIds);
   prune(elevationWallId, new Set(floor.walls.map(wall => wall.id)));
   prune(selectedRoomId, new Set([...floor.rooms, ...get(detectedRoomsStore)].map(room => room.id)));
   const selected = [...get(selectedElementIds)];
@@ -348,6 +353,18 @@ function mutate(fn: (floor: Floor) => void, description?: string, coalesceKey?: 
   fn(floor);
   // Wall-hosted items follow their walls whatever the edit did to them (idempotent).
   rehostWallItems(floor);
+  if (JSON.stringify(p) === before) return;
+  snapshot(description, coalesceKey, before);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+/** Apply `fn` to the project itself (project-level data such as sections) as one Undo step, like `mutate`. */
+function mutateProject(fn: (project: Project) => void, description?: string, coalesceKey?: string) {
+  const p = get(currentProject);
+  if (!p) return;
+  const before = JSON.stringify(p);
+  fn(p);
   if (JSON.stringify(p) === before) return;
   snapshot(description, coalesceKey, before);
   p.updatedAt = new Date();
@@ -757,6 +774,8 @@ export function removeRoom(id: string) {
 }
 
 export function removeElement(id: string) {
+  // Sections live on the project, not the floor (Delete key, context menu, action slot).
+  if (get(currentProject)?.sections?.some(section => section.id === id)) { removeSection(id); return; }
   mutate((f) => {
     // Check if the element being removed is a wall — if so, also remove associated doors/windows
     const isWall = f.walls.some((w) => w.id === id);
@@ -1428,6 +1447,7 @@ export function loadProject(project: Project) {
   _nextDescription = '';
   resetCoalescing();
   clearFloorContext();
+  openSectionId.set(null);
   // Projects not read through readProject (e.g. built in memory) may predate version codes.
   ensureAlternativeCodes(project);
   currentProject.set(project);
@@ -1756,6 +1776,58 @@ export function removeMeasurement(id: string) {
   removeElement(id);
 }
 
+// --- Sections (spec §4.8) ---
+const validSectionPoint = (p: Point | undefined): p is Point => !!p && Number.isFinite(p.x) && Number.isFinite(p.y);
+
+/** Add a section cut from `start` to `end` with the next free code ('A', 'B'…). Returns its id, or '' when the cut is not a line. */
+export function addSection(start: Point, end: Point, look: 1 | -1 = 1): string {
+  if (!validSectionPoint(start) || !validSectionPoint(end) || samePoint(start, end) || !get(currentProject)) return '';
+  const id = uid();
+  mutateProject(p => {
+    const sections = p.sections ?? [];
+    p.sections = [...sections, { id, code: nextSectionCode(sections.map(section => section.code)), start: { x: start.x, y: start.y }, end: { x: end.x, y: end.y }, look: look === -1 ? -1 : 1 }];
+  }, 'Added section');
+  return id;
+}
+
+/** Change a section's line, direction, code or storeys. Ignored when it would leave a zero-length cut. */
+export function updateSection(id: string, patch: Partial<Pick<PlanSection, 'start' | 'end' | 'look' | 'code' | 'floorIds'>>) {
+  const keys = Object.keys(patch);
+  const moved = keys.every(key => key === 'start' || key === 'end');
+  mutateProject(p => {
+    const section = p.sections?.find(item => item.id === id);
+    if (!section) return;
+    const start = patch.start ?? section.start, end = patch.end ?? section.end;
+    if (!validSectionPoint(start) || !validSectionPoint(end) || samePoint(start, end)) return;
+    if (patch.start) section.start = { x: start.x, y: start.y };
+    if (patch.end) section.end = { x: end.x, y: end.y };
+    if (patch.look !== undefined) section.look = patch.look === -1 ? -1 : 1;
+    if (typeof patch.code === 'string' && patch.code.trim()) section.code = patch.code.trim();
+    if ('floorIds' in patch) {
+      if (patch.floorIds?.length) section.floorIds = [...patch.floorIds];
+      else delete section.floorIds;
+    }
+  }, moved ? 'Moved section' : 'Edited section', coalesceKeyFor('section', id, patch as Record<string, unknown>));
+}
+
+/** Look the other way: the cut stays, its viewing direction turns round. */
+export function flipSection(id: string) {
+  mutateProject(p => {
+    const section = p.sections?.find(item => item.id === id);
+    if (section) section.look = section.look === -1 ? 1 : -1;
+  }, 'Reversed section');
+}
+
+export function removeSection(id: string) {
+  if (!get(currentProject)?.sections?.some(section => section.id === id)) return;
+  mutateProject(p => {
+    p.sections = p.sections!.filter(section => section.id !== id);
+    if (!p.sections.length) delete p.sections;
+  }, 'Deleted section');
+  if (get(openSectionId) === id) openSectionId.set(null);
+  if (get(selectedElementId) === id) selectedElementId.set(null);
+}
+
 // --- Annotations ---
 export function addAnnotation(x1: number, y1: number, x2: number, y2: number, offset = 40, label?: string): string {
   const id = uid();
@@ -1984,6 +2056,10 @@ export function findGroupForElement(floor: Floor, elementId: string): ElementGro
 
 /** Wall id whose face-on elevation editor is open (null = closed) */
 export const elevationWallId = writable<string | null>(null);
+/** The section shown in the section viewer, or null. */
+export const openSectionId = writable<string | null>(null);
+/** A wall elevation or a section is open over the plan (the plan's chrome steps aside). */
+export const sideViewOpen = derived([elevationWallId, openSectionId], ([$wall, $section]) => !!$wall || !!$section);
 /** Armed when Elevation is requested with no wall selected: the next wall
  *  clicked in the plan canvas opens its elevation; empty click / Esc cancels */
 export const elevationPickMode = writable<boolean>(false);
