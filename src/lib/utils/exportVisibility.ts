@@ -42,6 +42,8 @@ export function visiblePlanFloor(floor: Floor, visibility: PlanExportVisibility)
     measurements: visibility.measurements ? floor.measurements : [],
     annotations: visibility.annotations ? floor.annotations : [],
     textAnnotations: visibility.textAnnotations ? floor.textAnnotations : [],
+    // Pipes have no layer switch: the plan always draws them (dimmed outside Plumbing), so every export does.
+    pipes: floor.pipes,
   };
 }
 

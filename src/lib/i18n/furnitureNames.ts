@@ -189,6 +189,7 @@ export const portugueseFurnitureNames: Readonly<Record<string, string>> = {
   "statue": "Estátua de jardim",
   "mailbox": "Caixa de correio",
   "sym_outlet": "Tomada",
+  "sym_outlet_double": "Tomada dupla",
   "sym_switch": "Interruptor de luz",
   "sym_ceiling_light": "Luminária de teto",
   "sym_recessed_light": "Luminária embutida",

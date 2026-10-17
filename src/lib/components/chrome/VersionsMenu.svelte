@@ -4,32 +4,31 @@
   import { currentProject, createAlternative, switchPlanAlternative, renamePlanAlternative, deletePlanAlternative } from '$lib/stores/project';
   import { capturePlanThumbnail } from '$lib/stores/saveStatus';
   import { popover, togglePopover, closePopover } from '$lib/stores/chrome';
-  import { alternativeCodes, nextAlternativeLetter } from '$lib/utils/planAlternatives';
-  import type { Project } from '$lib/models/types';
+  import { assignAlternativeCodes, branchCode, nextLetterCode } from '$lib/utils/planAlternatives';
   import Icon from './Icon.svelte';
 
   /**
    * The version button (branch icon, the current alternative's code, chevron) and
-   * its Versions menu. Codes are derived from names and order until they are stored.
+   * its Versions menu. Badges show the stored version codes (derived for entries that
+   * somehow lack one); the plan without alternatives is implicitly "A".
    */
   const THUMBNAIL_SIZE = 160;
-  const NEW = '\u0000new';
   const nameFor = (letter: string) => $t('alternatives.defaultName', { letter });
+  const copyNameFor = (code: string) => $t('chrome.versions.copyName', { code });
 
   // The store edits entries in place, so copy them to let renames and switches re-render.
   let alternatives = $derived(($currentProject?.alternatives ?? []).map(alt => ({ ...alt })));
   let activeId = $derived($currentProject?.activeAlternativeId);
   /** Without alternatives the plan is implicitly the first one, "A". */
-  let rows = $derived(alternatives.length ? alternatives : [{ id: '', name: $t('chrome.versions.thisPlan') }]);
-  let codes = $derived(alternativeCodes(rows, nameFor));
-  /** The code "New alternative" will get: it is named like `createAlternative` names it. */
-  let newCode = $derived.by(() => {
-    const before = alternatives.length ? alternatives : [{ id: '', name: nameFor('A') }];
-    const name = nameFor(nextAlternativeLetter({ alternatives: before } as Project, nameFor));
-    return alternativeCodes([...before, { id: NEW, name }], nameFor).get(NEW) ?? '';
-  });
+  let rows: { id: string; name: string; code?: string; parentCode?: string }[] =
+    $derived(alternatives.length ? alternatives : [{ id: '', name: $t('chrome.versions.thisPlan') }]);
+  let codes = $derived(assignAlternativeCodes(rows));
+  let coded = $derived([...codes.values()].map(code => ({ code })));
   let active = $derived(rows.find(alt => alt.id === (activeId ?? '')) ?? rows[0]);
   let activeCode = $derived(codes.get(active.id) ?? 'A');
+  /** The codes the two actions will give, exactly as `createAlternative` assigns them. */
+  let branchTarget = $derived(branchCode(coded, activeCode));
+  let newCode = $derived(nextLetterCode(coded));
   let open = $derived($popover === 'versions');
 
   let menuRef: HTMLDivElement | undefined = $state();
@@ -54,12 +53,12 @@
   }
 
   function branch() {
-    createAlternative({ thumbnail: thumbnail(), nameFor, name: $t('chrome.versions.copyName', { code: activeCode }) });
+    createAlternative({ thumbnail: thumbnail(), nameFor, copyNameFor, kind: 'branch' });
     closePopover();
   }
 
   function addNew() {
-    createAlternative({ thumbnail: thumbnail(), nameFor });
+    createAlternative({ thumbnail: thumbnail(), nameFor, copyNameFor, kind: 'new' });
     closePopover();
   }
 
@@ -143,7 +142,11 @@
                 {@render badge(code, current)}
                 <span class="min-w-0 flex-1">
                   <span class="block text-sm font-semibold truncate" style="color:{current ? 'var(--color-accent-text-strong)' : 'var(--color-text-strong)'}">{alt.name}</span>
-                  {#if current}<span class="block text-xs" style="color:var(--color-accent-text)">{$t('alternatives.editing')}</span>{/if}
+                  {#if current || alt.parentCode}
+                    <span class="block text-xs truncate" style="color:{current ? 'var(--color-accent-text)' : 'var(--color-text-muted)'}">
+                      {[current ? $t('alternatives.editing') : '', alt.parentCode ? $t('chrome.versions.branchedFrom', { code: alt.parentCode }) : ''].filter(Boolean).join(' · ')}
+                    </span>
+                  {/if}
                 </span>
               </button>
               {#if alt.id}
@@ -163,7 +166,7 @@
         <button class="op-menu-item" role="menuitem" onclick={branch} data-version-branch>
           <Icon name="branch" />
           <span class="min-w-0">
-            {$t('chrome.versions.branch', { code: activeCode })}
+            {$t('chrome.versions.branch', { code: activeCode, next: branchTarget })}
             <span class="op-sub truncate">{$t('chrome.alternatives.copies', { name: active.name })}</span>
           </span>
         </button>

@@ -16,6 +16,7 @@ export function selectionContentBounds(floor: Floor, ids: ReadonlySet<string>, o
     stairs:floor.stairs?.filter(item=>ids.has(item.id)),columns:floor.columns?.filter(item=>ids.has(item.id)),
     entourage:floor.entourage?.filter(item=>ids.has(item.id)),textAnnotations:floor.textAnnotations?.filter(item=>ids.has(item.id)),
     measurements:floor.measurements?.filter(item=>ids.has(item.id)),annotations:floor.annotations?.filter(item=>ids.has(item.id)),
+    pipes:floor.pipes?.filter(item=>ids.has(item.id)),
   };
   return planContentBounds(selected,{...options,openingWalls:floor.walls,backgroundSize:undefined,
     roomLabels:options.roomLabels?.filter(entry=>ids.has(entry.room.id)),

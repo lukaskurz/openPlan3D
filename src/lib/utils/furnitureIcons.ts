@@ -918,6 +918,17 @@ const drawSymOutlet: DrawFn = (ctx, w, d, color) => {
   ctx.stroke();
 };
 
+/** Two outlet circles side by side, sharing one plate. */
+const drawSymOutletDouble: DrawFn = (ctx, w, d, color) => {
+  const r = Math.min(w / 2, d) * 0.45;
+  for (const cx of [-w / 4, w / 4]) {
+    ctx.save();
+    ctx.translate(cx, 0);
+    drawSymOutlet(ctx, r / 0.45, r / 0.45, color);
+    ctx.restore();
+  }
+};
+
 const drawSymSwitch: DrawFn = (ctx, w, d, color) => {
   const r = Math.min(w, d) * 0.45;
   ctx.beginPath();
@@ -1211,6 +1222,7 @@ const iconDrawers: Record<string, DrawFn> = {
   ceiling_fan: drawSymCeilingFan,
   // Electrical symbols
   sym_outlet: drawSymOutlet,
+  sym_outlet_double: drawSymOutletDouble,
   sym_switch: drawSymSwitch,
   sym_ceiling_light: drawSymCeilingLight,
   sym_recessed_light: drawSymRecessedLight,

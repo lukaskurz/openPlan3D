@@ -7,7 +7,11 @@
     toggleSelectionLock, addGeometricConstraint, removeConstraint, wallConstraint, showPlanNotice, findGroupForElement,
     setRoomCeilingHeight,
   } from '$lib/stores/project';
-  import { activeSurface } from '$lib/stores/workContext';
+  import { activeSurface, activeTrade } from '$lib/stores/workContext';
+  import { furnitureTrade } from '$lib/utils/furnitureCatalog';
+  import { isSwitch, linksControlling } from '$lib/utils/switchLinks';
+  import { startLinkTool } from './tools';
+  import { switchSurface } from './surface';
   import { furnitureMount, furnitureDrop, effectiveElevation } from '$lib/utils/mounting';
   import { effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
   import { formatCeilingHeight } from '$lib/utils/ceilingLabels';
@@ -16,11 +20,12 @@
   import { planViewApi, selectMode } from '$lib/stores/planView';
   import { popover, togglePopover, closePopover, inspectorOpen, floorView } from '$lib/stores/chrome';
   import { furnitureName, customModelName } from '$lib/i18n/furnitureNames';
-  import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
+  import { getFurnitureSize, getCatalogItem } from '$lib/utils/furnitureCatalog';
   import { alignElements, alignmentItems, type AlignmentOp } from '$lib/utils/alignment';
   import { wallLength } from '$lib/utils/wallEditing';
   import Keypad from './Keypad.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import PipeSelectionBar from './PipeSelectionBar.svelte';
 
   let floor = $derived($floorView);
   let id = $derived($selectedElementId);
@@ -30,10 +35,12 @@
   let door = $derived(!multi && id ? floor?.doors.find(d => d.id === id) : undefined);
   let win = $derived(!multi && id ? floor?.windows.find(w => w.id === id) : undefined);
   let furniture = $derived(!multi && id ? floor?.furniture.find(f => f.id === id) : undefined);
+  let pipe = $derived(!multi && id ? floor?.pipes?.find(p => p.id === id) : undefined);
   let room = $derived(!multi && !id && $selectedRoomId ? $detectedRoomsStore.find(r => r.id === $selectedRoomId) : undefined);
-  let other = $derived(!multi && id && !wall && !door && !win && !furniture);
+  let link = $derived(!multi && id ? floor?.switchLinks?.find(l => l.id === id) : undefined);
+  let other = $derived(!multi && id && !wall && !door && !win && !furniture && !pipe && !link);
 
-  let kind = $derived(multi ? 'multi' : wall ? 'wall' : door ? 'door' : win ? 'window' : furniture ? 'furniture' : room ? 'room' : other ? 'other' : null);
+  let kind = $derived(multi ? 'multi' : wall ? 'wall' : door ? 'door' : win ? 'window' : furniture ? 'furniture' : pipe ? 'pipe' : link ? 'link' : room ? 'room' : other ? 'other' : null);
   // Docked in the action slot, so it no longer follows the selection around the plan (selectionAnchor
   // stays for the canvas) and stays put while the plan is panned.
   let visible = $derived(!!kind && $selectedTool === 'select' && !$constraintPickMode && !$elevationWallId);
@@ -67,6 +74,32 @@
     updateFurniture(furniture.id, mount === 'ceiling' ? { drop: cm } : { elevation: cm });
     closePopover();
   }
+
+  // ── Electrical: switch links and the Circuit action (spec §3.8, §4.5) ──
+  /** Circuit is offered on electrical wall items, and on electrical ceiling items while working on Electrical. */
+  let hasCircuit = $derived(!!furniture && furnitureTrade(furniture) === 'electrical' && (mount === 'wall' || (mount === 'ceiling' && $activeTrade === 'electrical')));
+  /** A switch links its lights; anything else shows the switch that controls it, if one does. */
+  function circuit() {
+    if (!furniture || !floor) return;
+    closePopover();
+    if (isSwitch(furniture)) { startLinkTool(furniture.id); return; }
+    const controlling = linksControlling(floor.switchLinks, furniture.id)[0];
+    if (!controlling) {
+      showPlanNotice($t('chrome.notice.notLinked', { name: furnitureLabel }));
+      return;
+    }
+    // Switches hang on walls, so they are edited on the floor surface.
+    switchSurface('floor');
+    selectedRoomId.set(null);
+    selectedElementIds.set(new Set());
+    selectedElementId.set(controlling.switchId);
+  }
+  let linkTargets = $derived(link && floor ? link.targetIds.map(target => floor.furniture.find(item => item.id === target)).filter(item => !!item) : []);
+  let linkLabel = $derived.by(() => {
+    const count = linkTargets.length;
+    const lights = linkTargets.every(item => getCatalogItem(item!.catalogId)?.category.includes('Lighting') || /light|lamp|sconce|chandelier|pendant/.test(item!.catalogId));
+    return $t(lights ? (count === 1 ? 'chrome.selection.linkLightsOne' : 'chrome.selection.linkLightsMany') : (count === 1 ? 'chrome.selection.linkItemsOne' : 'chrome.selection.linkItemsMany'), { count });
+  });
 
   // ── Actions ──
   function select(ids: string[]) {
@@ -212,7 +245,9 @@
   {/if}
 {/snippet}
 
-{#if visible}
+{#if visible && kind === 'pipe' && pipe}
+  <PipeSelectionBar {pipe} />
+{:else if visible}
   <div class="op-slot-stack" data-selection-bar={kind}>
     <!-- Popovers open upward from the docked bar. -->
     {#if $popover?.startsWith('sel-')}
@@ -338,13 +373,15 @@
         {@render chip('hang', furnitureLabel, $t('chrome.selection.dropValue', { length: len(itemDrop) }), openHeight, { expanded: $popover === 'sel-height' })}
         <div class="op-divider-v"></div>
         {@render action('hang', 'chrome.selection.hang', openHeight, { expanded: $popover === 'sel-height', disabled: furniture.locked, data: 'height' })}
+        {#if hasCircuit}{@render action('link', 'chrome.selection.circuit', circuit, { data: 'circuit' })}{/if}
         {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
         {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
       {:else if kind === 'furniture' && furniture && mount === 'wall'}
-        <!-- A wall item: its mounting height. Its circuit comes with the Electrical tools. -->
+        <!-- A wall item: its mounting height, and for electrical items the switch circuit. -->
         {@render chip('ceilingHeight', furnitureLabel, len(itemHeight), openHeight, { expanded: $popover === 'sel-height' })}
         <div class="op-divider-v"></div>
         {@render action('ceilingHeight', 'chrome.selection.height', openHeight, { expanded: $popover === 'sel-height', disabled: furniture.locked, data: 'height' })}
+        {#if hasCircuit}{@render action('link', 'chrome.selection.circuit', circuit, { data: 'circuit' })}{/if}
         {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
       {:else if kind === 'furniture' && furniture}
         {@render chip('ruler', furnitureLabel, furnitureSize ? `${Math.round(furnitureSize.width)} × ${Math.round(furnitureSize.depth)}` : '', openSize, { expanded: $popover === 'sel-size' })}
@@ -354,6 +391,12 @@
         {@render action('palette', 'chrome.selection.look', showDetails, { active: $inspectorOpen })}
         {@render action(furniture.locked ? 'lock' : 'unlock', furniture.locked ? 'chrome.selection.locked' : 'chrome.selection.lock', () => toggleFurnitureLock(furniture.id), { active: furniture.locked })}
         {@render action('more', 'chrome.more', () => togglePopover('sel-more'), { expanded: $popover === 'sel-more' })}
+      {:else if kind === 'link' && link}
+        <!-- A switch link: `Link · 3 lights`; tapping it goes back to linking from its switch. -->
+        {@render chip('link', $t('chrome.selection.link'), linkLabel, () => startLinkTool(link.switchId))}
+        <div class="op-divider-v"></div>
+        {@render action('link', 'chrome.tool.link', () => startLinkTool(link.switchId), { data: 'edit-link' })}
+        {@render action('trash', 'chrome.delete', deleteSelection, { danger: true })}
       {:else if kind === 'room' && ceilingRoom}
         <!-- The ceiling: a room is selected to set its ceiling height. -->
         {@render chip('ceilingHeight', ceilingRoom.name || $t('layers.unnamed'), $t('chrome.selection.ceilingValue', { length: formatCeilingHeight(roomCeiling, units) }), () => togglePopover('sel-ceiling'), { expanded: $popover === 'sel-ceiling' })}

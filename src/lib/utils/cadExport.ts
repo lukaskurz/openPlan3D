@@ -24,6 +24,7 @@ import { projectSettings, formatArea, formatLength } from '$lib/stores/settings'
 import { currentPlanExportVisibility } from '$lib/stores/planVisibility';
 import { visibleActiveFloor, type PlanExportVisibility } from './exportVisibility';
 import { get } from 'svelte/store';
+import { PIPE_COLORS } from './pipes';
 
 function download(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
@@ -249,6 +250,27 @@ export function exportDXF(project: Project, language: Locale = 'en', visibility:
     if (column.shape === 'round') d.drawCircle(column.position.x, -column.position.y, column.diameter / 2);
     else d.drawPolyline([...points, points[0]].map(p => [p.x, -p.y]));
     for (const [a, b] of [[points[0], points[2]], [points[1], points[3]]]) d.drawLine(a.x, -a.y, b.x, -b.y);
+  }
+
+  // Pipes: one layer per kind (true colour as in the plan; waste dashed), centrelines as
+  // polylines, a riser as a ring with its centre.
+  const pipeLayers = new Set<string>();
+  for (const pipe of floor.pipes ?? []) {
+    if (!pipe.points.length) continue;
+    const layer = `PIPES_${pipe.kind.toUpperCase()}`;
+    if (!pipeLayers.has(layer)) {
+      d.addLayer(layer, 5, pipe.kind === 'waste' ? 'DASHED' : 'CONTINUOUS');
+      d.setActiveLayer(layer);
+      d.setTrueColor(parseInt((PIPE_COLORS[pipe.kind] ?? PIPE_COLORS.cold).slice(1), 16));
+      pipeLayers.add(layer);
+    }
+    d.setActiveLayer(layer);
+    if (pipe.points.length >= 2) d.drawPolyline(pipe.points.map(p => [p.x, -p.y]));
+    if (pipe.riser) {
+      const c = pipe.points[0], r = Math.max(5, pipe.diameter / 20 + 3);
+      d.drawCircle(c.x, -c.y, r);
+      d.drawCircle(c.x, -c.y, Math.max(1, pipe.diameter / 20));
+    }
   }
 
   const dxfString = d.toDxfString();

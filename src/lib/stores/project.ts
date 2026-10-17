@@ -4,20 +4,23 @@ import { splitWallGeometry } from '$lib/utils/splitWallGeometry';
 import { wallPathProfile } from '$lib/utils/wallProfiles';
 import { duplicatePlanSelection, pastePlanSelection, shiftedOpeningPosition } from '$lib/utils/duplicateSelection';
 import { writable, derived, get, type Writable } from 'svelte/store';
-import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState } from '$lib/models/types';
+import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState, Pipe } from '$lib/models/types';
+import { minPipePoints, validPipeData } from '$lib/utils/pipes';
 import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
 import { nextFloorLevel, floorElevations, validFloorElevation, orderedFloors, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
 import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { defaultMountingHeight, furnitureMount } from '$lib/utils/mounting';
 import { validCeilingHeight } from '$lib/utils/ceilingHeights';
+import { rehostWallItems, reverseHostedItems, splitHostedItems } from '$lib/utils/wallHostedItems';
+import { switchLinksWithout, toggledSwitchLinks } from '$lib/utils/switchLinks';
 import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight } from '$lib/models/types';
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
 import { mergeRoomPlanFloors, selectableContentIds, type AddedContent } from '$lib/utils/roomplanMerge';
 import { doorJoin } from '$lib/utils/scanAlignment';
-import { branchAlternative, deleteAlternative, renameAlternative, switchAlternative } from '$lib/utils/planAlternatives';
+import { branchAlternative, deleteAlternative, ensureAlternativeCodes, renameAlternative, switchAlternative } from '$lib/utils/planAlternatives';
 import type { Constraint, CornerRef, NewConstraint } from '$lib/models/types';
 import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
 import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
@@ -51,7 +54,7 @@ export const activeFloor = derived(currentProject, ($p) => {
   return $p.floors.find((f) => f.id === $p.activeFloorId) ?? $p.floors[0] ?? null;
 });
 
-export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture' | 'text' | 'measure' | 'annotate';
+export type Tool = 'select' | 'wall' | 'door' | 'window' | 'furniture' | 'text' | 'measure' | 'annotate' | 'pipe';
 export const selectedTool = writable<Tool>('select');
 
 /** Shared activation for the sidebar and keyboard measurement tools. */
@@ -343,6 +346,8 @@ function mutate(fn: (floor: Floor) => void, description?: string, coalesceKey?: 
   if (!p || !floor) return;
   const before = JSON.stringify(p);
   fn(floor);
+  // Wall-hosted items follow their walls whatever the edit did to them (idempotent).
+  rehostWallItems(floor);
   if (JSON.stringify(p) === before) return;
   snapshot(description, coalesceKey, before);
   p.updatedAt = new Date();
@@ -364,11 +369,27 @@ export function addWall(start: Point, end: Point): string {
   return id;
 }
 
+/** Take deleted ids out of the floor's switch links (dropping links left empty); leaves the floor alone when none is affected. */
+function dropSwitchLinksTo(f: Floor, removed: ReadonlySet<string>) {
+  if (!f.switchLinks) return;
+  const next = switchLinksWithout(f.switchLinks, removed);
+  if (next === f.switchLinks) return;
+  if (next.length) f.switchLinks = next;
+  else delete f.switchLinks;
+}
+
 export function removeWall(id: string) {
   mutate((f) => {
     f.walls = f.walls.filter((w) => w.id !== id);
     f.doors = f.doors.filter((d) => d.wallId !== id);
     f.windows = f.windows.filter((w) => w.wallId !== id);
+    // Wall-hosted items (outlets, switches, sconces) go with their wall, like openings.
+    const hosted = new Set(f.furniture.filter(item => item.wallId === id).map(item => item.id));
+    if (hosted.size) {
+      f.furniture = f.furniture.filter(item => !hosted.has(item.id));
+      dropSwitchLinksTo(f, hosted);
+      if (f.groups) f.groups = f.groups.map(group => ({ ...group, elementIds: group.elementIds.filter(itemId => !hosted.has(itemId)) })).filter(group => group.elementIds.length >= 2);
+    }
     if (f.constraints) f.constraints = constraintsWithoutWalls(f.constraints, new Set([id]));
   }, 'Deleted wall');
 }
@@ -503,6 +524,10 @@ export function rotateSelection(ids: ReadonlySet<string>, degrees = 15) {
       const update = updates.get(item.id);
       if (update?.endpoints) Object.assign(item,update.endpoints);
     }
+    for (const pipe of f.pipes ?? []) {
+      const points = updates.get(pipe.id)?.points;
+      if (points) pipe.points = points;
+    }
   }, 'Rotated selection');
 }
 
@@ -543,6 +568,7 @@ export function reorderFurniture(id: string, destination: 'front' | 'back') {
 export function removeFurniture(id: string) {
   mutate((f) => {
     f.furniture = f.furniture.filter((fi) => fi.id !== id);
+    dropSwitchLinksTo(f, new Set([id]));
   }, 'Deleted furniture');
 }
 
@@ -735,7 +761,8 @@ export function removeElement(id: string) {
     // Check if the element being removed is a wall — if so, also remove associated doors/windows
     const isWall = f.walls.some((w) => w.id === id);
     const removedIds = new Set([id]);
-    if (isWall) for (const opening of [...f.doors, ...f.windows]) {
+    if (isWall) for (const opening of [...f.doors, ...f.windows, ...f.furniture]) {
+      // Openings and wall-hosted items (outlets, switches, sconces) go with their wall.
       if (opening.wallId === id) removedIds.add(opening.id);
     }
     f.walls = f.walls.filter((w) => w.id !== id);
@@ -746,12 +773,14 @@ export function removeElement(id: string) {
     }
     f.doors = f.doors.filter((d) => d.id !== id);
     f.windows = f.windows.filter((w) => w.id !== id);
-    f.furniture = f.furniture.filter((fi) => fi.id !== id);
+    f.furniture = f.furniture.filter((fi) => !removedIds.has(fi.id));
+    dropSwitchLinksTo(f, removedIds);
     if (f.stairs) f.stairs = f.stairs.filter((s) => s.id !== id);
     if (f.columns) f.columns = f.columns.filter((c) => c.id !== id);
     if (f.textAnnotations) f.textAnnotations = f.textAnnotations.filter((t) => t.id !== id);
     if (f.measurements) f.measurements = f.measurements.filter(item => item.id !== id);
     if (f.annotations) f.annotations = f.annotations.filter(item => item.id !== id);
+    if (f.pipes) f.pipes = f.pipes.filter(item => item.id !== id);
     if (f.entourage) f.entourage = f.entourage.filter((e) => e.id !== id);
     if (f.constraints) {
       f.constraints = f.constraints.filter(c => c.id !== id);
@@ -773,6 +802,7 @@ export function moveWallEndpoint(id: string, endpoint: 'start' | 'end', position
     // Store only x/y: the drag passes magnet-snap results carrying snappedTo* flags and the
     // same object to every joined corner, which otherwise reach saves and Download JSON.
     w[endpoint] = { x: position.x, y: position.y };
+    rehostWallItems(floor);
     p.updatedAt = new Date();
     currentProject.set({ ...p });
   }
@@ -790,6 +820,7 @@ export function moveWallGeometryDuringDrag(id: string, geometry: Pick<Wall, 'sta
   wall.start = { x: geometry.start.x, y: geometry.start.y };
   wall.end = { x: geometry.end.x, y: geometry.end.y };
   if (geometry.curvePoint) wall.curvePoint = { x: geometry.curvePoint.x, y: geometry.curvePoint.y };
+  rehostWallItems(project.floors.find(floor => floor.id === project.activeFloorId)!);
   project.updatedAt = new Date();
   currentProject.set({ ...project });
 }
@@ -803,6 +834,7 @@ export function moveWallsDuringDrag(changes: Map<string, Partial<Wall>>) {
     const updates = changes.get(wall.id);
     if (updates) Object.assign(wall, updates);
   }
+  rehostWallItems(floor);
   project.updatedAt = new Date();
   currentProject.set({ ...project });
 }
@@ -1088,6 +1120,7 @@ export function reverseWall(id: string) {
         win.position = 1 - win.position;
       }
     }
+    reverseHostedItems(f.furniture, id);
     if (f.constraints) f.constraints = reverseWallConstraints(f.constraints, id);
   }, 'Reversed wall direction');
 }
@@ -1288,17 +1321,21 @@ export function setActiveFloor(floorId: string) {
 
 // ── Plan alternatives ────────────────────────────────────────────────
 
-/** Default names for new alternatives, e.g. "Option B"; the UI passes its language's version. */
+/** Default names for new alternatives from their code, e.g. "Option B" (and for branches, e.g. "Copy of A"); the UI passes its language's version. */
 export type AlternativeNamer = (letter: string) => string;
 const defaultAlternativeName: AlternativeNamer = letter => `Option ${letter}`;
 
-/** Keep the current plan and continue working in a copy of it. */
-export function createAlternative(options: { name?: string; thumbnail?: string; nameFor?: AlternativeNamer } = {}) {
+/**
+ * Keep the current plan and continue working in a copy of it. `kind` 'new' gives the
+ * copy the next letter code (C), 'branch' continues the active one's line (A → A1).
+ * Codes are part of the snapshot, so undo restores them.
+ */
+export function createAlternative(options: { name?: string; thumbnail?: string; nameFor?: AlternativeNamer; copyNameFor?: AlternativeNamer; kind?: 'branch' | 'new' } = {}) {
   const p = get(currentProject);
   if (!p) return;
   snapshot('Created alternative');
   branchAlternative(p, { id: uid(), originalId: uid(), now: new Date(), thumbnail: options.thumbnail,
-    nameFor: options.nameFor ?? defaultAlternativeName, name: options.name });
+    nameFor: options.nameFor ?? defaultAlternativeName, copyNameFor: options.copyNameFor, name: options.name, kind: options.kind ?? 'new' });
   p.updatedAt = new Date();
   currentProject.set({ ...p });
 }
@@ -1391,6 +1428,8 @@ export function loadProject(project: Project) {
   _nextDescription = '';
   resetCoalescing();
   clearFloorContext();
+  // Projects not read through readProject (e.g. built in memory) may predate version codes.
+  ensureAlternativeCodes(project);
   currentProject.set(project);
   syncHistoryStore();
 }
@@ -1549,6 +1588,7 @@ export function moveWallParallel(id: string, dx: number, dy: number) {
     if (w.curvePoint) {
       w.curvePoint = { x: w.curvePoint.x + dx, y: w.curvePoint.y + dy };
     }
+    rehostWallItems(floor);
     p.updatedAt = new Date();
     currentProject.set({ ...p });
   }
@@ -1648,6 +1688,8 @@ export function splitWall(id: string, t: number): string | null {
       }
     }
   }
+  splitHostedItems(floor.furniture, id, newId, t);
+  rehostWallItems(floor);
   p.updatedAt = new Date();
   currentProject.set({ ...p });
   return newId;
@@ -1771,6 +1813,102 @@ export function moveTextAnnotation(id: string, position: { x: number; y: number 
   t.y = position.y;
   p.updatedAt = new Date();
   currentProject.set({ ...p });
+}
+
+// --- Wall-hosted items and switch links (spec §4.2, §4.5) ---
+
+/**
+ * Move a wall-hosted item (outlet, switch, sconce) to a wall position and side during a
+ * drag; it may change walls. Its plan pose follows from the host. The canvas owns the
+ * enclosing Undo group, as for other drags.
+ */
+export function moveWallItemDuringDrag(id: string, wallId: string, wallPosition: number, wallSide: 1 | -1) {
+  if (!Number.isFinite(wallPosition)) return;
+  const p = get(currentProject);
+  const floor = p?.floors.find(f => f.id === p.activeFloorId);
+  const item = floor?.furniture.find(fi => fi.id === id);
+  if (!p || !floor || !item || !floor.walls.some(wall => wall.id === wallId)) return;
+  const position = Math.max(0, Math.min(1, wallPosition)), side = wallSide === -1 ? -1 : 1;
+  if (item.wallId === wallId && item.wallPosition === position && item.wallSide === side) return;
+  item.wallId = wallId;
+  item.wallPosition = position;
+  item.wallSide = side;
+  rehostWallItems(floor);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+/**
+ * Add `targetId` to the switch's link, or take it out when it is already there (spec §4.5).
+ * A switch has at most one link: it is created with its first target and removed with its
+ * last. Both must be furniture on the active floor. One Undo step.
+ */
+export function toggleSwitchLinkTarget(switchId: string, targetId: string) {
+  if (switchId === targetId) return;
+  const linked = get(activeFloor)?.switchLinks?.find(link => link.switchId === switchId)?.targetIds.includes(targetId);
+  mutate(f => {
+    if (!f.furniture.some(item => item.id === switchId) || !f.furniture.some(item => item.id === targetId)) return;
+    const next = toggledSwitchLinks(f.switchLinks ?? [], switchId, targetId, uid);
+    if (next.length) f.switchLinks = next;
+    else delete f.switchLinks;
+  }, linked ? 'Unlinked from switch' : 'Linked to switch');
+}
+
+// --- Pipes (spec §4.5) ---
+
+/** Add a pipe; returns its id, or null when the pipe is not well formed (see validPipeData). */
+export function addPipe(pipe: Omit<Pipe, 'id'>): string | null {
+  if (!validPipeData(pipe)) return null;
+  const id = uid();
+  mutate(f => { (f.pipes ??= []).push({ id, ...structuredClone(pipe) }); }, 'Added pipe');
+  return id;
+}
+
+/**
+ * Change a pipe's kind, diameter, run, elevation, riser flag or points. An update that
+ * would leave the pipe malformed is ignored; `undefined` clears an optional field.
+ * Rapid edits of the same fields coalesce into one Undo step (a multi-drag frame by frame).
+ */
+export function updatePipe(id: string, updates: Partial<Omit<Pipe, 'id'>>) {
+  mutate(f => {
+    const pipe = f.pipes?.find(item => item.id === id);
+    if (!pipe) return;
+    const next: Pipe = { ...pipe, ...structuredClone(updates) };
+    for (const key of Object.keys(updates) as (keyof Pipe)[]) if (next[key] === undefined) delete next[key];
+    if (!validPipeData(next)) return;
+    for (const key of Object.keys(pipe) as (keyof Pipe)[]) delete pipe[key];
+    Object.assign(pipe, next);
+  }, 'Edited pipe', coalesceKeyFor('pipe', id, updates));
+}
+
+/** Insert a point into a pipe at `index` (default: after the last point). */
+export function addPipePoint(id: string, point: Point, index?: number) {
+  if (!finitePoint(point)) return;
+  mutate(f => {
+    const pipe = f.pipes?.find(item => item.id === id);
+    if (!pipe) return;
+    const at = index === undefined ? pipe.points.length : Math.max(0, Math.min(pipe.points.length, Math.round(index)));
+    pipe.points.splice(at, 0, { x: point.x, y: point.y });
+  }, 'Added pipe point');
+}
+
+/** Move one point of a pipe; drag frames of the same point coalesce into one Undo step. */
+export function movePipePoint(id: string, index: number, point: Point) {
+  if (!finitePoint(point)) return;
+  mutate(f => {
+    const target = f.pipes?.find(item => item.id === id)?.points[index];
+    if (target) { target.x = point.x; target.y = point.y; }
+  }, 'Moved pipe point', `pipePoint:${id}:${index}`);
+}
+
+/** Remove one point of a pipe; a pipe left with too few points is deleted. */
+export function removePipePoint(id: string, index: number) {
+  mutate(f => {
+    const pipe = f.pipes?.find(item => item.id === id);
+    if (!pipe || index < 0 || index >= pipe.points.length) return;
+    pipe.points.splice(index, 1);
+    if (pipe.points.length < minPipePoints(pipe)) f.pipes = f.pipes!.filter(item => item.id !== id);
+  }, 'Removed pipe point');
 }
 
 // Layer visibility store (used by LayersPanel, FloorPlanCanvas and the plan exports)

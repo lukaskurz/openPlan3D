@@ -26,6 +26,16 @@
     bolt: 'M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z',
     /** Plumbing trade: a pipe elbow with a flange at each end. */
     pipe: 'M3 8h7a6 6 0 0 1 6 6v7M3 14h6a1 1 0 0 1 1 1v6M3 6v10M8 21h10',
+    /** Pipe tool: a run with two bends and its end points. */
+    pipeRun: 'M4 20V12h8V5h8M4 20h.01M20 5h.01',
+    /** Riser: a vertical stack seen from above (a ring with its centre). */
+    riser: 'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 13a1 1 0 1 0 0-2 1 1 0 0 0 0 2z',
+    /** Sanitary fixture: a toilet seen from the side. */
+    fixture: 'M5 4h5v8H5zM5 12h14a5 5 0 0 1-5 5h-2v3H8v-3a3 3 0 0 1-3-3z',
+    /** Floor drain: a square grate. */
+    drain: 'M4 4h16v16H4zM8 8v8M12 8v8M16 8v8',
+    /** A drop of water (pipe kind, diameter). */
+    droplet: 'M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5S5 13 5 15a7 7 0 0 0 7 7z',
     sofa: 'M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3M2 16a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-4 0v1.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5V11a2 2 0 0 0-4 0zM4 18v2M20 18v2M12 4v9',
     straight: 'M4 20 20 4',
     curved: 'M4 20C4 10 10 4 20 4',
@@ -96,6 +106,16 @@
     floor: 'M3 20h18M8 20v-8h8v8',
     /** Ceiling height: a ceiling and a floor line with a two-headed arrow between them. */
     ceilingHeight: 'M3 3h18M3 21h18M12 6v12M9 9l3-3 3 3M9 15l3 3 3-3',
+    /** A wall outlet: a round socket with two pin slots. */
+    outlet: 'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM9.5 10v4M14.5 10v4',
+    /** A double outlet: two sockets on one plate. */
+    outletDouble: 'M2 7h20v10H2zM7 10v4M17 10v4M5 12h.01M9 12h.01M15 12h.01M19 12h.01',
+    /** A light switch: a plate with a rocker. */
+    switch: 'M6 3h12v18H6zM10 8h4v8h-4zM10 12h4',
+    /** A wall light: a bracket on a wall line with a shade. */
+    sconce: 'M4 3v18M4 12h4M8 8h8l-2 6h-4zM12 17v2',
+    /** A switch link: two linked chain rings. */
+    link: 'M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71',
     /** A light bulb (ceiling lights). */
     bulb: 'M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.7 1.3 1.5 1.5 2.5M9 18h6M10 22h4',
     /** A recessed downlight: a can set into the ceiling, shining down. */

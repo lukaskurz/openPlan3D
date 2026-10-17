@@ -17,7 +17,12 @@
    * empty wall selects the wall itself. A slim header bar cycles through walls.
    * Escape (or the TopBar Plan/Elevation toggle) returns to the plan view.
    */
-  import { activeFloor, elevationWallId, selectedElementId, selectedElementIds, selectedRoomId, updateDoor, updateWindow, beginUndoGroup, endUndoGroup } from '$lib/stores/project';
+  import { activeFloor, elevationWallId, selectedElementId, selectedElementIds, selectedRoomId, updateDoor, updateWindow, updateFurniture, beginUndoGroup, endUndoGroup } from '$lib/stores/project';
+  import type { FurnitureItem } from '$lib/models/types';
+  import { effectiveElevation } from '$lib/utils/mounting';
+  import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
+  import { wallDistanceAt, wallPositionAtDistance } from '$lib/utils/wallHostedItems';
+  import { wallPathProfile } from '$lib/utils/wallProfiles';
   import { projectSettings, formatLength } from '$lib/stores/settings';
   import type { Door, Window as Win } from '$lib/models/types';
   import { openingOnWall } from '$lib/utils/wallProfiles';
@@ -60,6 +65,13 @@
     return f.windows.filter((w) => w.wallId === wall!.id);
   });
 
+  /** Wall-hosted items (outlets, switches, sconces) on this wall. */
+  let hostedItems = $derived.by(() => {
+    const f = $activeFloor;
+    if (!wall || !f) return [] as FurnitureItem[];
+    return f.furniture.filter((item) => item.wallId === wall!.id);
+  });
+
   /** Wall length in cm (samples curved walls like the properties panel does) */
   let wallLen = $derived.by(() => {
     if (!wall) return 0;
@@ -86,7 +98,7 @@
   let selectedOpeningId = $derived.by(() => {
     const id = $selectedElementId;
     if (!id) return null;
-    return doors.some((d) => d.id === id) || windows.some((w) => w.id === id) ? id : null;
+    return doors.some((d) => d.id === id) || windows.some((w) => w.id === id) || hostedItems.some((item) => item.id === id) ? id : null;
   });
 
   let hoverOpeningId = $state<string | null>(null);
@@ -188,7 +200,9 @@
 
   interface OpeningRect {
     id: string;
-    kind: 'door' | 'window';
+    kind: 'door' | 'window' | 'item';
+    /** Wall items only: hung on the far face of the wall (side −1), drawn faint. */
+    far?: boolean;
     /** left edge along wall, cm */ x: number;
     /** bottom above floor, cm */ y: number;
     w: number;
@@ -208,9 +222,27 @@
     return rects;
   }
 
-  /** Topmost opening under a point given in wall cm coordinates (x along wall, y up from floor) */
+  /** Smallest drawn height of a wall item, cm (outlets and switches are flat plan symbols). */
+  const MIN_ITEM_HEIGHT = 8;
+
+  /**
+   * Wall-hosted items as rectangles in wall coordinates. The elevation looks at the wall's
+   * side +1 (its start on the left), so items facing side −1 are on the far face.
+   */
+  function hostedRects(): OpeningRect[] {
+    if (!wall) return [];
+    const path = wallPathProfile(wall);
+    const toView = path.length > 0 ? wallLen / path.length : 1;
+    return hostedItems.map((item) => {
+      const size = getFurnitureSize(item);
+      const centre = wallDistanceAt(wall!, item.wallPosition ?? 0.5) * toView;
+      return { id: item.id, kind: 'item' as const, far: item.wallSide === -1, x: centre - size.width / 2, y: effectiveElevation(item, 0), w: size.width, h: Math.max(size.height, MIN_ITEM_HEIGHT) };
+    });
+  }
+
+  /** Topmost opening or wall item under a point given in wall cm coordinates (x along wall, y up from floor) */
   function hitOpening(x: number, y: number): OpeningRect | null {
-    const rects = openingRects();
+    const rects = [...openingRects(), ...hostedRects()];
     // Windows are drawn after doors, so test them first (topmost wins)
     for (let i = rects.length - 1; i >= 0; i--) {
       const r = rects[i];
@@ -232,13 +264,15 @@
   // ── Drag state ────────────────────────────────────────────────────
   let drag: {
     id: string;
-    kind: 'door' | 'window';
+    kind: 'door' | 'window' | 'item';
     startPx: number;
     startPy: number;
     startPos: number;   // position t at drag start
     startSill: number;  // window sill at drag start (cm)
     width: number;      // opening width (cm)
     winH: number;       // window height (cm)
+    startX: number;     // wall item: centre along the wall at drag start (cm)
+    startElevation: number; // wall item: mounting height at drag start (cm)
     grouped: boolean;   // beginUndoGroup() called
   } | null = null;
 
@@ -271,7 +305,9 @@
         startPos: (door?.position ?? win?.position) ?? 0.5,
         startSill: win?.sillHeight ?? DEFAULT_SILL,
         width: hit.w,
-        winH: win?.height ?? 0,
+        winH: win?.height ?? (hit.kind === 'item' ? hit.h : 0),
+        startX: hit.x + hit.w / 2,
+        startElevation: hit.y,
         grouped: false,
       };
       dragging = true;
@@ -293,6 +329,18 @@
         beginUndoGroup();
         drag.grouped = true;
       }
+      if (drag.kind === 'item') {
+        // Along the wall (kept on it) and up or down (kept under the wall's top), like a window.
+        const path = wallPathProfile(wall);
+        const toPath = wallLen > 0 ? path.length / wallLen : 1;
+        const half = Math.min(drag.width / 2, wallLen / 2);
+        const centre = Math.max(half, Math.min(wallLen - half, drag.startX + dxCm));
+        const wallPosition = wallPositionAtDistance(wall, centre * toPath);
+        const top = getWallHeightAt(wall, wallPosition);
+        const elevation = Math.max(0, Math.min(Math.max(0, top - drag.winH), Math.round(drag.startElevation + dyCm)));
+        updateFurniture(drag.id, { wallPosition, elevation });
+        return;
+      }
       const newPos = clampPosition(drag.startPos + dxCm / Math.max(1, wallLen), drag.width);
       if (drag.kind === 'door') {
         updateDoor(drag.id, { position: newPos });
@@ -313,7 +361,7 @@
   function endDrag(e?: PointerEvent) {
     if (drag) {
       if (drag.grouped) {
-        endUndoGroup(drag.kind === 'door' ? 'Moved door (elevation)' : 'Moved window (elevation)');
+        endUndoGroup(drag.kind === 'door' ? 'Moved door (elevation)' : drag.kind === 'item' ? 'Moved wall item (elevation)' : 'Moved window (elevation)');
       }
       drag = null;
       dragging = false;
@@ -378,6 +426,7 @@
     const hov = hoverOpeningId;
     const u = units;
     const rects = openingRects();
+    const items = hostedRects();
     if (!c) return;
     const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
     c.width = Math.max(1, Math.round(cw * dpr));
@@ -465,6 +514,27 @@
       }
     }
 
+    // Wall items (outlets, switches, sconces) at their mounting height; those on the far face faint.
+    for (const r of items) {
+      const px = xAt(r.x);
+      const py = yAt(r.y + r.h);
+      const pw = Math.max(4, r.w * scale);
+      const ph = Math.max(4, r.h * scale);
+      ctx.save();
+      ctx.globalAlpha = r.far ? 0.35 : 1;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(px, py, pw, ph);
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(px, py, pw, ph);
+      ctx.restore();
+      if (r.id === hov && r.id !== sel) {
+        ctx.strokeStyle = '#60a5fa';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px - 2, py - 2, pw + 4, ph + 4);
+      }
+    }
+
     // Wall outline + heavier floor line
     ctx.strokeStyle = '#475569';
     ctx.lineWidth = 2;
@@ -493,7 +563,7 @@
     }
 
     // Selected opening: highlight + width / height / sill dimensions
-    const selRect = sel ? rects.find((r) => r.id === sel) : undefined;
+    const selRect = sel ? [...rects, ...items].find((r) => r.id === sel) : undefined;
     if (selRect) {
       const px = xAt(selRect.x);
       const py = yAt(selRect.y + selRect.h);
@@ -509,7 +579,7 @@
       // Height to the right of the opening
       drawDimV(ctx, px + pw + 14, py, py + ph, formatLength(selRect.h, u));
       // Sill height for windows (from floor up to the sill)
-      if (selRect.kind === 'window' && selRect.y > 0) {
+      if ((selRect.kind === 'window' || selRect.kind === 'item') && selRect.y > 0) {
         drawDimV(ctx, px + pw + 38, py + ph, floorY, formatLength(selRect.y, u));
       }
     }

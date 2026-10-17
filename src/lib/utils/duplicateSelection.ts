@@ -1,6 +1,21 @@
-import type { Floor, Point, Wall } from '$lib/models/types';
+import type { Floor, FurnitureItem, Point, Wall } from '$lib/models/types';
 import { copyConstraints } from '$lib/utils/constraints/cascade';
 import { wallPathProfile } from './wallProfiles';
+import { getFurnitureSize } from './furnitureCatalog';
+
+/**
+ * The host of a copied wall item, by the opening rule: on the copy of its wall when that
+ * wall was copied too, else further along its own wall (as `shiftedOpeningPosition`), else,
+ * pasted where its wall is missing, unhosted at its offset position. The plan pose is
+ * recomputed from the host when the edit is applied.
+ */
+function copyWallHost(copy: FurnitureItem, wallId: string, wallMapping: ReadonlyMap<string, string>, floor: Floor, step: number) {
+  const copiedWall = wallMapping.get(wallId);
+  if (copiedWall) { copy.wallId = copiedWall; return; }
+  const wall = floor.walls.find(item => item.id === wallId);
+  if (!wall) { delete copy.wallId; delete copy.wallPosition; delete copy.wallSide; return; }
+  copy.wallPosition = shiftedOpeningPosition(wall, { position: copy.wallPosition ?? 0.5, width: getFurnitureSize(copy).width }, step);
+}
 
 /** Where a copy kept on the same wall lands: a tenth of the wall further along
  * per step, with its centre held half its width from either end so the whole
@@ -50,13 +65,23 @@ export function pastePlanSelection(source: Floor, floor: Floor, selected: Readon
   }
   for (const key of ['furniture', 'stairs', 'columns', 'entourage'] as const) {
     for (const item of [...source[key] ?? []]) {
-      if (!selected.has(item.id)) continue;
+      // Wall-hosted items (outlets, switches, sconces) come along with a copied wall, like openings.
+      const host = key === 'furniture' ? (item as FurnitureItem).wallId : undefined;
+      if (!selected.has(item.id) && !(host !== undefined && wallMapping.has(host))) continue;
       const copy = structuredClone(item);
       copy.id = uid(); mapping.set(item.id, copy.id);
       copy.position = offset(copy.position);
+      if (host !== undefined) copyWallHost(copy as FurnitureItem, host, wallMapping, floor, step);
       const items = floor[key] ?? (floor[key] = []);
       (items as typeof copy[]).push(copy);
     }
+  }
+  for (const pipe of [...source.pipes ?? []]) {
+    if (!selected.has(pipe.id)) continue;
+    const copy = structuredClone(pipe);
+    copy.id = uid(); mapping.set(pipe.id, copy.id);
+    copy.points = copy.points.map(offset);
+    (floor.pipes ??= []).push(copy);
   }
   for (const key of ['textAnnotations','measurements','annotations'] as const) {
     for (const item of [...source[key] ?? []]) {
@@ -75,6 +100,12 @@ export function pastePlanSelection(source: Floor, floor: Floor, selected: Readon
   for (const group of [...source.groups ?? []]) {
     if (group.elementIds.length < 2 || !group.elementIds.every(id => mapping.has(id))) continue;
     (floor.groups ??= []).push({ ...structuredClone(group), id: uid(), elementIds: group.elementIds.map(id => mapping.get(id)!) });
+  }
+  // A copied switch keeps controlling the copies of its targets (links are not selectable on their own here).
+  for (const link of [...source.switchLinks ?? []]) {
+    const switchId = mapping.get(link.switchId);
+    const targetIds = link.targetIds.flatMap(id => mapping.has(id) ? [mapping.get(id)!] : []);
+    if (switchId && targetIds.length) (floor.switchLinks ??= []).push({ id: uid(), switchId, targetIds });
   }
   return [...mapping.values()];
 }

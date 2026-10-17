@@ -20,6 +20,11 @@ export interface FurnitureDef {
   mount?: Mount;
   /** Ceiling mounts: default distance from the ceiling to the item's top, in cm (a pendant's cord). Missing means 0. */
   defaultDrop?: number;
+  /**
+   * A sanitary fixture or appliance with a water connection (toilet, sinks, shower…).
+   * It stays a Furnishing item but can also be placed and moved in Plumbing on the floor.
+   */
+  plumbingFixture?: boolean;
 }
 
 export const furnitureCatalog: FurnitureDef[] = [
@@ -46,17 +51,17 @@ export const furnitureCatalog: FurnitureDef[] = [
   // Kitchen
   { id: 'stove', name: 'Stove', category: 'Kitchen', icon: '🍳', color: '#f87171', width: 60, depth: 60, height: 85 },
   { id: 'fridge', name: 'Fridge', category: 'Kitchen', icon: '🧊', color: '#d1d5db', width: 70, depth: 70, height: 180 },
-  { id: 'sink_k', name: 'Sink', category: 'Kitchen', icon: '🚰', color: '#94a3b8', width: 60, depth: 45, height: 85 },
+  { id: 'sink_k', name: 'Sink', category: 'Kitchen', icon: '🚰', color: '#94a3b8', width: 60, depth: 45, height: 85, plumbingFixture: true },
   { id: 'counter', name: 'Counter', category: 'Kitchen', icon: '🔲', color: '#78716c', width: 120, depth: 60, height: 85 },
-  { id: 'dishwasher', name: 'Dishwasher', category: 'Kitchen', icon: '🫧', color: '#cbd5e1', width: 60, depth: 60, height: 85 },
+  { id: 'dishwasher', name: 'Dishwasher', category: 'Kitchen', icon: '🫧', color: '#cbd5e1', width: 60, depth: 60, height: 85, plumbingFixture: true },
   { id: 'oven', name: 'Oven', category: 'Kitchen', icon: '🔥', color: '#78716c', width: 60, depth: 60, height: 85 },
   { id: 'wine_fridge', name: 'Wine Fridge', category: 'Kitchen', icon: '🍷', color: '#18181b', width: 48, depth: 56.5, height: 83.8 },
   // Bathroom
-  { id: 'toilet', name: 'Toilet', category: 'Bathroom', icon: '🚽', color: '#e5e7eb', width: 40, depth: 65, height: 40 },
-  { id: 'bathtub', name: 'Bathtub', category: 'Bathroom', icon: '🛁', color: '#93c5fd', width: 170, depth: 75, height: 60 },
-  { id: 'shower', name: 'Shower', category: 'Bathroom', icon: '🚿', color: '#bae6fd', width: 90, depth: 90, height: 210 },
-  { id: 'sink_b', name: 'Sink', category: 'Bathroom', icon: '🪥', color: '#cbd5e1', width: 60, depth: 45, height: 85 },
-  { id: 'washer_dryer', name: 'Washer/Dryer', category: 'Bathroom', icon: '👕', color: '#e2e8f0', width: 60, depth: 65, height: 85 },
+  { id: 'toilet', name: 'Toilet', category: 'Bathroom', icon: '🚽', color: '#e5e7eb', width: 40, depth: 65, height: 40, plumbingFixture: true },
+  { id: 'bathtub', name: 'Bathtub', category: 'Bathroom', icon: '🛁', color: '#93c5fd', width: 170, depth: 75, height: 60, plumbingFixture: true },
+  { id: 'shower', name: 'Shower', category: 'Bathroom', icon: '🚿', color: '#bae6fd', width: 90, depth: 90, height: 210, plumbingFixture: true },
+  { id: 'sink_b', name: 'Sink', category: 'Bathroom', icon: '🪥', color: '#cbd5e1', width: 60, depth: 45, height: 85, plumbingFixture: true },
+  { id: 'washer_dryer', name: 'Washer/Dryer', category: 'Bathroom', icon: '👕', color: '#e2e8f0', width: 60, depth: 65, height: 85, plumbingFixture: true },
   // Office
   { id: 'desk', name: 'Desk', category: 'Office', icon: '🖥️', color: '#34d399', width: 140, depth: 70, height: 75 },
   { id: 'office_chair', name: 'Office Chair', category: 'Office', icon: '🪑', color: '#6b7280', width: 45, depth: 45, height: 90 },
@@ -247,6 +252,7 @@ export const furnitureCatalog: FurnitureDef[] = [
 
   // Electrical Symbols (2D only)
   { id: 'sym_outlet', name: 'Power Outlet', category: 'Electrical', icon: '🔌', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true, mount: 'wall', elevation: 30 },
+  { id: 'sym_outlet_double', name: 'Double Outlet', category: 'Electrical', icon: '🔌', color: '#2563eb', width: 25, depth: 15, height: 0, symbol: true, mount: 'wall', elevation: 30 },
   { id: 'sym_switch', name: 'Light Switch', category: 'Electrical', icon: '🔘', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true, mount: 'wall', elevation: 105 },
   { id: 'sym_ceiling_light', name: 'Ceiling Light', category: 'Electrical', icon: '💡', color: '#eab308', width: 20, depth: 20, height: 0, symbol: true, mount: 'ceiling' },
   { id: 'sym_recessed_light', name: 'Recessed Light', category: 'Electrical', icon: '🔆', color: '#eab308', width: 15, depth: 15, height: 0, symbol: true, mount: 'ceiling' },
@@ -290,6 +296,12 @@ export function getFurnitureSize(fi: FurnitureItem): { width: number; depth: num
 
 /** Trades by catalog category; categories not listed are furnishing (spec §4.3). */
 const CATEGORY_TRADES: Readonly<Record<string, Trade>> = { Electrical: 'electrical', Lighting: 'electrical', Plumbing: 'plumbing' };
+
+/** Whether a catalog item (or a placed one, by its catalog id) is a plumbing fixture; see `FurnitureDef.plumbingFixture`. */
+export function isPlumbingFixture(defOrItem: FurnitureDef | Pick<FurnitureItem, 'catalogId'>): boolean {
+  const def = 'catalogId' in defOrItem ? getCatalogItem(defOrItem.catalogId) : defOrItem;
+  return def?.plumbingFixture === true;
+}
 
 /**
  * The trade a catalog definition or a placed item belongs to: the definition's own

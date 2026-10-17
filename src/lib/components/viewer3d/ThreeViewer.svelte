@@ -43,6 +43,7 @@
   import { createFloorFurnitureModels, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
   import { defaultMountingHeight, effectiveElevation } from '$lib/utils/mounting';
   import { createCeilingResolver, effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
+  import { buildPipeMeshes, storeySpacing } from '$lib/utils/pipeModels3d';
   import { addFurniture } from '$lib/stores/project';
   import { detectRooms, resolveRoomGeometry, getRoomPolygon, roomCentroid, roomLabelPosition } from '$lib/utils/roomDetection';
   import { getMaterial } from '$lib/utils/materials';
@@ -1365,6 +1366,8 @@
 
     // Furniture; ceiling items at ceiling − drop − height of the room they hang in
     for (const model of createFloorFurnitureModels(floor, ceilingAt, project, markSceneDirty)) wallGroup.add(model);
+    // Pipes: runs at their height (ceiling runs under the ceiling), risers up to the next storey.
+    for (const pipe of buildPipeMeshes(floor, ceilingAt, storeySpacing(project, floor))) wallGroup.add(pipe);
 
     // Room floors with materials + floating labels
     const FALLBACK_ROOM_COLORS = [0xbfdbfe, 0xfde68a, 0xbbf7d0, 0xfecaca, 0xddd6fe, 0xa5f3fc, 0xfed7aa];

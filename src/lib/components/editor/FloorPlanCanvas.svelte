@@ -11,7 +11,7 @@
   import { planContentBounds, hasPlanContent } from '$lib/utils/planContentBounds';
   import { connectedWallEndpoints } from '$lib/utils/wallEditing';
   import { createDrawScheduler } from '$lib/utils/drawScheduler';
-  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors } from '$lib/stores/project';
+  import { activeFloor, selectedTool, selectedElementId, selectedElementIds, selectedRoomId, addWall, addDoor, addWindow, updateWall, moveWallEndpoint, moveWallGeometryDuringDrag, updateDoor, updateWindow, addFurniture, moveFurniture, transformFurnitureDuringDrag, moveWallItemDuringDrag, updateFurniture, toggleSwitchLinkTarget, rotateFurniture, rotateSelection, setFurnitureRotation, scaleFurniture, removeElement, placingFurnitureId, placingRotation, placingDoorType, placingWindowType, detectedRoomsStore, duplicateDoor, duplicateWindow, duplicateFurniture, duplicateSelection, pasteSelection, moveWallParallel, splitWall, wallSplitIntersectsOpening, snapEnabled, placingStair, addStair, moveStair, updateStair, placingColumn, placingColumnShape, addColumn, moveColumn, updateColumn, calibrationMode, calibrationPoints, updateBackgroundImage, setBackgroundImage, canvasZoom, canvasMinimumZoom, canvasCamX, canvasCamY, panMode, showFurnitureStore, addGuide, moveGuide, removeGuide, beginUndoGroup, endUndoGroup, layerVisibility, updateRoom, addMeasurement, updateMeasurement, removeMeasurement, addAnnotation, removeAnnotation, updateAnnotation, addTextAnnotation, removeTextAnnotation, updateTextAnnotation, moveTextAnnotation, toggleFurnitureLock, toggleSelectionLock, createGroup, ungroupElements, findGroupForElement, placingEntourageId, addEntourageItem, moveEntourage, resizeEntourage, currentProject, elevationWallId, elevationPickMode, doorJoinMode, joinScanDoors } from '$lib/stores/project';
   import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, GuideLine, Measurement, Annotation, TextAnnotation, CustomEntourageDef } from '$lib/models/types';
   import type { Floor, Room } from '$lib/models/types';
   import { resolveRoomGeometry, roomLabelPosition, roomCentroid } from '$lib/utils/roomDetection';
@@ -51,7 +51,9 @@
   import { marqueeSelectionIds } from '$lib/utils/marqueeSelection';
   import { isTracingImageType } from '$lib/utils/tracingImage';
   import { activeTrade, activeSurface, type Trade, type Surface } from '$lib/stores/workContext';
-  import { ceilingPick } from '$lib/components/chrome/tools';
+  import { ceilingPick, linkPick, linkSwitchId, placementHeight } from '$lib/components/chrome/tools';
+  import { drawSwitchLinks, hitTestSwitchLink, isSwitch, isSwitchTarget, linksControlling } from '$lib/utils/switchLinks';
+  import { furnitureTrade } from '$lib/utils/furnitureCatalog';
   import { popover } from '$lib/stores/chrome';
   import { editableFurniture, editablePlanFloor, planOpacity, structureEditable, structureOpacity, type WorkContext } from '$lib/utils/workFilter';
   import { furnitureMount, itemSurface } from '$lib/utils/mounting';
@@ -59,6 +61,12 @@
   import { formatCeilingHeight } from '$lib/utils/ceilingLabels';
   import { hostedPose, wallHostAt, type WallHost } from '$lib/utils/wallHostedItems';
   import { ceilingChipRect, drawCeilingChip } from '$lib/utils/canvasRenderer';
+  import { drawPipes, drawPipeDraft } from '$lib/utils/pipeRenderer';
+  import { hitTestPipe, hitTestPipeVertex } from '$lib/utils/pipeHitTesting';
+  import { pipeOpacity, pipeEditable } from '$lib/utils/workFilter';
+  import { movePipePoint, updatePipe } from '$lib/stores/project';
+  import { translatedPipePoints } from '$lib/utils/pipes';
+  import { pipeDraft, pipeToolOptions, addDraftPoint, removeLastDraftPoint, finishPipeDraft, placeRiser } from '$lib/stores/pipeTool';
   import { findRoomLabelAt as _findRoomLabelAt, positionOnWall, findWallAt as _findWallAt, findHandleAt as _findHandleAt, findFurnitureAt as _findFurnitureAt, findColumnAt as _findColumnAt, findStairAt as _findStairAt, findDoorAt as _findDoorAt, findWindowAt as _findWindowAt, findRoomAt as _findRoomAt, hitTestMeasurement as _hitTestMeasurement, hitTestAnnotation as _hitTestAnnotation, hitTestTextAnnotation as _hitTestTextAnnotation, findEntourageAt } from '$lib/utils/hitTesting';
 
   let canvas: HTMLCanvasElement;
@@ -391,6 +399,38 @@
   onDestroy(activeTrade.subscribe(v => { currentTrade = v; markDirty(); }));
   onDestroy(activeSurface.subscribe(v => { currentSurface = v; markDirty(); }));
   onDestroy(ceilingPick.subscribe(v => { isCeilingPick = v; markDirty(); }));
+  /** The Link tool (spec §4.5): a tap picks a switch, then toggles lights on its link. */
+  let isLinkPick = false;
+  let currentLinkSwitchId: string | null = null;
+  onDestroy(linkPick.subscribe(v => { isLinkPick = v; markDirty(); }));
+  onDestroy(linkSwitchId.subscribe(v => { currentLinkSwitchId = v; markDirty(); }));
+  // Pipe tool: the run being drawn and its options (kind, diameter) for the preview.
+  let currentPipeDraft: Point[] = [];
+  let currentPipeOptions = get(pipeToolOptions);
+  onDestroy(pipeDraft.subscribe(v => { currentPipeDraft = v; markDirty(); }));
+  onDestroy(pipeToolOptions.subscribe(v => { currentPipeOptions = v; markDirty(); }));
+  /** A pipe being moved (vertex null) or one of its points being dragged. */
+  let draggingPipe: { id: string; vertex: number | null; start: Point; orig: Point[]; started: boolean } | null = null;
+  /** Pipe tool under a finger: where the press began, placed when the finger lifts. */
+  let pendingPipeTap: Point | null = null;
+  /** Pipes the current trade and surface may edit (Plumbing, on the pipe's surface). */
+  function editablePipes() {
+    const ctx = workCtx();
+    return (currentFloor?.pipes ?? []).filter(pipe => pipeEditable(pipe, ctx));
+  }
+  /** Pipe tool snapping: corners and wall faces like the wall tool, then 0/45/90° from the previous point. */
+  function snapPipePoint(raw: Point, from: Point | null): Point {
+    let pt: Point = magneticSnap(raw);
+    if (from) pt = shiftDown ? angleSnapWithin(from, pt, Infinity) : angleSnap(from, pt);
+    return { x: pt.x, y: pt.y };
+  }
+  /** A tap with the Pipe tool: a riser, the next point of the run, or (on its last point) the end of the run. */
+  function pipeToolClick(wp: Point) {
+    const draft = currentPipeDraft, last = draft[draft.length - 1] ?? null;
+    if (currentPipeOptions.riser) { placeRiser(magneticSnap(wp)); return; }
+    if (last && draft.length >= 2 && Math.hypot(wp.x - last.x, wp.y - last.y) <= handleTolerance(10) / zoom) { finishPipeDraft(); return; }
+    addDraftPoint(snapPipePoint(wp, last));
+  }
   function workCtx(): WorkContext { return { trade: currentTrade, surface: currentSurface }; }
   /** Walls, openings, rooms, stairs, columns and entourage can be edited (Furnishing, floor). */
   function structureOn(): boolean { return structureEditable(workCtx()); }
@@ -457,7 +497,7 @@
   let currentSelectedIds: Set<string> = $state(new Set());
 
   // Multi-select drag state
-  let draggingMultiSelect: { startMousePos: Point; origPositions: Map<string, { start?: Point; end?: Point; curvePoint?: Point; position?: Point; opening?: { wallId: string; position: number; kind: 'door' | 'window' } }> } | null = $state(null);
+  let draggingMultiSelect: { startMousePos: Point; origPositions: Map<string, { start?: Point; end?: Point; curvePoint?: Point; position?: Point; points?: Point[]; opening?: { wallId: string; position: number; kind: 'door' | 'window' }; hosted?: { wallId: string; position: number; side: 1 | -1 } }> } | null = $state(null);
 
   // Clipboard for copy/paste (Ctrl+C / Ctrl+V)
   let clipboard: { floor: Floor; ids: string[]; step: number; projectId: string } | null = $state.raw(null);
@@ -476,7 +516,7 @@
     if (currentSelectedIds.size >= 2 && currentFloor) {
       const bbox = getMultiSelectBBox();
       if (bbox && wp.x >= bbox.minX && wp.x <= bbox.maxX && wp.y >= bbox.minY && wp.y <= bbox.maxY) {
-        const origPositions = new Map<string, { start?: Point; end?: Point; curvePoint?: Point; position?: Point; opening?: { wallId: string; position: number; kind: 'door' | 'window' } }>();
+        const origPositions = new Map<string, { start?: Point; end?: Point; curvePoint?: Point; position?: Point; points?: Point[]; opening?: { wallId: string; position: number; kind: 'door' | 'window' }; hosted?: { wallId: string; position: number; side: 1 | -1 } }>();
         for (const id of currentSelectedIds) {
           const w = currentFloor.walls.find(w => w.id === id);
           if (w) { origPositions.set(id, { start: { ...w.start }, end: { ...w.end }, curvePoint: w.curvePoint ? { ...w.curvePoint } : undefined }); continue; }
@@ -492,8 +532,15 @@
           if (note) { origPositions.set(id, { position: { x: note.x, y: note.y } }); continue; }
           const dimension = [...currentFloor.measurements ?? [], ...currentFloor.annotations ?? []].find(item => item.id === id);
           if (dimension) { origPositions.set(id, { start: { x: dimension.x1, y: dimension.y1 }, end: { x: dimension.x2, y: dimension.y2 } }); continue; }
+          const pipe = currentFloor.pipes?.find(item => item.id === id);
+          if (pipe) { origPositions.set(id, { points: pipe.points.map(p => ({ ...p })) }); continue; }
           const fi = currentFloor.furniture.find(f => f.id === id);
-          if (fi) { if (!fi.locked && !fi.wallId) origPositions.set(id, { position: { ...fi.position } }); continue; }
+          if (fi) {
+            // Wall-hosted items move along their wall like openings, and with it when it is selected too.
+            if (fi.wallId) { if (!fi.locked && !currentSelectedIds.has(fi.wallId)) origPositions.set(id, { hosted: { wallId: fi.wallId, position: fi.wallPosition ?? 0.5, side: fi.wallSide === -1 ? -1 : 1 } }); }
+            else if (!fi.locked) origPositions.set(id, { position: { ...fi.position } });
+            continue;
+          }
           if (currentFloor.stairs) { const st = currentFloor.stairs.find(s => s.id === id); if (st) { origPositions.set(id, { position: { ...st.position } }); continue; } }
           if (currentFloor.columns) { const col = currentFloor.columns.find(c => c.id === id); if (col) { origPositions.set(id, { position: { ...col.position } }); continue; } }
         }
@@ -513,7 +560,7 @@
     // Everything the current trade and surface may edit (workFilter), plus visible notes and dimensions.
     const floor = editablePlanFloor(currentFloor, workCtx());
     for (const items of [floor.walls, floor.furniture, floor.doors,
-      floor.windows, floor.stairs, floor.columns, floor.entourage,
+      floor.windows, floor.stairs, floor.columns, floor.entourage, floor.pipes,
       layerVis.textAnnotations ? floor.textAnnotations : [],
       layerVis.measurements ? floor.measurements : [], layerVis.annotations ? floor.annotations : []]) {
       for (const item of items ?? []) ids.add(item.id);
@@ -829,6 +876,9 @@
     try {
       const id = addFurniture(catalogId, place.position, place.host);
       if (place.rotation !== 0) rotateFurniture(id, place.rotation);
+      // The tool's mounting height (e.g. an outlet at desk height), when one is picked.
+      const height = placementHeight(catalogId);
+      if (height !== undefined) updateFurniture(id, { elevation: height });
       return id;
     } finally {
       endUndoGroup('Placed furniture');
@@ -1495,8 +1545,17 @@
         if (selected && draggingFurnitureId === fi.id) drawAlignmentGuides(fi);
         drawFurniture(fi, selected, planOpacity(fi, work));
       }
+      // Switch links: dashed arcs from each switch to what it controls, only in Electrical.
+      if (work.trade === 'electrical') drawPlanSwitchLinks(floor);
     }
 
+
+    // Pipes: full strength in Plumbing on their surface, dimmed everywhere else.
+    if (floor.pipes?.length) drawPipes(getCS(), floor.pipes, isSelected, pipe => pipeOpacity(pipe, work));
+    if (currentTool === 'pipe' && currentPipeDraft.length) {
+      const last = currentPipeDraft[currentPipeDraft.length - 1];
+      drawPipeDraft(getCS(), currentPipeOptions, currentPipeDraft, currentPipeOptions.riser ? null : snapPipePoint(mousePos, last));
+    }
 
     // Object distance dimensions (from selected furniture to room boundaries)
     if (showDimensions && dimSettings.showObjectDistance && currentSelectedId && showFurniture) {
@@ -2754,6 +2813,67 @@
     return _findRoomAt(p, detectedRooms, currentFloor.walls, roomPolygons);
   }
 
+  /**
+   * The electrical item at a point, on either surface, for the Link tool: the one whose
+   * footprint is hit, else the nearest within a fingertip (plan symbols are small).
+   */
+  function electricalItemAt(p: Point): FurnitureItem | null {
+    if (!currentFloor) return null;
+    const items = currentFloor.furniture.filter(item => furnitureTrade(item) === 'electrical');
+    const hit = _findFurnitureAt(p, items);
+    if (hit) return hit;
+    let best: FurnitureItem | null = null, bestDistance = handleTolerance(10) / zoom;
+    for (const item of items) {
+      const distance = Math.hypot(item.position.x - p.x, item.position.y - p.y);
+      if (distance <= bestDistance) { best = item; bestDistance = distance; }
+    }
+    return best;
+  }
+
+  /**
+   * Draw the floor's switch links (spec §4.5). The selected link is drawn thicker, and so is
+   * the link of the switch the Link tool links from, or of the selected switch or of the
+   * switch that controls the selected item; the Link tool rings its switch.
+   */
+  function drawPlanSwitchLinks(floor: Floor) {
+    const selected = currentSelectedId;
+    const selectedItem = selected ? floor.furniture.find(item => item.id === selected) : undefined;
+    const activeSwitchId = isLinkPick ? currentLinkSwitchId
+      : selectedItem ? (isSwitch(selectedItem) ? selectedItem.id : linksControlling(floor.switchLinks, selectedItem.id)[0]?.switchId ?? null) : null;
+    drawSwitchLinks(ctx, floor.switchLinks, floor.furniture, (x, y) => worldToScreen(x, y), { selectedId: selected, activeSwitchId });
+    const picked = isLinkPick && currentLinkSwitchId ? floor.furniture.find(item => item.id === currentLinkSwitchId) : undefined;
+    if (picked) {
+      const at = worldToScreen(picked.position.x, picked.position.y);
+      ctx.save();
+      ctx.strokeStyle = '#2563eb';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, Math.max(14, 12 * zoom), 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  /** The switch link whose arc is under a point; links exist only while working on Electrical. */
+  function findSwitchLinkAt(p: Point): string | null {
+    if (!currentFloor || currentTrade !== 'electrical' || !showFurniture) return null;
+    return hitTestSwitchLink(p, currentFloor.switchLinks, currentFloor.furniture, handleTolerance(6) / zoom);
+  }
+
+  /** A Link tool tap: a switch becomes the one linked from; with one picked, a light, fan or outlet is added to or removed from its link. */
+  function linkToolTap(p: Point) {
+    const item = electricalItemAt(p);
+    if (!item || !currentFloor) return;
+    if (isSwitch(item)) { linkSwitchId.set(item.id); return; }
+    const switchId = currentLinkSwitchId && currentFloor.furniture.some(fi => fi.id === currentLinkSwitchId) ? currentLinkSwitchId : null;
+    if (!switchId) {
+      linkSwitchId.set(null);
+      showPlanNotice(translate(get(locale), 'chrome.hint.linkPickSwitch'));
+      return;
+    }
+    if (isSwitchTarget(item)) toggleSwitchLinkTarget(switchId, item.id);
+  }
+
   /** On the ceiling: the room whose ceiling chip or area is under the point (to set its ceiling height). */
   function ceilingRoomAt(p: Point): Room | null {
     if (!currentFloor || currentSurface !== 'ceiling') return null;
@@ -3050,6 +3170,9 @@
       return;
     }
 
+    // A finger places the point on release, so the first finger of a pinch adds nothing.
+    if (tool === 'pipe') { if (touchPress === 'finger') pendingPipeTap = wp; else pipeToolClick(wp); return; }
+
     if (tool === 'wall') {
       let endPt = snapWallEndPoint(wp);
       if (wallStart) endPt = applyTypedWallLength(endPt);
@@ -3076,6 +3199,11 @@
         selectedElementIds.set(new Set());
         selectedRoomId.set(room?.id ?? null);
         if (room) popover.set('sel-ceiling');
+        return;
+      }
+      // Link tool: only electrical items answer (switches pick, the rest toggle on the link).
+      if (isLinkPick) {
+        linkToolTap(wp);
         return;
       }
       if (!e.ctrlKey && !e.metaKey && startMultiSelectionDrag(wp)) return;
@@ -3137,6 +3265,13 @@
           return;
         }
       }
+      // A selected pipe's points: drag one to reshape the run.
+      const selPipe = !e.ctrlKey && !e.metaKey ? editablePipes().find(pipe => pipe.id === currentSelectedId) : undefined;
+      const pipeVertex = hitTestPipeVertex(wp, selPipe, zoom, handleTolerance(10));
+      if (selPipe && pipeVertex !== null) {
+        draggingPipe = { id: selPipe.id, vertex: pipeVertex, start: { ...wp }, orig: selPipe.points.map(p => ({ ...p })), started: false };
+        return;
+      }
       // Entourage resize handle (SE corner of the selected item)
       const selEnt = structureOn() ? currentFloor?.entourage?.find(en => en.id === currentSelectedId) : undefined;
       if (!e.ctrlKey && !e.metaKey && selEnt && !selEnt.locked) {
@@ -3196,8 +3331,8 @@
       const fi = findFurnitureAt(wp);
       if (fi) {
         if (selectElement(fi.id, e.shiftKey, e.ctrlKey || e.metaKey)) return;
-        // Wall-hosted items follow their wall; moving them along it comes with the wall-item tools.
-        if (!e.shiftKey && !fi.locked && !fi.wallId) {
+        // Wall-hosted items slide along walls while dragged (see the drag below).
+        if (!e.shiftKey && !fi.locked) {
           draggingFurnitureId = fi.id;
           dragOffset = { x: wp.x - fi.position.x, y: wp.y - fi.position.y };
           dragStartRotation = fi.rotation;
@@ -3215,6 +3350,12 @@
         }
         return;
       }
+      // Switch links (Electrical only): picked by their arcs, under the items they connect.
+      const linkId = findSwitchLinkAt(wp);
+      if (linkId) {
+        selectElement(linkId, e.shiftKey);
+        return;
+      }
       // Doors and windows sit on walls, so they come after the objects standing in the room
       // and before the walls themselves.
       const door = findDoorAt(wp);
@@ -3227,6 +3368,13 @@
       if (win) {
         if (selectElement(win.id, e.shiftKey)) return;
         if (!e.shiftKey) draggingWindowId = win.id;
+        return;
+      }
+      // Pipes lie over walls and rooms; only Plumbing on the pipe's surface picks them.
+      const pipe = hitTestPipe(wp, editablePipes(), zoom, handleTolerance(8));
+      if (pipe) {
+        if (selectElement(pipe.id, e.shiftKey)) return;
+        if (!e.shiftKey) draggingPipe = { id: pipe.id, vertex: null, start: { ...wp }, orig: pipe.points.map(p => ({ ...p })), started: false };
         return;
       }
       const wall = findWallAt(wp);
@@ -3459,6 +3607,24 @@
       return;
     }
 
+    // Move a pipe, or one of its points (snapped like the Pipe tool, from its neighbour).
+    if (draggingPipe && currentFloor) {
+      if (!draggingPipe.started) {
+        if (Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) < 3) return;
+        beginUndoGroup();
+        draggingPipe.started = true;
+      }
+      const { id, vertex, orig } = draggingPipe;
+      if (vertex === null) {
+        updatePipe(id, { points: translatedPipePoints(orig, snap(mousePos.x - draggingPipe.start.x), snap(mousePos.y - draggingPipe.start.y)) });
+      } else {
+        const neighbour = orig[vertex - 1] ?? orig[vertex + 1] ?? null;
+        movePipePoint(id, vertex, snapPipePoint(mousePos, neighbour));
+      }
+      markDirty();
+      return;
+    }
+
     // Drag guide line
     if (draggingGuideId && currentFloor?.guides) {
       const g = currentFloor.guides.find(g => g.id === draggingGuideId);
@@ -3549,6 +3715,7 @@
       const solvedWalls = constrainedDragTo(wallTargets);
       for (const [id, orig] of draggingMultiSelect.origPositions) {
         if (solvedWalls.has(endpointKey(id, 'start'))) continue;
+        if (orig.points) { updatePipe(id, { points: translatedPipePoints(orig.points, dx, dy) }); continue; }
         if (orig.opening) {
           const wall=currentFloor.walls.find(item => item.id === orig.opening!.wallId);
           if (wall) {
@@ -3556,6 +3723,9 @@
             if (orig.opening.kind === 'door') updateDoor(id,{position});
             else updateWindow(id,{position});
           }
+        } else if (orig.hosted) {
+          const wall = currentFloor.walls.find(item => item.id === orig.hosted!.wallId);
+          if (wall) moveWallItemDuringDrag(id, wall.id, translatedOpeningPosition(wall, orig.hosted.position, { x: dx, y: dy }), orig.hosted.side);
         } else if (orig.start && orig.end) {
           const endpoints = { x1: orig.start.x + dx, y1: orig.start.y + dy, x2: orig.end.x + dx, y2: orig.end.y + dy };
           if (currentFloor.measurements?.some(item => item.id === id)) { updateMeasurement(id, endpoints); continue; }
@@ -3677,7 +3847,13 @@
     if (draggingFurnitureId) {
       const basePos = { x: mousePos.x - dragOffset.x, y: mousePos.y - dragOffset.y };
       const fi = currentFloor?.furniture.find(f => f.id === draggingFurnitureId);
-      if (fi) {
+      const wallHost = fi && furnitureMount(fi) === 'wall' && currentFloor ? wallHostAt(basePos, currentFloor.walls) : null;
+      if (fi && wallHost) {
+        // Wall items slide along walls and can move to another one; the side follows the pointer.
+        moveWallItemDuringDrag(fi.id, wallHost.wallId, wallHost.wallPosition, wallHost.wallSide);
+      } else if (fi && fi.wallId) {
+        // Away from every wall a hosted item stays where it last hung.
+      } else if (fi) {
         // Only floor items snap against walls; ceiling items move freely.
         const wallSnap = furnitureMount(fi) === 'floor' ? snapFurnitureToWall(basePos, fi) : null;
         if (wallSnap) {
@@ -3812,6 +3988,16 @@
       marqueeEnd = null;
     }
 
+    if (pendingPipeTap) {
+      // Placed on a finger's release; a second finger landing (a pinch) ends the press with the touch still active.
+      const tap = pendingPipeTap;
+      pendingPipeTap = null;
+      if (currentTool === 'pipe' && !singleTouchActive && Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) <= 10) pipeToolClick(tap);
+    }
+    if (draggingPipe) {
+      if (draggingPipe.started) endUndoGroup(draggingPipe.vertex === null ? 'Moved pipe' : 'Moved pipe point');
+      draggingPipe = null;
+    }
     if (furnitureGestureStarted) {
       endUndoGroup(draggingHandle === 'rotate' ? 'Rotated furniture' : draggingHandle ? 'Resized furniture' : 'Moved furniture');
       furnitureGestureStarted = false;
@@ -3972,6 +4158,17 @@
           onContextMenu(new MouseEvent('contextmenu', { clientX: origin.clientX, clientY: origin.clientY }));
         }, HOLD_MS);
       }
+      if (currentTool === 'pipe' && touchKind === 'finger') {
+        // Holding the last point ends the run (as a tap on it, Done or a double tap do).
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          if (!singleTouchActive || singleTouchMoved) return;
+          holdFired = true;
+          // The held point is the run's last one.
+          if (pendingPipeTap) { const tap = pendingPipeTap; pendingPipeTap = null; pipeToolClick(tap); }
+          finishPipeDraft();
+        }, HOLD_MS);
+      }
     } else if (e.touches.length === 2) {
       cancelHold();
       lastTapTime = 0;
@@ -4125,7 +4322,7 @@
     const floor = editablePlanFloor(currentFloor, workCtx());
     const copyable = [...floor.walls,...floor.doors,...floor.windows,...floor.furniture,
       ...floor.stairs ?? [],...floor.columns ?? [],...floor.entourage ?? [],
-      ...floor.textAnnotations ?? [],...floor.measurements ?? [],...floor.annotations ?? []];
+      ...floor.textAnnotations ?? [],...floor.measurements ?? [],...floor.annotations ?? [],...floor.pipes ?? []];
     const ids = [...fitSelectionIds()].filter(id => copyable.some(item => item.id === id));
     if (!ids.length) return false;
     clipboard = { floor: structuredClone(get(activeFloor)!), ids, step: 1, projectId: get(currentProject)!.id };
@@ -4236,6 +4433,13 @@
         e.preventDefault();
         return;
       }
+    }
+
+    // Pipe tool: Enter finishes the run, Backspace takes back its last point, Escape keeps what was drawn.
+    if (currentTool === 'pipe' && currentPipeDraft.length && !e.metaKey && !e.ctrlKey) {
+      if (e.key === 'Enter') { finishPipeDraft(); e.preventDefault(); return; }
+      if (e.key === 'Backspace') { removeLastDraftPoint(); e.preventDefault(); return; }
+      if (e.code === 'Escape') finishPipeDraft();
     }
 
     if ((e.key === 'Delete' || e.key === 'Backspace') && currentSelectedIds.size >= 2) clearAuxiliarySelection();

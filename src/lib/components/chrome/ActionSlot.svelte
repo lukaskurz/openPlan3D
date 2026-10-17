@@ -46,7 +46,7 @@
 
   // Pan and Select have no tray; Furniture has one only while an item waits to be placed (the catalog sheet covers the slot otherwise).
   let toolActive = $derived(plan && $toolGroup !== 'view' && $toolGroup !== 'select'
-    && ($toolGroup !== 'furniture' || (!!$placingFurnitureId && !$catalogOpen)));
+    && (($toolGroup !== 'furniture' && $toolGroup !== 'fixture') || (!!$placingFurnitureId && !$catalogOpen)));
 
   let status = $derived.by(() => {
     const floorName = $floorView?.name;

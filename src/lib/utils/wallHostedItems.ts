@@ -1,6 +1,7 @@
 import type { FurnitureItem, Point, Wall } from '$lib/models/types';
 import { getFurnitureSize } from './furnitureCatalog';
 import { openingDropTarget } from './openingDrop';
+import { wallPathProfile } from './wallProfiles';
 
 /**
  * Wall-mounted items (outlets, switches, sconces; spec §4.2) are hosted like doors and
@@ -68,4 +69,91 @@ export function hostedPose(wall: Wall, item: Sized, host: Pick<WallHost, 'wallPo
     position: { x: p.x - tan.y * offset, y: p.y + tan.x * offset },
     rotation: ((angle % 360) + 360) % 360,
   };
+}
+
+type HostedItem = Pick<FurnitureItem, 'catalogId' | 'scale' | 'mount' | 'position' | 'rotation'>
+  & Partial<Pick<FurnitureItem, 'width' | 'depth' | 'height' | 'wallId' | 'wallPosition' | 'wallSide'>>;
+
+/** Whether an item hangs on a wall of the floor (it has a host wall id). */
+export function isWallHosted(item: Pick<FurnitureItem, 'wallId'>): item is FurnitureItem & { wallId: string } {
+  return typeof item.wallId === 'string';
+}
+
+/**
+ * Put every wall-hosted item back on its wall: its plan position and rotation are
+ * recomputed from the host wall (see `hostedPose`). An item whose wall is gone keeps
+ * its place and loses the host. Idempotent; writes only values that change, so a
+ * JSON comparison after it sees no change when nothing moved. Mutates the floor's
+ * items and returns whether anything changed.
+ */
+export function rehostWallItems(floor: { walls: Wall[]; furniture: HostedItem[] }): boolean {
+  let changed = false;
+  let walls: Map<string, Wall> | null = null;
+  for (const item of floor.furniture) {
+    if (item.wallId === undefined) continue;
+    walls ??= new Map(floor.walls.map(wall => [wall.id, wall]));
+    const wall = walls.get(item.wallId);
+    if (!wall) {
+      delete item.wallId;
+      delete item.wallPosition;
+      delete item.wallSide;
+      changed = true;
+      continue;
+    }
+    const position = Number.isFinite(item.wallPosition) ? item.wallPosition! : 0.5;
+    const pose = hostedPose(wall, item, { wallPosition: position, wallSide: item.wallSide === -1 ? -1 : 1 });
+    if (item.position.x !== pose.position.x || item.position.y !== pose.position.y) {
+      item.position = pose.position;
+      changed = true;
+    }
+    if (item.rotation !== pose.rotation) {
+      item.rotation = pose.rotation;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** A wall's direction was reversed: its hosted items keep their place, so their position and side flip. */
+export function reverseHostedItems(furniture: HostedItem[], wallId: string): void {
+  for (const item of furniture) {
+    if (item.wallId !== wallId) continue;
+    item.wallPosition = 1 - (Number.isFinite(item.wallPosition) ? item.wallPosition! : 0.5);
+    item.wallSide = item.wallSide === -1 ? 1 : -1;
+  }
+}
+
+/**
+ * A wall was split at `t` into itself (0..t) and `newId` (t..1): items past the split
+ * move to the new wall, and positions are rescaled to their segment, as for windows.
+ */
+export function splitHostedItems(furniture: HostedItem[], wallId: string, newId: string, t: number): void {
+  for (const item of furniture) {
+    if (item.wallId !== wallId) continue;
+    const position = Number.isFinite(item.wallPosition) ? item.wallPosition! : 0.5;
+    if (position > t) {
+      item.wallId = newId;
+      item.wallPosition = (position - t) / (1 - t);
+    } else {
+      item.wallPosition = position / t;
+    }
+  }
+}
+
+/** Distance in cm from the wall's start to a position (0..1) along it, measured along its path (arcs on curved walls). */
+export function wallDistanceAt(wall: Wall, position: number): number {
+  return wallPathProfile(wall).distanceAt(position);
+}
+
+/**
+ * The position (0..1) at a distance in cm from the wall's start along its path, the
+ * inverse of `wallDistanceAt`; distances beyond the ends are clamped to them.
+ */
+export function wallPositionAtDistance(wall: Wall, distance: number): number {
+  const path = wallPathProfile(wall);
+  if (!(path.length > 0) || !Number.isFinite(distance)) return 0.5;
+  const target = Math.max(0, Math.min(path.length, distance));
+  const index = Math.max(0, path.spans.findIndex(span => span.length > 0 && target <= span.to));
+  const span = path.spans[index];
+  return (index + (span.length > 0 ? (target - span.from) / span.length : 0)) / path.spans.length;
 }

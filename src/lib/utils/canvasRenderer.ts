@@ -967,7 +967,10 @@ export function drawFurnitureItem(cs: CanvasState, item: FurnitureItem, selected
     ctx.setLineDash([4, 3]);
     ctx.strokeRect(-w / 2 - 2, -d / 2 - 2, w + 4, d + 4);
     ctx.setLineDash([]);
+  }
 
+  // Wall-hosted items take their size and turn from their wall: no resize or rotate handles.
+  if (selected && !item.wallId) {
     const hs = 5;
     ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#3b82f6';

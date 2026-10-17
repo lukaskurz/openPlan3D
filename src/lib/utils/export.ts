@@ -30,6 +30,8 @@ import { visibleActiveFloor, type PlanExportVisibility } from './exportVisibilit
 import { get } from 'svelte/store';
 import jsPDF from 'jspdf';
 import { escapeXml } from './exportText';
+import { drawPipes, pipesSvg } from './pipeRenderer';
+import { pipePlanBounds } from './pipes';
 
 /** SVG strokes for the shared door symbol parts (doorSymbol.ts). */
 const DOOR_STROKES = {
@@ -92,6 +94,16 @@ function extendBoundsForRoomLabels(floor: Floor, bounds: { minX: number; minY: n
   }
 }
 
+function extendBoundsForPipes(floor: Floor, bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
+  for (const pipe of floor.pipes ?? []) {
+    if (!pipe.points.length) continue;
+    // Risers are drawn as a ring a few units across.
+    const b = pipePlanBounds(pipe), ring = pipe.riser ? 10 : 2;
+    bounds.minX = Math.min(bounds.minX, b.minX - ring); bounds.minY = Math.min(bounds.minY, b.minY - ring);
+    bounds.maxX = Math.max(bounds.maxX, b.maxX + ring); bounds.maxY = Math.max(bounds.maxY, b.maxY + ring);
+  }
+}
+
 function extendBoundsForMeasurements(floor: Floor, bounds: { minX: number; minY: number; maxX: number; maxY: number }) {
   const ctx = document.createElement('canvas').getContext('2d');
   if (!ctx) return;
@@ -126,7 +138,7 @@ function extendBoundsForStairs(floor: Floor, bounds: { minX: number; minY: numbe
   if (!floor.stairs?.length) return;
   const context=document.createElement('canvas').getContext('2d');
   if (!context) return;
-  const b=planContentBounds({...floor,walls:[],doors:[],windows:[],rooms:[],furniture:[],columns:[],entourage:[],measurements:[],annotations:[],textAnnotations:[],backgroundImage:undefined}, {context,entourageAspect:()=>1});
+  const b=planContentBounds({...floor,walls:[],doors:[],windows:[],rooms:[],furniture:[],columns:[],entourage:[],measurements:[],annotations:[],textAnnotations:[],pipes:[],backgroundImage:undefined}, {context,entourageAspect:()=>1});
   if (!b) return;
   bounds.minX=Math.min(bounds.minX,b.minX); bounds.minY=Math.min(bounds.minY,b.minY);
   bounds.maxX=Math.max(bounds.maxX,b.maxX); bounds.maxY=Math.max(bounds.maxY,b.maxY);
@@ -237,6 +249,7 @@ export async function exportAsPNG(canvas: HTMLCanvasElement | null, project?: Pr
       extendBoundsForText(floor, bounds);
       extendBoundsForDimensions(floor, bounds);
       extendBoundsForMeasurements(floor, bounds);
+  extendBoundsForPipes(floor, bounds);
       extendBoundsForFurnitureCaptions(floor, bounds, item => customModelName(item, snapshot));
       ({ minX, minY, maxX, maxY } = bounds);
       const pad = 80;
@@ -312,6 +325,7 @@ export async function exportAsPNG(canvas: HTMLCanvasElement | null, project?: Pr
       for (const item of floor.furniture) drawFurnitureItem({
         ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY,
       }, item, false, customModelName(item, snapshot));
+      drawPipes({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor.pipes, () => false);
 
       ctx.save();
       for (const stair of floor.stairs ?? []) drawStair({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, stair, false);
@@ -379,6 +393,7 @@ export function exportAsSVG(project: Project, language: Locale = 'en', visibilit
   extendBoundsForText(floor, svgBounds);
   extendBoundsForDimensions(floor, svgBounds);
   extendBoundsForMeasurements(floor, svgBounds);
+  extendBoundsForPipes(floor, svgBounds);
   extendBoundsForFurnitureCaptions(floor, svgBounds, caption);
   ({ minX, minY, maxX, maxY } = svgBounds);
   const pad = 50;
@@ -552,6 +567,9 @@ export function exportAsSVG(project: Project, language: Locale = 'en', visibilit
       : `    <rect x="${-r}" y="${-r}" width="${column.diameter}" height="${column.diameter}" ${style}/>\n`;
     paths += `    <path d="M ${-r} ${-r} L ${r} ${r} M ${-r} ${r} L ${r} ${-r}" fill="none" stroke="#888" stroke-opacity="0.5" stroke-width="0.5"/>\n  </g>\n`;
   }
+
+  // Pipes
+  paths += pipesSvg(floor.pipes, x => x - minX + pad, y => y - minY + pad);
 
   // Measurements
   if (floor.measurements) {
@@ -742,6 +760,7 @@ function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImag
   extendBoundsForText(floor, pdfBounds);
   extendBoundsForDimensions(floor, pdfBounds);
   extendBoundsForMeasurements(floor, pdfBounds);
+  extendBoundsForPipes(floor, pdfBounds);
   extendBoundsForFurnitureCaptions(floor, pdfBounds, item => customModelName(item, project));
   ({ minX, minY, maxX, maxY } = pdfBounds);
 
@@ -813,6 +832,7 @@ function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImag
   for (const item of floor.furniture) drawFurnitureItem({
     ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY,
   }, item, false, customModelName(item, project));
+  drawPipes({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor.pipes, () => false);
 
   ctx.save();
   for (const stair of floor.stairs ?? []) drawStair({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, stair, false);

@@ -57,3 +57,15 @@ describe('hosted pose', () => {
     expect(snapped!.position.y).toBeCloseTo(pose.position.y);
   });
 });
+
+describe('distances along the wall (elevation view)', () => {
+  it('converts positions to distances along the path and back', async () => {
+    const { wallDistanceAt, wallPositionAtDistance } = await import('$lib/utils/wallHostedItems');
+    expect(wallDistanceAt(wall, 0.25)).toBeCloseTo(100);
+    expect(wallPositionAtDistance(wall, 100)).toBeCloseTo(0.25);
+    expect(wallPositionAtDistance(wall, -50)).toBe(0);
+    expect(wallPositionAtDistance(wall, 900)).toBe(1);
+    const curved: Wall = { ...wall, curvePoint: { x: 200, y: 200 } };
+    for (const t of [0.1, 0.5, 0.8]) expect(wallPositionAtDistance(curved, wallDistanceAt(curved, t))).toBeCloseTo(t);
+  });
+});

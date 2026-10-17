@@ -21,11 +21,9 @@ describe('tool bar data', () => {
     expect(tradeTools('furnishing', 'ceiling').map(tool => tool.id)).toEqual(['ceilingHeight', 'light', 'fan', 'smoke']);
   });
 
-  it('other trades have no tools yet', () => {
-    for (const trade of ['electrical', 'plumbing'] as const) {
-      expect(tradeTools(trade, 'floor')).toEqual([]);
-      expect(tradeTools(trade, 'ceiling')).toEqual([]);
-    }
+  it('Electrical offers Outlet, Switch, Light and Link on the floor, and Light, Fan and Link on the ceiling', () => {
+    expect(tradeTools('electrical', 'floor').map(tool => tool.id)).toEqual(['outlet', 'switch', 'wallLight', 'link']);
+    expect(tradeTools('electrical', 'ceiling').map(tool => tool.id)).toEqual(['light', 'fan', 'link']);
   });
 
   it('describes every trade and never repeats a fixed tool in a trade bar', () => {

@@ -194,6 +194,25 @@ export interface Annotation {
   offset: number; // perpendicular offset for dimension line (default 40)
 }
 
+export type PipeKind = 'cold' | 'hot' | 'waste';
+export type PipeRun = 'floor' | 'wall' | 'ceiling';
+
+/** A water or waste pipe drawn by the Plumbing trade (spec §4.5). */
+export interface Pipe {
+  id: string;
+  kind: PipeKind;
+  /** Nominal diameter in mm. */
+  diameter: number;
+  /** Plan polyline in cm; a single point for a riser. */
+  points: Point[];
+  /** Where the run is laid: in the floor, along the walls, or under the ceiling. */
+  run: PipeRun;
+  /** Height above the floor surface in cm; negative is in the screed. Omitted: the run's default. */
+  elevation?: number;
+  /** A vertical stack through the storey at its first point. */
+  riser?: boolean;
+}
+
 /** A wall corner, referenced through one of the endpoints that meet there. */
 export interface CornerRef { wallId: string; end: 'start' | 'end' }
 /** 0 = wall centreline; ±1 = the face on the ±normal side of start→end, normal = (-dy, dx). */
@@ -303,6 +322,19 @@ export interface Floor {
    * effective value with `effectiveRoomCeiling()` (utils/ceilingHeights.ts).
    */
   roomCeilingHeights?: Record<string, number>;
+  /** Plumbing runs (spec §4.5). */
+  pipes?: Pipe[];
+  /** "This switch controls these lights" (spec §4.5): drawn as dashed arcs in Electrical. At most one per switch. */
+  switchLinks?: SwitchLink[];
+}
+
+/** A switch and the furniture items (lights, fans, outlets) it controls. */
+export interface SwitchLink {
+  id: string;
+  /** The switch: a furniture item on the same floor. */
+  switchId: string;
+  /** The controlled furniture items, never empty in a saved project. */
+  targetIds: string[];
 }
 
 export interface CustomModelDef {
@@ -349,6 +381,12 @@ export interface PlanAlternative {
   updatedAt: Date;
   /** Small JPEG data URL of the plan, captured when switching away. */
   thumbnail?: string;
+  /** Short version code shown in the badge: 'A', 'B', … for new alternatives, 'A1',
+   * 'A2', … for branches (utils/planAlternatives CODE). Never changes on rename;
+   * older files get one when read (ensureAlternativeCodes). */
+  code?: string;
+  /** Code of the alternative this one was branched from. */
+  parentCode?: string;
 }
 
 export interface Project {

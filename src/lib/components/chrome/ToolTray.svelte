@@ -13,13 +13,15 @@
   import { roomPresetLabels, roomTemplateLabels } from '$lib/i18n/roomLabels';
   import { roomPresets } from '$lib/utils/roomPresets';
   import { roomTemplates } from '$lib/utils/roomTemplates';
-  import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs, placeCeilingVariant } from './tools';
-  import { CEILING_TOOL_ITEMS } from './tradeTools';
+  import { toolGroup, finishTool, chooseGroup, placeColumn, placeStairs, placeCeilingVariant, placeWallVariant, linkSwitchId, wallItemHeights, OUTLET_HEIGHTS } from './tools';
+  import { CEILING_TOOL_ITEMS, ELECTRICAL_TOOL_ITEMS } from './tradeTools';
+  import { defaultMountingHeight } from '$lib/utils/mounting';
   import { getCatalogItem } from '$lib/utils/furnitureCatalog';
   import { hintKey } from './hints';
   import { placeRoomShape, traceImage } from './actions';
   import Keypad from './Keypad.svelte';
   import Icon, { type IconName } from './Icon.svelte';
+  import PipeToolTray from './PipeToolTray.svelte';
 
   const DOOR_TYPES: { type: Door['type']; width: number }[] = [
     { type: 'single', width: 90 }, { type: 'double', width: 150 }, { type: 'sliding', width: 180 }, { type: 'french', width: 150 },
@@ -42,6 +44,21 @@
     smoke_detector: { icon: 'smoke', label: 'chrome.ceilingItem.model' },
     sym_smoke: { icon: 'columnRound', label: 'chrome.ceilingItem.symbol' },
   };
+
+  /** How the Electrical wall tools' variants show in their options. */
+  const WALL_VARIANT: Record<string, { icon: IconName; label: TranslationKey }> = {
+    sym_outlet: { icon: 'outlet', label: 'chrome.outlet.single' },
+    sym_outlet_double: { icon: 'outletDouble', label: 'chrome.outlet.double' },
+    sym_switch: { icon: 'switch', label: 'chrome.tool.switch' },
+    wall_sconce: { icon: 'sconce', label: 'chrome.wallLight.indoor' },
+    wall_sconce_outdoor: { icon: 'sun', label: 'chrome.wallLight.outdoor' },
+  };
+  let isWallTool = $derived($toolGroup === 'outlet' || $toolGroup === 'switch' || $toolGroup === 'wallLight');
+  /** The Outlet tool's mounting height: the one picked, else the armed item's catalog height. */
+  let outletHeight = $derived($wallItemHeights.outlet ?? ($placingFurnitureId ? defaultMountingHeight(getCatalogItem($placingFurnitureId) ?? {}) : undefined) ?? 30);
+  /** The switch the Link tool links from, on the floor shown. */
+  let linkSwitch = $derived($linkSwitchId ? $activeFloor?.furniture.find(item => item.id === $linkSwitchId) : undefined);
+  let linkCount = $derived(linkSwitch ? $activeFloor?.switchLinks?.find(link => link.switchId === linkSwitch!.id)?.targetIds.length ?? 0 : 0);
 
   /** Mount of the armed catalog item: wall items are placed on a wall, ceiling items anywhere. */
   let placingMount = $derived($placingFurnitureId ? getCatalogItem($placingFurnitureId)?.mount ?? 'floor' : 'floor');
@@ -79,6 +96,16 @@
         return CEILING_TOOL_ITEMS[group].map(id => ({
           id, icon: CEILING_VARIANT[id].icon, label: CEILING_VARIANT[id].label,
           active: $placingFurnitureId === id, pick: () => placeCeilingVariant(group, id),
+        }));
+      }
+      case 'outlet':
+      case 'switch':
+      case 'wallLight': {
+        const group = $toolGroup;
+        const ids: readonly string[] = ELECTRICAL_TOOL_ITEMS[group];
+        return ids.length < 2 ? [] : ids.map(id => ({
+          id, icon: WALL_VARIANT[id].icon, label: WALL_VARIANT[id].label,
+          active: $placingFurnitureId === id, pick: () => placeWallVariant(group, id),
         }));
       }
       case 'annotate':
@@ -277,6 +304,44 @@
     <div class="op-float op-enter op-slot-bar" data-tool-tray>
       {@render hint(placeHint, { name: furnitureName($placingFurnitureId, $locale) })}
       {@render options()}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if isWallTool && $placingFurnitureId}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint(placeHint, { name: furnitureName($placingFurnitureId, $locale) })}
+      {@render options()}
+      {#if $toolGroup === 'outlet'}
+        <!-- Mounting height for the next outlets: skirting, desk or worktop height. -->
+        <div class="op-seg shrink-0" role="group" aria-label={$t('chrome.selection.height')} data-outlet-height>
+          {#each OUTLET_HEIGHTS as cm}
+            <button aria-pressed={outletHeight === cm} onclick={() => wallItemHeights.update(heights => ({ ...heights, outlet: cm }))}><span class="tabular-nums">{len(cm)}</span></button>
+          {/each}
+        </div>
+      {/if}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'link'}
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {#if linkSwitch}
+        {@render hint(linkCount ? 'chrome.hint.linkTargetsCount' : 'chrome.hint.linkTargets', { name: furnitureName(linkSwitch.catalogId, $locale), count: linkCount })}
+      {:else}
+        {@render hint('chrome.hint.linkPickSwitch')}
+      {/if}
+      <div class="op-divider-v"></div>
+      {@render done()}
+    </div>
+  {:else if $toolGroup === 'pipe'}
+    <PipeToolTray />
+  {:else if ($toolGroup === 'fixture' || $toolGroup === 'drain') && $placingFurnitureId && !$catalogOpen}
+    <!-- Plumbing: a fixture from the catalog, or a floor drain, placed like furniture. -->
+    <div class="op-float op-enter op-slot-bar" data-tool-tray>
+      {@render hint(placeHint, { name: furnitureName($placingFurnitureId, $locale) })}
+      <button class="op-btn is-outline shrink-0" onclick={() => placingRotation.update(r => (r + 90) % 360)}><Icon name="rotate" size={18} />{$placingRotation}°</button>
+      {#if $toolGroup === 'fixture'}
+        <button class="op-btn is-outline shrink-0" onclick={() => catalogOpen.set(true)}><Icon name="fixture" size={18} />{$t('chrome.tool.fixture')}</button>
+      {/if}
       <div class="op-divider-v"></div>
       {@render done()}
     </div>

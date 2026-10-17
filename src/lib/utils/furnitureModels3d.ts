@@ -1798,7 +1798,7 @@ export const SYMBOL_FACEPLATE = { width: 8, height: 8, depth: 1.2 } as const;
 /** Thickness of the disc that stands in for ceiling plan symbols in 3D, cm. */
 export const CEILING_SYMBOL_THICKNESS = 2;
 
-const WALL_SYMBOLS = new Set(['sym_outlet', 'sym_switch']);
+const WALL_SYMBOLS = new Set(['sym_outlet', 'sym_outlet_double', 'sym_switch']);
 const CEILING_SYMBOLS = new Set(['sym_ceiling_light', 'sym_recessed_light', 'sym_pendant', 'sym_ceiling_fan', 'sym_smoke']);
 
 /** How a plan symbol shows in 3D: a faceplate on the wall, a disc on the ceiling, or nothing. */
@@ -1819,22 +1819,27 @@ export function createSymbolModel(catalogId: string, def: Pick<FurnitureDef, 'wi
   group.name = `symbol_${catalogId}`;
   const plastic = createMaterial('#f5f5f4', 0.5, 0.0);
   if (kind === 'faceplate') {
-    const { width, height, depth } = SYMBOL_FACEPLATE;
+    // A double outlet is two sockets side by side on one plate.
+    const sockets = catalogId === 'sym_outlet_double' ? 2 : 1;
+    const { height, depth } = SYMBOL_FACEPLATE, width = SYMBOL_FACEPLATE.width * sockets;
     const plate = new THREE.Mesh(new RoundedBoxGeometry(width, height, depth, 2, 0.4), plastic);
     plate.position.y = height / 2;
     group.add(plate);
     const face = depth / 2;
-    if (catalogId === 'sym_outlet') {
-      // Two round sockets, each with two pin holes
+    if (catalogId === 'sym_outlet' || catalogId === 'sym_outlet_double') {
+      // Two round sockets per outlet, each with two pin holes
       const insert = createMaterial('#e7e5e4', 0.6, 0.0), hole = createMaterial('#1c1917', 0.8, 0.0);
-      for (const y of [height * 0.3, height * 0.7]) {
-        const socket = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.3, 20).rotateX(Math.PI / 2), insert);
-        socket.position.set(0, y, face + 0.1);
-        group.add(socket);
-        for (const x of [-0.6, 0.6]) {
-          const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.1, 8).rotateX(Math.PI / 2), hole);
-          pin.position.set(x, y, face + 0.27);
-          group.add(pin);
+      for (let i = 0; i < sockets; i++) {
+        const cx = (i - (sockets - 1) / 2) * SYMBOL_FACEPLATE.width;
+        for (const y of [height * 0.3, height * 0.7]) {
+          const socket = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 0.3, 20).rotateX(Math.PI / 2), insert);
+          socket.position.set(cx, y, face + 0.1);
+          group.add(socket);
+          for (const x of [-0.6, 0.6]) {
+            const pin = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.1, 8).rotateX(Math.PI / 2), hole);
+            pin.position.set(cx + x, y, face + 0.27);
+            group.add(pin);
+          }
         }
       }
     } else {

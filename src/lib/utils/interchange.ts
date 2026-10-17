@@ -28,7 +28,8 @@
  * exported. An object's mount, drop and wall host and the rooms' ceiling heights are not exported
  * either; only the resulting object centre height is written. The importer ignores it: catalog
  * ceiling items hang from the ceiling again by their catalog mount, while raised floor and wall
- * items come back with no elevation. Floor openings ("Open to floor below") and floor elevations and slab thicknesses have
+ * items come back with no elevation. Switch links (which switch controls which lights) are
+ * not exported either, and neither are pipes (`floor.pipes`, the Plumbing runs and risers). Floor openings ("Open to floor below") and floor elevations and slab thicknesses have
  * no place in the format (a section has no opening flag, a `stories` entry is `{ index, name }`),
  * so on import the room has its slab again and each floor stands at level × 300 cm on a 5 cm slab.
  *

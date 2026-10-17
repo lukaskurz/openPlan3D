@@ -4,9 +4,9 @@
   import { entourageLabels } from '$lib/i18n/entourageLabels';
   import { catalogCategoryLabels, normalizeCatalogSearch } from '$lib/i18n/catalogCategories';
   import { selectedTool, placingFurnitureId, placingEntourageId, currentProject, addCustomEntourage } from '$lib/stores/project';
-  import { furnitureCatalog, furnitureCategories, type FurnitureDef } from '$lib/utils/furnitureCatalog';
+  import { furnitureCatalog, furnitureCategories, furnitureTrade, isPlumbingFixture, type FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { entourageCatalog, entourageCategories } from '$lib/utils/entourageCatalog';
-  import { catalogOpen } from '$lib/stores/chrome';
+  import { catalogOpen, catalogScope } from '$lib/stores/chrome';
   import FurnitureThumbnail from '$lib/components/sidebar/FurnitureThumbnail.svelte';
   import CustomModelPanel from '$lib/components/sidebar/CustomModelPanel.svelte';
   import { projectSettings, formatLength } from '$lib/stores/settings';
@@ -37,11 +37,18 @@
   let units = $derived($projectSettings.units);
   const size = (item: FurnitureDef) => `${formatLength(item.width, units)} × ${formatLength(item.depth, units)}`;
 
+  /** The Plumbing Fixture tool offers the sanitary fixtures and the plumbing symbols only. */
+  const plumbingItem = (f: FurnitureDef) => isPlumbingFixture(f) || furnitureTrade(f) === 'plumbing';
+  let plumbingScope = $derived($catalogScope === 'plumbing');
+  let visibleCategories = $derived(plumbingScope ? furnitureCategories.filter(cat => furnitureCatalog.some(f => f.category === cat && plumbingItem(f))) : furnitureCategories);
+  // Opening the sheet for fixtures starts on All, whatever was browsed before.
+  $effect(() => { if (plumbingScope) category = 'All'; });
   let results = $derived.by(() => {
     const query = normalizeCatalogSearch(search);
     let items = category === 'Favorites' ? favourites
       : category === 'All' || category === PEOPLE ? furnitureCatalog
       : furnitureCatalog.filter(f => f.category === category);
+    if ($catalogScope === 'plumbing') items = items.filter(plumbingItem);
     if (query) items = items.filter(f => [f.name, furnitureName(f.id, $locale), f.category, label(f.category)].some(v => normalizeCatalogSearch(v).includes(query)));
     return items;
   });
@@ -121,10 +128,12 @@
     <div class="flex gap-2 px-3 py-2.5 overflow-x-auto shrink-0" role="tablist">
       <button class="op-btn shrink-0 !h-10 {category === 'All' ? 'is-primary' : 'is-outline'}" style="border-radius:999px" role="tab" aria-selected={category === 'All'} onclick={() => category = 'All'}>{$t('objectControls.all')}</button>
       <button class="op-btn shrink-0 !h-10 {category === 'Favorites' ? 'is-primary' : 'is-outline'}" style="border-radius:999px" role="tab" aria-selected={category === 'Favorites'} onclick={() => category = 'Favorites'}>♥ {$t('objectControls.favorites')}{favoriteIds.length ? ` · ${favoriteIds.length}` : ''}</button>
-      {#each furnitureCategories as cat}
+      {#each visibleCategories as cat}
         <button class="op-btn shrink-0 !h-10 {category === cat ? 'is-primary' : 'is-outline'}" style="border-radius:999px" role="tab" aria-selected={category === cat} onclick={() => category = cat}>{label(cat)}</button>
       {/each}
-      <button class="op-btn shrink-0 !h-10 {category === PEOPLE ? 'is-primary' : 'is-outline'}" style="border-radius:999px" role="tab" aria-selected={category === PEOPLE} onclick={() => category = PEOPLE}>{$t('entourageLabels.title')}</button>
+      {#if !plumbingScope}
+        <button class="op-btn shrink-0 !h-10 {category === PEOPLE ? 'is-primary' : 'is-outline'}" style="border-radius:999px" role="tab" aria-selected={category === PEOPLE} onclick={() => category = PEOPLE}>{$t('entourageLabels.title')}</button>
+      {/if}
     </div>
 
     <div class="flex-1 min-h-0 op-scroll px-3 pb-4">
@@ -160,7 +169,7 @@
         {/if}
         <button class="op-btn is-outline w-full mt-3" onclick={uploadSymbol}><Icon name="upload" size={18} />{$t('entourageLabels.upload')}</button>
       {:else}
-        {#if category === 'All' && !search && recent.length}
+        {#if category === 'All' && !search && recent.length && !plumbingScope}
           <div class="op-menu-title !px-1">{$t('objectControls.recent')}</div>
           <div class="grid grid-cols-[repeat(auto-fill,minmax(132px,1fr))] gap-2">
             {#each recent as item (item.id)}{@render card(item)}{/each}

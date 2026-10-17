@@ -11,6 +11,7 @@ export type ChromePopover =
   | 'sel-length' | 'sel-constrain' | 'sel-more' | 'sel-type' | 'sel-align' | 'sel-size' | 'sel-colour' | 'sel-ceiling' | 'sel-height'
   | 'wall-length' | 'wall-angle' | 'room-shapes' | 'history'
   | 'versions' | 'trade' | 'show' | 'scale' | 'settings'
+  | 'sel-pipe' | 'sel-pipe-kind' | 'sel-pipe-elevation'
   | null;
 
 export const popover = writable<ChromePopover>(null);
@@ -21,6 +22,9 @@ export function closePopover() { popover.set(null); }
 
 export const drawerOpen = writable(false);
 export const catalogOpen = writable(false);
+/** What the catalog sheet offers: everything, or the plumbing fixtures and symbols (the Plumbing Fixture tool). */
+export type CatalogScope = 'all' | 'plumbing';
+export const catalogScope = writable<CatalogScope>('all');
 export const elementsListOpen = writable(false);
 export const assistantOpen = writable(false);
 
@@ -59,6 +63,7 @@ export const floorView = derived(activeFloor, (floor): Floor | null => floor && 
   columns: floor.columns?.map(item => ({ ...item })),
   entourage: floor.entourage?.map(item => ({ ...item })),
   measurements: floor.measurements?.map(item => ({ ...item })),
+  pipes: floor.pipes?.map(item => ({ ...item, points: item.points.map(p => ({ ...p })) })),
   constraints: floor.constraints?.map(item => ({ ...item })),
   groups: (floor.groups ?? []).map(item => ({ ...item })),
 });

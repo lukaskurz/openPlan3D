@@ -2,6 +2,7 @@ import type { Project, DetailKind } from '$lib/models/types';
 import { validateItemDetails, validateRetainedDetailState } from './itemDetails';
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
+import { CODE, ensureAlternativeCodes } from './planAlternatives';
 
 /** Highest ceiling height accepted in `floor.roomCeilingHeights`, in cm (matches utils/ceilingHeights.ts). */
 const MAX_CEILING_HEIGHT = 100_000;
@@ -208,6 +209,31 @@ export function readProject(value: unknown): Project {
       if (item.opacity !== undefined) number(item.opacity, `${path}.opacity`, 0, 1);
       booleans(item, ['locked'], path);
     });
+    if (floor.pipes !== undefined) elements('pipes', (item, path) => {
+      choice(item.kind, ['cold', 'hot', 'waste'], `${path}.kind`);
+      positive(item.diameter, `${path}.diameter`);
+      choice(item.run, ['floor', 'wall', 'ceiling'], `${path}.run`);
+      booleans(item, ['riser'], path);
+      if (item.elevation !== undefined) number(item.elevation, `${path}.elevation`);
+      if (!Array.isArray(item.points) || item.points.length < (item.riser ? 1 : 2)) fail(`${path}.points`, item.riser ? 'must have at least one point' : 'must have at least two points');
+      item.points.forEach((p: any, i: number) => point(p, `${path}.points[${i}]`));
+    });
+    if (floor.switchLinks !== undefined) {
+      // Switch links (spec §4.5) are trimmed on this copy, not rejected: a link whose switch is
+      // gone is dropped, targets that are not furniture on the floor are left out, a link left
+      // without targets is dropped, and a switch keeps only its first link.
+      const furnitureIds = new Set((floor.furniture as any[]).map(item => item.id));
+      const switches = new Set<string>();
+      floor.switchLinks = list(floor, 'switchLinks', path).filter((item: any) => {
+        if (!item || typeof item !== 'object' || typeof item.switchId !== 'string' || !Array.isArray(item.targetIds)) return true;
+        if (!furnitureIds.has(item.switchId) || switches.has(item.switchId)) return false;
+        item.targetIds = [...new Set(item.targetIds)].filter((id: unknown) => typeof id === 'string' && id !== item.switchId && furnitureIds.has(id));
+        if (!item.targetIds.length) return false;
+        switches.add(item.switchId);
+        return true;
+      });
+      elements('switchLinks', (item, path) => { text(item.switchId, `${path}.switchId`, true); ids(item.targetIds, `${path}.targetIds`); });
+    }
     if (floor.constraints !== undefined) {
       // Constraints left pointing at deleted walls are dropped (on this copy), not rejected.
       floor.constraints = list(floor, 'constraints', path).filter((item: any) =>
@@ -252,11 +278,16 @@ export function readProject(value: unknown): Project {
     const alternatives = list(project!, 'alternatives', 'document');
     if (!alternatives.some(alt => alt?.id !== undefined && alt.id === project!.activeAlternativeId)) fail('activeAlternativeId', 'must refer to an alternative');
     const seen = new Set<string>();
+    const codes = new Set<string>();
     for (const [i, alt] of alternatives.entries()) {
       const path = `alternatives[${i}]`;
       record(alt, path); text(alt.id, `${path}.id`, true);
       if (seen.has(alt.id)) fail(`${path}.id`, 'duplicates another alternative');
       seen.add(alt.id); text(alt.name, `${path}.name`);
+      // Version codes: drop an invalid or repeated one (ensureAlternativeCodes below gives a new one).
+      if (alt.code !== undefined && !(typeof alt.code === 'string' && CODE.test(alt.code) && !codes.has(alt.code))) delete alt.code;
+      if (alt.code !== undefined) codes.add(alt.code);
+      if (alt.parentCode !== undefined && !(typeof alt.parentCode === 'string' && CODE.test(alt.parentCode))) delete alt.parentCode;
       if (alt.thumbnail !== undefined && !(typeof alt.thumbnail === 'string' && /^data:image\/(?:png|jpeg|webp);base64,/.test(alt.thumbnail))) delete alt.thumbnail;
       const date = new Date(alt.updatedAt ?? 0);
       if (!Number.isFinite(date.getTime())) fail(`${path}.updatedAt`, 'must be a valid date');
@@ -266,6 +297,7 @@ export function readProject(value: unknown): Project {
       const ids = validateFloors(list(alt, 'floors', path, false), `${path}.floors`);
       if (typeof alt.activeFloorId !== 'string' || !ids.has(alt.activeFloorId)) alt.activeFloorId = alt.floors[0].id;
     }
+    ensureAlternativeCodes(project! as Project);
   } else delete project!.activeAlternativeId;
   if (project!.customEntourage !== undefined) {
     const seen = new Set<string>();

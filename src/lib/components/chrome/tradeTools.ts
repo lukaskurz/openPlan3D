@@ -23,7 +23,7 @@ export const FIXED_TOOLS: readonly BarTool[] = [
   { id: 'annotate', icon: 'ruler', label: 'chrome.tool.annotate' },
 ];
 
-/** Electrical and plumbing tools arrive with package 3; their lists start empty. */
+/** The tools each trade offers on each surface (spec §3.3). */
 export const TRADE_TOOLS: Readonly<Record<Trade, Readonly<Record<Surface, readonly BarTool[]>>>> = {
   furnishing: {
     floor: [
@@ -39,8 +39,29 @@ export const TRADE_TOOLS: Readonly<Record<Trade, Readonly<Record<Surface, readon
       { id: 'smoke', icon: 'smoke', label: 'chrome.tool.smoke' },
     ],
   },
-  electrical: { floor: [], ceiling: [] },
-  plumbing: { floor: [], ceiling: [] },
+  electrical: {
+    floor: [
+      { id: 'outlet', icon: 'outlet', label: 'chrome.tool.outlet' },
+      { id: 'switch', icon: 'switch', label: 'chrome.tool.switch' },
+      { id: 'wallLight', icon: 'sconce', label: 'chrome.tool.light', title: 'chrome.tool.wallLightHint' },
+      { id: 'link', icon: 'link', label: 'chrome.tool.link', title: 'chrome.hint.linkPickSwitch' },
+    ],
+    ceiling: [
+      { id: 'light', icon: 'bulb', label: 'chrome.tool.light' },
+      { id: 'fan', icon: 'fan', label: 'chrome.tool.fan' },
+      { id: 'link', icon: 'link', label: 'chrome.tool.link', title: 'chrome.hint.linkPickSwitch' },
+    ],
+  },
+  plumbing: {
+    floor: [
+      { id: 'pipe', icon: 'pipeRun', label: 'chrome.tool.pipe', title: 'chrome.tool.pipeHint' },
+      { id: 'fixture', icon: 'fixture', label: 'chrome.tool.fixture', title: 'chrome.tool.fixtureHint' },
+      { id: 'drain', icon: 'drain', label: 'chrome.tool.drain' },
+    ],
+    ceiling: [
+      { id: 'pipe', icon: 'pipeRun', label: 'chrome.tool.pipeCeiling', title: 'chrome.tool.pipeHint' },
+    ],
+  },
 };
 
 export interface TradeInfo { icon: IconName; label: TranslationKey; description: TranslationKey }
@@ -64,11 +85,31 @@ export const CEILING_TOOL_ITEMS = {
   smoke: ['smoke_detector', 'sym_smoke'],
 } as const satisfies Partial<Record<ToolGroup, readonly string[]>>;
 
-export type PlacingGroup = 'furniture' | keyof typeof CEILING_TOOL_ITEMS;
+/** Catalog items the Plumbing tools arm directly (Floor drain); Fixture opens the catalog instead. */
+export const PLUMBING_TOOL_ITEMS = {
+  drain: ['sym_drain'],
+} as const satisfies Partial<Record<ToolGroup, readonly string[]>>;
+
+/**
+ * Catalog items the Electrical floor tools place on walls; the first of each is what the
+ * tool arms, the others are its variants (single / double outlet, indoor / outdoor sconce).
+ * The Electrical ceiling tools (Light, Fan) are the ceiling tools above.
+ */
+export const ELECTRICAL_TOOL_ITEMS = {
+  outlet: ['sym_outlet', 'sym_outlet_double'],
+  switch: ['sym_switch'],
+  wallLight: ['wall_sconce', 'wall_sconce_outdoor'],
+} as const satisfies Partial<Record<ToolGroup, readonly string[]>>;
+
+export type PlacingGroup = 'furniture' | keyof typeof CEILING_TOOL_ITEMS | keyof typeof PLUMBING_TOOL_ITEMS | keyof typeof ELECTRICAL_TOOL_ITEMS;
 
 /** The tool group an armed catalog item belongs to: a ceiling tool for its items, else Furniture. */
 export function groupForItem(catalogId: string | null): PlacingGroup {
   for (const [group, ids] of Object.entries(CEILING_TOOL_ITEMS) as [keyof typeof CEILING_TOOL_ITEMS, readonly string[]][]) {
+    if (catalogId && ids.includes(catalogId)) return group;
+  }
+  if (catalogId && (PLUMBING_TOOL_ITEMS.drain as readonly string[]).includes(catalogId)) return 'drain';
+  for (const [group, ids] of Object.entries(ELECTRICAL_TOOL_ITEMS) as [keyof typeof ELECTRICAL_TOOL_ITEMS, readonly string[]][]) {
     if (catalogId && ids.includes(catalogId)) return group;
   }
   return 'furniture';

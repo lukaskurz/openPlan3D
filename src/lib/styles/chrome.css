@@ -666,6 +666,14 @@ html, body { overscroll-behavior: none; }
 .op-slot-bar::-webkit-scrollbar { display: none; }
 .op-slot-bar > * { flex-shrink: 0; }
 .op-slot-bar > .op-divider-v { margin: 0 2px; }
+/* Done stays in reach when the options scroll: it sticks to the bar's right edge, over a fade. */
+.op-slot-bar > [data-tray-done] {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  margin-left: auto;
+  box-shadow: -16px 0 12px -4px var(--color-surface-raised);
+}
 /* Popovers from the slot open upward, centred on it, never wider or taller than the screen allows. */
 .op-slot-pop {
   position: absolute;

@@ -2,6 +2,7 @@ import { openingPlanBounds } from './openingPlanBounds';
 import { roomHoles } from './roomNesting';
 import { entouragePlanBounds } from './entouragePlanBounds';
 import { stairPlanBounds } from './stairPlanGeometry';
+import { pipePlanBounds } from './pipes';
 import { formatArea, formatLength } from '$lib/stores/settings';
 import { wallLength, wallPointAt, wallTangentAt, wallEdgeInsets } from './canvasRenderer';
 import { roomCentroid, roomLabelPosition } from './roomDetection';
@@ -19,7 +20,7 @@ type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 export function hasPlanContent(floor: Floor): boolean {
   return !!floor.backgroundImage || [floor.walls, floor.furniture, floor.stairs,
     floor.columns, floor.entourage, floor.measurements, floor.annotations,
-    floor.textAnnotations].some(items => !!items?.length);
+    floor.textAnnotations, floor.pipes].some(items => !!items?.length);
 }
 
 /** Finite plan geometry used by Fit, including floors without walls. */
@@ -64,6 +65,7 @@ export function planContentBounds(floor: Floor, options: {
   for (const stair of floor.stairs ?? []) add(stairPlanBounds(stair));
   for (const col of floor.columns ?? []) rectangle(col.position.x, col.position.y, col.diameter, col.diameter, col.shape === 'square' ? col.rotation : 0);
   for (const item of floor.entourage ?? []) add(entouragePlanBounds(item, options.entourageAspect(item.defId)));
+  for (const pipe of floor.pipes ?? []) if (pipe.points.length) add(pipePlanBounds(pipe));
   options.context.save();
   try {
     const ctx = options.context, scale = options.zoom ?? 1;

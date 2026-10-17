@@ -1,5 +1,5 @@
-import type { Floor, FurnitureItem, Surface, Trade } from '$lib/models/types';
-import { furnitureTrade, type FurnitureDef } from './furnitureCatalog';
+import type { Floor, FurnitureItem, Pipe, Surface, Trade } from '$lib/models/types';
+import { furnitureTrade, isPlumbingFixture, type FurnitureDef } from './furnitureCatalog';
 import { defSurface, itemSurface } from './mounting';
 
 /**
@@ -15,6 +15,11 @@ import { defSurface, itemSurface } from './mounting';
  *   The Furnishing ceiling tools (Light, Fan, Smoke detector) place electrical items,
  *   and the ceiling is planned as a whole there; Electrical and Plumbing on the ceiling
  *   stay strict to their own trade.
+ * - Exception: **sanitary fixtures** (toilet, sinks, shower, bathtub, washer…, see
+ *   `FurnitureDef.plumbingFixture`) stay Furnishing items but are also editable in
+ *   Plumbing on the floor, so the Plumbing Fixture tool places them without a trade switch.
+ * - Pipes belong to Plumbing and to the floor surface, or to the ceiling when they run
+ *   under it: editable only there, dimmed everywhere else (`pipeEditable`).
  * - Walls, doors, windows, rooms, stairs, columns and entourage are structure: always
  *   drawn, but editable only in Furnishing on the floor. On the ceiling surface a room
  *   can still be selected to set its ceiling height (the canvas handles that separately).
@@ -36,7 +41,13 @@ export function editableIn(trade: Trade, surface: Surface, ctx: WorkContext): bo
 
 /** A placed item can be hit-tested, selected and moved in this context. */
 export function editableFurniture(item: Pick<FurnitureItem, 'catalogId' | 'mount'>, ctx: WorkContext): boolean {
-  return editableIn(furnitureTrade(item), itemSurface(item), ctx);
+  const surface = itemSurface(item);
+  return editableIn(furnitureTrade(item), surface, ctx) || plumbingFixtureEditable(isPlumbingFixture(item), surface, ctx);
+}
+
+/** Plumbing on the floor also edits the sanitary fixtures standing there. */
+function plumbingFixtureEditable(fixture: boolean, surface: Surface, ctx: WorkContext): boolean {
+  return fixture && surface === 'floor' && ctx.trade === 'plumbing' && ctx.surface === 'floor';
 }
 
 /**
@@ -45,7 +56,8 @@ export function editableFurniture(item: Pick<FurnitureItem, 'catalogId' | 'mount
  */
 export function editableDef(def: FurnitureDef, trade: Trade): boolean {
   const surface = defSurface(def);
-  return editableIn(furnitureTrade(def), surface, { trade, surface });
+  const ctx = { trade, surface };
+  return editableIn(furnitureTrade(def), surface, ctx) || plumbingFixtureEditable(isPlumbingFixture(def), surface, ctx);
 }
 
 /** The trade to work in for placing this catalog item: the current one when it can edit it, else the item's own. */
@@ -64,6 +76,21 @@ export function planOpacity(item: Pick<FurnitureItem, 'catalogId' | 'mount'>, ct
   return editableFurniture(item, ctx) ? 1 : DIMMED_OPACITY;
 }
 
+/** The surface a pipe is drawn and edited on: the ceiling for ceiling runs, else the floor. */
+export function pipeSurface(pipe: Pick<Pipe, 'run'>): Surface {
+  return pipe.run === 'ceiling' ? 'ceiling' : 'floor';
+}
+
+/** Pipes are edited in Plumbing on their surface only. */
+export function pipeEditable(pipe: Pick<Pipe, 'run'>, ctx: WorkContext): boolean {
+  return ctx.trade === 'plumbing' && ctx.surface === pipeSurface(pipe);
+}
+
+/** How strongly to draw a pipe: 1 where it can be edited, else DIMMED_OPACITY. */
+export function pipeOpacity(pipe: Pick<Pipe, 'run'>, ctx: WorkContext): number {
+  return pipeEditable(pipe, ctx) ? 1 : DIMMED_OPACITY;
+}
+
 /** Opacity for structure that is drawn but not editable (stairs, columns, entourage). */
 export function structureOpacity(ctx: WorkContext): number {
   return structureEditable(ctx) ? 1 : DIMMED_OPACITY;
@@ -72,14 +99,17 @@ export function structureOpacity(ctx: WorkContext): number {
 /**
  * The floor with only what can be selected in this context, for box select, select all
  * and copy: non-editable furniture is left out, and with structure not editable its
- * walls, openings, stairs, columns and entourage too. Measurements, dimensions, text
+ * walls, openings, stairs, columns and entourage too, and pipes outside Plumbing on their
+ * surface. Measurements, dimensions, text
  * and everything else are kept as they are. Returns the same floor when nothing is left out.
  */
 export function editablePlanFloor(floor: Floor, ctx: WorkContext): Floor {
   const furniture = floor.furniture.filter(item => editableFurniture(item, ctx));
+  const pipes = floor.pipes?.filter(pipe => pipeEditable(pipe, ctx));
   const structure = structureEditable(ctx);
-  if (structure && furniture.length === floor.furniture.length) return floor;
+  if (structure && furniture.length === floor.furniture.length && pipes?.length === floor.pipes?.length) return floor;
+  const kept = pipes === undefined ? { ...floor, furniture } : { ...floor, furniture, pipes };
   return structure
-    ? { ...floor, furniture }
-    : { ...floor, furniture, walls: [], doors: [], windows: [], stairs: [], columns: [], entourage: [] };
+    ? kept
+    : { ...kept, walls: [], doors: [], windows: [], stairs: [], columns: [], entourage: [] };
 }

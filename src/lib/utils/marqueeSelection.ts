@@ -6,7 +6,7 @@ export interface MarqueeLayers { measurements: boolean; annotations: boolean; te
 
 /**
  * Ids a drag-select rectangle encloses: walls, dimensions and notes by both ends, everything else by
- * its centre. Openings are tested where they are drawn, on the wall path, so a door on a curved wall
+ * its centre, pipes by all their points. Openings are tested where they are drawn, on the wall path, so a door on a curved wall
  * is not looked for on the straight chord. Hidden dimension and text layers cannot be selected.
  */
 export function marqueeSelectionIds(floor: Floor, rect: MarqueeRect, layers: MarqueeLayers): string[] {
@@ -18,6 +18,7 @@ export function marqueeSelectionIds(floor: Floor, rect: MarqueeRect, layers: Mar
     if (wall && inside(wallPointAt(wall, opening.position))) ids.push(opening.id);
   }
   for (const item of [...floor.furniture, ...(floor.stairs ?? []), ...(floor.columns ?? []), ...(floor.entourage ?? [])]) if (inside(item.position)) ids.push(item.id);
+  for (const pipe of floor.pipes ?? []) if (pipe.points.length && pipe.points.every(inside)) ids.push(pipe.id);
   if (layers.textAnnotations) for (const note of floor.textAnnotations ?? []) if (inside(note)) ids.push(note.id);
   for (const line of [...(layers.measurements ? floor.measurements ?? [] : []), ...(layers.annotations ? floor.annotations ?? [] : [])]) {
     if (inside({ x: line.x1, y: line.y1 }) && inside({ x: line.x2, y: line.y2 })) ids.push(line.id);
