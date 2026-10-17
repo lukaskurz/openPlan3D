@@ -1,5 +1,6 @@
 import type { Project } from '$lib/models/types';
 import { readProject } from '$lib/utils/projectValidation';
+import { allPlanFloors } from '$lib/utils/planAlternatives';
 import { PACKAGE_LIMIT, jsonBytes, packageJSON, packageError, readPackageZip, writePackageZip, safePackagePath, crc32 } from '$lib/utils/projectPackageZip';
 import { applyNativeEdits, nativeAssetNames, nativeToWeb, validatePackageMapping, validatePackagePlan, webToNative, type PackageMapping } from '$lib/utils/projectPackageBridge';
 import { planStatistics } from '$lib/utils/planStatistics';
@@ -14,7 +15,7 @@ const rasterTypes = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'imag
 const embeddedRaster = /^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/]*={0,2}$/;
 function validateLocalImages(project: Project) {
   const images = (project.customEntourage ?? []).map(item => item.dataUrl);
-  for (const floor of project.floors) {
+  for (const floor of allPlanFloors(project)) {
     const url = floor.backgroundImage?.dataUrl;
     if (!url) continue;
     // An embedded image of another format names its floor and format; external references get the generic message below.

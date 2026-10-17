@@ -11,6 +11,7 @@ import { wallPlanBounds } from './wallPlanGeometry';
 import { furniturePlanBounds } from './furniturePlanBounds';
 import { textAnnotationBounds } from './textAnnotationLayout';
 import { dimensionPlanGeometry } from './dimensionPlanGeometry';
+import { dimensionShapePoints, floorDimensionShapes } from './constraintRenderer';
 
 type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
 
@@ -139,6 +140,9 @@ export function planContentBounds(floor: Floor, options: {
       for (const p of [g.start, g.end]) rectangle(p.x, p.y, Math.max(4, arrowExtent) * 2, Math.max(4, arrowExtent) * 2, 0);
       const size = Math.max(10, 11 * scale);
       caption(a.label || formatLength(g.length, options.units ?? 'metric'), g.center.x, g.center.y, `${size}px sans-serif`, size);
+    }
+    if (options.dimensionsVisible !== false) for (const { shape } of floorDimensionShapes(floor, options.units ?? 'metric')) {
+      for (const p of dimensionShapePoints(shape)) point(p.x, p.y);
     }
     if (options.textAnnotationsVisible !== false) for (const note of floor.textAnnotations ?? []) add(textAnnotationBounds(note, options.context, options.zoom ?? 1));
     const labels=options.roomLabels ?? [], holes=roomHoles(labels.map(r=>r.polygon));

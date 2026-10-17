@@ -86,7 +86,10 @@ export interface Door {
   position: number; // 0-1 along wall
   width: number;
   height: number;
-  type: 'single' | 'double' | 'sliding' | 'french' | 'pocket' | 'bifold' | 'opening' | 'garage';
+  /** french and balcony are full-height glass doors with two and one leaves. */
+  type: 'single' | 'double' | 'sliding' | 'french' | 'balcony' | 'pocket' | 'bifold' | 'opening' | 'garage';
+  /** Glass doors: equal panes per leaf separated by glazing bars (1 = one sheet). */
+  glassPanes?: number;
   swingDirection: 'left' | 'right';
   flipSide: boolean; // flip which side of wall the door opens to (vertical flip)
 }
@@ -118,6 +121,8 @@ export interface FurnitureItem {
   width?: number;   // cm
   depth?: number;   // cm
   height?: number;  // cm
+  /** Bottom of the object above the floor, in cm (e.g. a TV on a stand). Missing means 0. */
+  elevation?: number;
   material?: string; // material name/id
   locked?: boolean;
 }
@@ -167,6 +172,40 @@ export interface Annotation {
   label?: string;
   offset: number; // perpendicular offset for dimension line (default 40)
 }
+
+/** A wall corner, referenced through one of the endpoints that meet there. */
+export interface CornerRef { wallId: string; end: 'start' | 'end' }
+/** 0 = wall centreline; ±1 = the face on the ±normal side of start→end, normal = (-dy, dx). */
+export type FaceSide = 0 | 1 | -1;
+
+interface ConstraintBase {
+  id: string;
+  /** A driven (reference) dimension only reports its value; it never moves geometry. */
+  driven?: boolean;
+  /** Dimension line offset from the measured geometry, cm. */
+  offset?: number;
+}
+
+/**
+ * Parametric wall constraints. Values are signed where a sign keeps the configuration the
+ * user created (the UI shows magnitudes): distances along an axis or normal, and angles
+ * in degrees counter-clockwise with plan Y pointing up (like wallAngle), from A to B.
+ */
+export type Constraint = ConstraintBase & (
+  | { kind: 'length'; wallId: string; side: FaceSide; value: number }
+  | { kind: 'pointDistance'; a: CornerRef; b: CornerRef; axis: 'aligned' | 'x' | 'y'; value: number }
+  | { kind: 'pointLine'; point: CornerRef; wallId: string; side: FaceSide; value: number }
+  | { kind: 'lineDistance'; wallA: string; sideA: FaceSide; wallB: string; sideB: FaceSide; value: number }
+  | { kind: 'angle'; wallA: string; wallB: string; flipB: boolean; value: number }
+  | { kind: 'horizontal' | 'vertical'; wallId: string }
+  | { kind: 'parallel' | 'perpendicular'; wallA: string; wallB: string }
+  | { kind: 'fix'; target: CornerRef | { wallId: string }; at: Point[] }
+);
+export type ConstraintKind = Constraint['kind'];
+export type DimensionConstraint = Extract<Constraint, { value: number }>;
+type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
+/** A constraint before the store gives it an id. */
+export type NewConstraint = WithoutId<Constraint>;
 
 export interface TextAnnotation {
   id: string;
@@ -234,6 +273,8 @@ export interface Floor {
   textAnnotations: TextAnnotation[];
   groups: ElementGroup[];
   entourage?: EntourageItem[];
+  /** Parametric dimensions and geometric constraints on this floor's walls. */
+  constraints?: Constraint[];
 }
 
 export interface CustomModelDef {
@@ -268,6 +309,20 @@ export interface InterchangeState {
   planNotes?: string;
 }
 
+/** One alternative arrangement of the whole plan (all floors). The active
+ * alternative's floors live in `Project.floors`, so its own `floors` is empty;
+ * the others keep their floors here until they are switched to. */
+export interface PlanAlternative {
+  id: string;
+  name: string;
+  floors: Floor[];
+  activeFloorId: string;
+  /** When this alternative was last worked on (set when switching away). */
+  updatedAt: Date;
+  /** Small JPEG data URL of the plan, captured when switching away. */
+  thumbnail?: string;
+}
+
 export interface Project {
   customModels?: CustomModelDef[];
   attachmentNames?: Record<string, string>;
@@ -281,4 +336,8 @@ export interface Project {
   createdAt: Date;
   updatedAt: Date;
   customEntourage?: CustomEntourageDef[];
+  /** Missing means the plan has no alternatives. When present it lists every
+   * alternative, including the active one named by `activeAlternativeId`. */
+  alternatives?: PlanAlternative[];
+  activeAlternativeId?: string;
 }

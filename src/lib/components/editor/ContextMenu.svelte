@@ -93,7 +93,7 @@
 {#if visible}
   <div
     bind:this={menuEl}
-    class="fixed z-[9999] bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[180px] text-sm select-none"
+    class="op-popover op-enter fixed z-[9999] p-1.5 min-w-[240px] text-sm select-none"
     style="left: {adjustedX}px; top: {adjustedY}px;"
     role="menu"
     tabindex="-1"
@@ -203,37 +203,39 @@
 {/if}
 
 <style>
+  /* Touch-sized rows in the shared menu look; the old emoji icons are dropped. */
   .ctx-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     width: 100%;
-    padding: 6px 14px;
+    min-height: 44px;
+    padding: 0 12px;
+    border-radius: var(--radius-lg);
     text-align: left;
     cursor: pointer;
     border: none;
     background: none;
-    color: #374151;
-    font-size: 13px;
+    color: var(--color-text-secondary);
+    font-size: 14px;
+    font-weight: 600;
     white-space: nowrap;
   }
   .ctx-item:hover, .ctx-item:focus-visible {
-    background: #f3f4f6;
+    background: var(--color-surface-hover);
   }
   .ctx-danger {
-    color: #dc2626;
+    color: var(--color-danger-text);
   }
   .ctx-danger:hover {
-    background: #fef2f2;
+    background: var(--color-danger-subtle);
   }
   .ctx-icon {
-    width: 18px;
-    text-align: center;
-    font-size: 14px;
+    display: none;
   }
   .ctx-sep {
     height: 1px;
-    background: #e5e7eb;
-    margin: 4px 0;
+    background: var(--color-border-subtle);
+    margin: 4px 8px;
   }
 </style>

@@ -7,6 +7,9 @@
   import { getCatalogItem } from '$lib/utils/furnitureCatalog';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import type { Floor } from '$lib/models/types';
+  import { analyzeConstraints } from '$lib/utils/constraints';
+  import { constraintText } from '$lib/utils/constraintRenderer';
+  import { projectSettings } from '$lib/stores/settings';
 
   let floor: Floor | null = $state(null);
   onDestroy(activeFloor.subscribe(f => { floor = f; }));
@@ -14,7 +17,7 @@
   let selId: string | null = $state(null);
   onDestroy(selectedElementId.subscribe(id => { selId = id; }));
 
-  let vis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true });
+  let vis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, constraints: true });
   onDestroy(layerVisibility.subscribe(v => { vis = v; }));
 
   // Collapsed state per category
@@ -120,6 +123,18 @@
           const dist = Math.round(Math.hypot(a.x2 - a.x1, a.y2 - a.y1));
           const label = a.label || `${dist} cm`;
           return { id: a.id, label: $t('layers.annotation', { number: i + 1, label }), icon: '📏' };
+        }),
+      });
+    }
+
+    if (floor.constraints?.length) {
+      const measures = analyzeConstraints(floor.walls, floor.constraints).measures;
+      cats.push({
+        key: 'constraints', label: $t('layers.constraints'), icon: '📐',
+        items: floor.constraints.map(c => {
+          const value = measures.get(c.id);
+          const kind = $t(`constraintKinds.${c.kind}`);
+          return { id: c.id, label: value === undefined ? kind : `${kind} ${constraintText(c, value, $projectSettings.units)}`, icon: c.kind === 'fix' ? '📌' : '📐' };
         }),
       });
     }

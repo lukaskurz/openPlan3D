@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ConstraintProperties from './ConstraintProperties.svelte';
   import { wallMaterialLabels } from '$lib/i18n/wallMaterialLabels';
   import { entourageLabels } from '$lib/i18n/entourageLabels';
   import { roomTypeLabels, roomColorLabels, floorGroupLabels, floorMaterialLabels } from '$lib/i18n/roomPropertyLabels';
@@ -12,12 +13,13 @@
   import type { DetailTarget } from '$lib/models/types';
   import { catalogAssetUrl } from '$lib/utils/catalogAssetUrl';
 
-  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, doorJoinMode, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId } from '$lib/stores/project';
-  import { wallLength as calcWallLength, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
+  import { currentProject, activeFloor, selectedElementId, selectedRoomId, updateWall, resizeWallLength, setWallAngle, straightenWalls, reverseWall, updateDoor, updateWindow, updateRoom, updateFurniture, detectedRoomsStore, updateStair, updateColumn, updateBackgroundImage, setBackgroundImage, calibrationMode, calibrationPoints, doorJoinMode, updateTextAnnotation, toggleFurnitureLock, updateEntourageItem, removeElement, elevationWallId, addGeometricConstraint, removeConstraint, wallConstraint } from '$lib/stores/project';
+  import { wallLength as calcWallLength, wallAngle as calcWallAngle, wallSkew, MIN_WALL_LENGTH, type WallEndpoint } from '$lib/utils/wallEditing';
   import { openingOnWall } from '$lib/utils/wallProfiles';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { floorMaterials, wallColors } from '$lib/utils/materials';
-  import { getCatalogItem } from '$lib/utils/furnitureCatalog';
+  import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
+  import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
     import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
@@ -29,6 +31,20 @@
 
   onDestroy(activeFloor.subscribe((f) => { floor = f; }));
   onDestroy(selectedElementId.subscribe((id) => { selId = id; }));
+  // Floors are edited in place; this version makes constraint states follow every edit.
+  let projectVersion = $state(0);
+  onDestroy(currentProject.subscribe(() => { projectVersion++; }));
+  function wallHas(kind: 'horizontal' | 'vertical' | 'fix'): boolean {
+    void projectVersion;
+    return !!selectedWall && !!wallConstraint(floor, selectedWall.id, kind);
+  }
+  function toggleWallConstraint(kind: 'horizontal' | 'vertical' | 'fix') {
+    if (!selectedWall) return;
+    const existing = wallConstraint(floor, selectedWall.id, kind);
+    if (existing) { removeConstraint(existing.id); return; }
+    const result = addGeometricConstraint(kind, [selectedWall.id]);
+    wallAngleError = 'error' in result ? result.error : null;
+  }
   onDestroy(selectedRoomId.subscribe((id) => { selRoomId = id; }));
   onDestroy(detectedRoomsStore.subscribe((rooms) => { detectedRooms = rooms; }));
 
@@ -45,7 +61,15 @@
     return settings.units === 'imperial' ? 'in' : 'cm';
   }
 
-  let { is3D = false }: { is3D?: boolean } = $props();
+  let { is3D = false, floating = false, showBackground = true, hasContent = $bindable(false) }: {
+    is3D?: boolean;
+    /** Inside the floating inspector: no sidebar frame of its own. */
+    floating?: boolean;
+    /** Whether the traced-image controls are listed under the selection. */
+    showBackground?: boolean;
+    /** True when the panel has something to show. */
+    hasContent?: boolean;
+  } = $props();
   let wallSideTab = $state<'interior' | 'exterior'>('interior');
   let selectedWall = $derived(floor?.walls?.find(w => w.id === selId) ?? null);
   let selectedDoor = $derived(floor?.doors?.find(d => d.id === selId) ?? null);
@@ -55,6 +79,7 @@
   let selectedColumn = $derived(floor?.columns?.find(c => c.id === selId) ?? null);
   let selectedTextAnnotation = $derived(floor?.textAnnotations?.find(t => t.id === selId) ?? null);
   let selectedEntourage = $derived(floor?.entourage?.find(en => en.id === selId) ?? null);
+  let selectedConstraint = $derived(floor?.constraints?.find(c => c.id === selId) ?? null);
   let hasBgImage = $derived(!!floor?.backgroundImage);
   let selectedRoom = $derived(floor && selRoomId
     ? resolveRooms(floor, detectedRooms).find(r => r.id === selRoomId) ?? null
@@ -77,6 +102,33 @@
   // Calculate window distances  
   let windowDistFromA = $derived(selectedWindow && selectedWindowWall ? calcWallLength(selectedWindowWall) * selectedWindow.position : 0);
   let windowDistFromB = $derived(selectedWindow && selectedWindowWall ? calcWallLength(selectedWindowWall) * (1 - selectedWindow.position) : 0);
+
+  const STRAIGHTEN_TOLERANCE = 5; // degrees
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+  let wallAngleValue = $derived(selectedWall ? round2(calcWallAngle(selectedWall)) : 0);
+  let wallSkewValue = $derived(selectedWall && !selectedWall.curvePoint ? wallSkew(selectedWall) : 0);
+  let skewedWallCount = $derived(floor?.walls.filter(w => !w.curvePoint && calcWallLength(w) >= MIN_WALL_LENGTH && wallSkew(w) > 0.005 && wallSkew(w) <= STRAIGHTEN_TOLERANCE).length ?? 0);
+  let wallAngleError = $state<string | null>(null);
+  let straightenMessage = $state<string | null>(null);
+  $effect(() => { void selId; wallAngleError = null; straightenMessage = null; });
+
+  function onWallAngle(e: Event) {
+    if (!selectedWall) return;
+    const input = e.target as HTMLInputElement;
+    const parsed = Number.parseFloat(input.value.replace(',', '.').replace('°', ''));
+    if (!Number.isFinite(parsed)) { wallAngleError = $t('wallProperties.angleInvalid'); }
+    else if (round2(parsed) !== wallAngleValue) { wallAngleError = setWallAngle(selectedWall.id, parsed, fixedEndpoint); }
+    else { wallAngleError = null; }
+    input.value = String(round2(calcWallAngle(selectedWall)));
+  }
+  function snapWallAngle() {
+    if (!selectedWall) return;
+    wallAngleError = setWallAngle(selectedWall.id, Math.round(calcWallAngle(selectedWall) / 90) * 90, fixedEndpoint);
+  }
+  function onStraightenAll() {
+    const result = straightenWalls(STRAIGHTEN_TOLERANCE);
+    straightenMessage = typeof result === 'string' ? result : $t('wallProperties.straightened', { count: result });
+  }
 
   function onWallLength(e: Event) {
     if (!selectedWall) return;
@@ -163,6 +215,24 @@
     if (!selectedDoor) return;
     updateDoor(selectedDoor.id, { type: (e.target as HTMLSelectElement).value as Door['type'] });
   }
+  // Swing doors are one of four combinations of material and leaf count.
+  const SWING_DOORS: Record<string, { glass: boolean; leaves: 1 | 2 }> = {
+    single: { glass: false, leaves: 1 }, double: { glass: false, leaves: 2 },
+    balcony: { glass: true, leaves: 1 }, french: { glass: true, leaves: 2 },
+  };
+  function swingDoorType(glass: boolean, leaves: 1 | 2): Door['type'] {
+    return glass ? (leaves === 2 ? 'french' : 'balcony') : (leaves === 2 ? 'double' : 'single');
+  }
+  function setDoorStyle(change: Partial<{ glass: boolean; leaves: 1 | 2 }>) {
+    if (!selectedDoor) return;
+    const current = SWING_DOORS[selectedDoor.type];
+    if (!current) return;
+    const next = { ...current, ...change };
+    const type = swingDoorType(next.glass, next.leaves);
+    // Keep a sensible leaf width when switching between one and two leaves.
+    const width = next.leaves !== current.leaves ? Math.round(selectedDoor.width * (next.leaves === 2 ? 5 / 3 : 3 / 5)) : selectedDoor.width;
+    updateDoor(selectedDoor.id, { type, width });
+  }
   function onDoorSwing(e: Event) {
     if (!selectedDoor) return;
     updateDoor(selectedDoor.id, { swingDirection: (e.target as HTMLSelectElement).value as 'left' | 'right' });
@@ -194,20 +264,21 @@
     if (!selectedFurniture) return;
     updateFurniture(selectedFurniture.id, { color });
   }
-  function onFurnitureWidth(e: Event) {
+  // Resizing on the canvas used to store a scale factor; show and edit the real size,
+  // folding any remaining scale into it so only the mirror sign stays in scale.
+  let furnitureSize = $derived(selectedFurniture ? getFurnitureSize(selectedFurniture) : { width: 0, depth: 0, height: 0 });
+  function onFurnitureSize(e: Event, key: 'width' | 'depth' | 'height') {
     if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.width ?? getCatalogItem(selectedFurniture.catalogId)?.width ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { width: value }));
+    const axis = key === 'width' ? 'x' : key === 'depth' ? 'y' : 'z';
+    dimensionInput(e, furnitureSize[key], value => {
+      const s = selectedFurniture!.scale;
+      updateFurniture(selectedFurniture!.id, { [key]: value, scale: { ...s, [axis]: Math.sign(s[axis]) || 1 } });
+    });
   }
-  function onFurnitureDepth(e: Event) {
+  let furnitureSurfaceBelow = $derived(selectedFurniture && floor ? surfaceBelow(selectedFurniture, floor.furniture) : 0);
+  function onFurnitureElevation(e: Event) {
     if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.depth ?? getCatalogItem(selectedFurniture.catalogId)?.depth ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { depth: value }));
-  }
-  function onFurnitureHeight(e: Event) {
-    if (!selectedFurniture) return;
-    dimensionInput(e, selectedFurniture.height ?? getCatalogItem(selectedFurniture.catalogId)?.height ?? 50,
-      value => updateFurniture(selectedFurniture!.id, { height: value }));
+    dimensionInput(e, furnitureElevation(selectedFurniture), value => updateFurniture(selectedFurniture!.id, { elevation: value }), true);
   }
   function onFurnitureMaterial(e: Event) {
     if (!selectedFurniture) return;
@@ -215,11 +286,13 @@
   }
   function onFurnitureRotation(e: Event) {
     if (!selectedFurniture) return;
-    scalarInput(e, selectedFurniture.rotation, value => updateFurniture(selectedFurniture!.id, { rotation: value }));
+    scalarInput(e, Math.round(selectedFurniture.rotation * 100) / 100, value => updateFurniture(selectedFurniture!.id, { rotation: value }));
   }
   function resetFurnitureDefaults() {
     if (!selectedFurniture) return;
-    updateFurniture(selectedFurniture.id, { color: undefined, width: undefined, depth: undefined, height: undefined, material: undefined });
+    const { x, y, z } = selectedFurniture.scale;
+    updateFurniture(selectedFurniture.id, { color: undefined, width: undefined, depth: undefined, height: undefined, material: undefined,
+      scale: { x: Math.sign(x) || 1, y: Math.sign(y) || 1, z: Math.sign(z) || 1 } });
   }
 
   // Door distance handlers
@@ -360,11 +433,12 @@
     { label: '🧶 Carpet', ids: ['carpet-beige', 'carpet-gray'] },
   ];
 
-  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || (!is3D && hasBgImage));
+  let hasSelection = $derived(!!selectedWall || !!selectedDoor || !!selectedWindow || !!selectedFurniture || !!selectedRoom || !!selectedStair || !!selectedColumn || !!selectedTextAnnotation || !!selectedEntourage || !!selectedConstraint || (!is3D && hasBgImage && showBackground));
+  $effect(() => { hasContent = hasSelection; });
 </script>
 
-<!-- Right sidebar on md+; slides up as a bottom sheet on phones -->
-<div data-plan-properties class="{is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed md:static right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl" class:hidden={!hasSelection}>
+<!-- Right sidebar on md+; slides up as a bottom sheet on phones. Inside the inspector it is just the content. -->
+<div data-plan-properties data-floating={floating || undefined} class={floating ? 'properties-floating flex flex-col p-4' : `${is3D ? 'w-80' : 'w-64'} shrink-0 bg-white border-l border-gray-200 flex flex-col overflow-y-auto p-3 fixed md:static right-0 top-12 bottom-9 z-40 shadow-lg max-md:top-auto max-md:bottom-0 max-md:left-0 max-md:w-full max-md:max-h-[45vh] max-md:border-l-0 max-md:border-t max-md:rounded-t-xl max-md:shadow-2xl`} class:hidden={!hasSelection}>
   {#if selectedWall}
     <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
       <span class="w-6 h-6 bg-gray-200 rounded flex items-center justify-center text-xs">▭</span>
@@ -376,6 +450,37 @@
         <input type="text" value={displayValue(wallLength)} onblur={onWallLength} onkeydown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
       </label>
       <p class="text-xs text-gray-500">{$t('wallProperties.entryHelp', { unit: unitLabel() })}</p>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('wallProperties.angle')}</span>
+        <input type="text" inputmode="decimal" data-wall-angle value={wallAngleValue} onblur={onWallAngle} onkeydown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm" />
+      </label>
+      {#if wallSkewValue > 0.005 && wallSkewValue <= STRAIGHTEN_TOLERANCE}
+        <button onclick={snapWallAngle} data-wall-snap class="w-full px-2 py-1.5 border border-amber-300 bg-amber-50 text-amber-800 rounded text-sm hover:bg-amber-100 transition-colors">
+          {$t('wallProperties.snap', { skew: round2(wallSkewValue) })}
+        </button>
+      {/if}
+      {#if wallAngleError}<p role="alert" class="text-xs text-red-700">{wallAngleError}</p>{/if}
+      {#if skewedWallCount > 0}
+        <button onclick={onStraightenAll} data-straighten-all class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm hover:bg-gray-50 transition-colors" title={$t('wallProperties.straightenAllHint', { tolerance: STRAIGHTEN_TOLERANCE })}>
+          {$t('wallProperties.straightenAll', { count: skewedWallCount })}
+        </button>
+      {/if}
+      {#if straightenMessage}<p role="status" class="text-xs text-gray-500">{straightenMessage}</p>{/if}
+      {#if !selectedWall.curvePoint}
+        <div>
+          <span class="text-xs text-gray-500">{$t('wallProperties.constraints')}</span>
+          <div class="mt-1 grid grid-cols-3 gap-1" role="group" aria-label={$t('wallProperties.constraints')}>
+            {#each [['horizontal', 'constraintKinds.horizontal'], ['vertical', 'constraintKinds.vertical'], ['fix', 'constraintKinds.fix']] as const as [kind, label]}
+              <button
+                class="rounded border px-2 py-1 text-xs transition-colors {wallHas(kind) ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}"
+                aria-pressed={wallHas(kind)}
+                data-wall-constraint={kind}
+                onclick={() => toggleWallConstraint(kind)}
+              >{$t(label)}</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
       <label class="block">
         <span class="text-xs text-gray-500">{$t('wallProperties.fixed')}</span>
         <select bind:value={fixedEndpoint} class="w-full px-2 py-1 border border-gray-200 rounded text-sm">
@@ -566,12 +671,38 @@
           <option value="double">{$t('openingCatalog.double')}</option>
           <option value="sliding">{$t('openingCatalog.sliding')}</option>
           <option value="french">{$t('openingCatalog.french')}</option>
+          <option value="balcony">{$t('openingCatalog.balcony')}</option>
           <option value="pocket">{$t('openingCatalog.pocket')}</option>
           <option value="bifold">{$t('openingCatalog.bifold')}</option>
           <option value="opening">{$t('openingProperties.doorway')}</option>
           <option value="garage">{$t('openingCatalog.garage')}</option>
         </select>
       </label>
+      {#if SWING_DOORS[selectedDoor.type]}
+      {@const style = SWING_DOORS[selectedDoor.type]}
+      <div role="group" aria-label={$t('openingProperties.material')}>
+        <span class="text-xs text-gray-500">{$t('openingProperties.material')}</span>
+        <div class="flex gap-2">
+          <button data-door-wood aria-pressed={!style.glass} onclick={() => setDoorStyle({ glass: false })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {!style.glass ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.wood')}</button>
+          <button data-door-glass aria-pressed={style.glass} onclick={() => setDoorStyle({ glass: true })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.glass ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.glass')}</button>
+        </div>
+      </div>
+      <div role="group" aria-label={$t('openingProperties.leaves')}>
+        <span class="text-xs text-gray-500">{$t('openingProperties.leaves')}</span>
+        <div class="flex gap-2">
+          <button data-door-one-leaf aria-pressed={style.leaves === 1} onclick={() => setDoorStyle({ leaves: 1 })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.leaves === 1 ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.oneLeaf')}</button>
+          <button data-door-two-leaves aria-pressed={style.leaves === 2} onclick={() => setDoorStyle({ leaves: 2 })} class="flex-1 px-2 py-1.5 border rounded text-sm transition-colors {style.leaves === 2 ? 'bg-blue-100 border-blue-400 text-blue-700' : 'border-gray-200 hover:bg-gray-50'}">{$t('openingProperties.twoLeaves')}</button>
+        </div>
+      </div>
+      {/if}
+      {#if selectedDoor.type === 'balcony' || selectedDoor.type === 'french' || selectedDoor.type === 'sliding'}
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('openingProperties.glassPanes')}</span>
+        <select data-door-panes value={String(selectedDoor.glassPanes ?? 1)} onchange={(e) => { if (selectedDoor) updateDoor(selectedDoor.id, { glassPanes: Number(e.currentTarget.value) }); }} class="w-full px-2 py-1 border border-gray-200 rounded text-sm">
+          {#each [1, 2, 3, 4, 5, 6] as panes}<option value={String(panes)}>{panes === 1 ? $t('openingProperties.panesOne') : $t('openingProperties.panes', { count: panes })}</option>{/each}
+        </select>
+      </label>
+      {/if}
       {#if selectedDoor.type !== 'opening' && selectedDoor.type !== 'garage'}
       <div role="group" aria-label={$t('openingProperties.hinge')}>
         <span class="text-xs text-gray-500">{$t('openingProperties.hinge')}</span>
@@ -691,8 +822,8 @@
         <span class="text-xs text-gray-500">{$t('openingProperties.width')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.width ?? getCatalogItem(selectedFurniture.catalogId)?.width ?? 50)}
-          oninput={onFurnitureWidth} onblur={onFurnitureWidth} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.width)}
+          oninput={e => onFurnitureSize(e, 'width')} onblur={e => onFurnitureSize(e, 'width')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
@@ -700,8 +831,8 @@
         <span class="text-xs text-gray-500">{$t('furnitureProperties.depth')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.depth ?? getCatalogItem(selectedFurniture.catalogId)?.depth ?? 50)}
-          oninput={onFurnitureDepth} onblur={onFurnitureDepth} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.depth)}
+          oninput={e => onFurnitureSize(e, 'depth')} onblur={e => onFurnitureSize(e, 'depth')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
@@ -709,11 +840,27 @@
         <span class="text-xs text-gray-500">{$t('openingProperties.height')} ({unitLabel()})</span>
         <input 
           type="number" 
-          value={displayValue(selectedFurniture.height ?? getCatalogItem(selectedFurniture.catalogId)?.height ?? 50)}
-          oninput={onFurnitureHeight} onblur={onFurnitureHeight} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
+          value={displayValue(furnitureSize.height)}
+          oninput={e => onFurnitureSize(e, 'height')} onblur={e => onFurnitureSize(e, 'height')} min={settings.units === 'imperial' ? 1 / 2.54 : 1} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t('furnitureProperties.elevation')} ({unitLabel()})</span>
+        <input
+          type="number" data-furniture-elevation
+          value={displayValue(furnitureElevation(selectedFurniture))}
+          oninput={onFurnitureElevation} onblur={onFurnitureElevation} min="0" step="any"
+          class="w-full px-2 py-1 border border-gray-200 rounded text-sm"
+        />
+      </label>
+      {#if Math.abs(furnitureSurfaceBelow - furnitureElevation(selectedFurniture)) > 0.01}
+        <button
+          data-furniture-place-on-surface
+          onclick={() => { if (selectedFurniture) updateFurniture(selectedFurniture.id, { elevation: furnitureSurfaceBelow }); }}
+          class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm hover:bg-gray-50 transition-colors"
+        >{furnitureSurfaceBelow > 0 ? $t('furnitureProperties.placeOnObject', { height: displayValue(furnitureSurfaceBelow), unit: unitLabel() }) : $t('furnitureProperties.placeOnFloor')}</button>
+      {/if}
       
       <!-- Material -->
       <label class="block">
@@ -738,7 +885,7 @@
         <span class="text-xs text-gray-500">{$t('furnitureProperties.rotation')}</span>
         <input 
           type="number" 
-          value={selectedFurniture.rotation}
+          value={Math.round(selectedFurniture.rotation * 100) / 100}
           oninput={onFurnitureRotation} onblur={onFurnitureRotation} step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
@@ -984,6 +1131,8 @@
         </label>
       {/if}
     </div>
+  {:else if selectedConstraint}
+    <ConstraintProperties constraint={selectedConstraint} />
   {:else if selectedTextAnnotation}
     <div class="space-y-3">
       <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
@@ -1027,7 +1176,7 @@
   {/if}
 
   <!-- Background Image Controls (always show when bg image exists) -->
-  {#if hasBgImage && floor?.backgroundImage}
+  {#if hasBgImage && floor?.backgroundImage && showBackground}
     <div class="mt-4 pt-3 border-t border-gray-200">
       <h3 class="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
         <span class="w-6 h-6 bg-blue-100 rounded flex items-center justify-center text-xs">🖼️</span>

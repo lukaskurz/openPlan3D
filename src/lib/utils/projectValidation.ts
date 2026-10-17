@@ -3,6 +3,12 @@ import { validateItemDetails, validateRetainedDetailState } from './itemDetails'
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
 
+/** Wall ids a stored constraint mentions (tolerant of malformed input; validation reports that). */
+function constraintWallIds(item: Record<string, any>): string[] {
+  const ids = [item.wallId, item.wallA, item.wallB, item.a?.wallId, item.b?.wallId, item.point?.wallId, item.target?.wallId];
+  return ids.filter((id): id is string => typeof id === 'string');
+}
+
 /** Read untrusted native files without mutating their input or the active editor. */
 export function readProject(value: unknown): Project {
   const fail = (path: string, reason: string): never => { throw new Error(`Invalid project: ${path} ${reason}.`); };
@@ -71,11 +77,12 @@ export function readProject(value: unknown): Project {
     if (state.defaults !== undefined) record(state.defaults, 'interchange.defaults');
     if (state.planNotes !== undefined) text(state.planNotes, 'interchange.planNotes');
   }
-  const floors = list(project!, 'floors', 'document', false);
-  if (floors.length === 0) fail('floors', 'must contain at least one floor');
+  /** Validate one plan's floors in place; element ids only need to be unique per floor. */
+  const validateFloors = (floors: any[], base: string): Set<string> => {
+  if (floors.length === 0) fail(base, 'must contain at least one floor');
   const floorIds = new Set<string>();
   for (const [index, floor] of floors.entries()) {
-    const path = `floors[${index}]`;
+    const path = `${base}[${index}]`;
     record(floor, path); text(floor.id, `${path}.id`, true);
     if (floorIds.has(floor.id)) fail(`${path}.id`, 'duplicates another floor');
     floorIds.add(floor.id);
@@ -114,7 +121,8 @@ export function readProject(value: unknown): Project {
       defaults(opening, kind === 'doors' ? { height: 210, type: 'single', swingDirection: 'left', flipSide: false } : { height: 120, type: 'standard', sillHeight: 90 });
       positive(opening.height, `${path}.height`);
       if (kind === 'doors') {
-        choice(opening.type, ['single', 'double', 'sliding', 'french', 'pocket', 'bifold', 'opening', 'garage'], `${path}.type`);
+        choice(opening.type, ['single', 'double', 'sliding', 'french', 'balcony', 'pocket', 'bifold', 'opening', 'garage'], `${path}.type`);
+        if (opening.glassPanes !== undefined && (!Number.isSafeInteger(opening.glassPanes) || opening.glassPanes < 1 || opening.glassPanes > 8)) fail(`${path}.glassPanes`, 'must be a whole number from 1 to 8');
         choice(opening.swingDirection, ['left', 'right'], `${path}.swingDirection`);
         booleans(opening, ['flipSide'], path);
       } else {
@@ -129,6 +137,7 @@ export function readProject(value: unknown): Project {
       // Mirroring uses negative scale. Do not normalize signs or round dimensions.
       for (const key of ['x', 'y', 'z']) number(item.scale[key], `${path}.scale.${key}`);
       for (const key of ['width', 'depth', 'height']) if (item[key] !== undefined) positive(item[key], `${path}.${key}`);
+      if (item.elevation !== undefined) number(item.elevation, `${path}.elevation`, 0);
       strings(item, ['color', 'material', 'sourceCategory'], path); booleans(item, ['locked'], path);
     });
     elements('stairs', (item, path) => {
@@ -167,14 +176,65 @@ export function readProject(value: unknown): Project {
       if (item.opacity !== undefined) number(item.opacity, `${path}.opacity`, 0, 1);
       booleans(item, ['locked'], path);
     });
+    if (floor.constraints !== undefined) {
+      // Constraints left pointing at deleted walls are dropped (on this copy), not rejected.
+      floor.constraints = list(floor, 'constraints', path).filter((item: any) =>
+        !item || typeof item !== 'object' || constraintWallIds(item).every(id => walls.has(id)));
+      const corner = (value: any, path: string) => { record(value, path); text(value.wallId, `${path}.wallId`, true); choice(value.end, ['start', 'end'], `${path}.end`); };
+      const side = (value: any, path: string) => choice(value, [0, 1, -1] as any, path);
+      elements('constraints', (item, path) => {
+        booleans(item, ['driven'], path);
+        if (item.offset !== undefined) number(item.offset, `${path}.offset`);
+        choice(item.kind, ['length', 'pointDistance', 'pointLine', 'lineDistance', 'angle', 'horizontal', 'vertical', 'parallel', 'perpendicular', 'fix'], `${path}.kind`);
+        if ('value' in item || !['horizontal', 'vertical', 'parallel', 'perpendicular', 'fix'].includes(item.kind)) number(item.value, `${path}.value`);
+        switch (item.kind) {
+          case 'length': text(item.wallId, `${path}.wallId`, true); side(item.side, `${path}.side`); break;
+          case 'horizontal': case 'vertical': text(item.wallId, `${path}.wallId`, true); break;
+          case 'pointDistance': corner(item.a, `${path}.a`); corner(item.b, `${path}.b`); choice(item.axis, ['aligned', 'x', 'y'], `${path}.axis`); break;
+          case 'pointLine': corner(item.point, `${path}.point`); text(item.wallId, `${path}.wallId`, true); side(item.side, `${path}.side`); break;
+          case 'lineDistance': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); side(item.sideA, `${path}.sideA`); side(item.sideB, `${path}.sideB`); break;
+          case 'angle': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); booleans(item, ['flipB'], path); if (typeof item.flipB !== 'boolean') fail(`${path}.flipB`, 'must be a boolean'); break;
+          case 'parallel': case 'perpendicular': text(item.wallA, `${path}.wallA`, true); text(item.wallB, `${path}.wallB`, true); break;
+          case 'fix': {
+            record(item.target, `${path}.target`); text(item.target.wallId, `${path}.target.wallId`, true);
+            if (item.target.end !== undefined) choice(item.target.end, ['start', 'end'], `${path}.target.end`);
+            if (!Array.isArray(item.at) || item.at.length !== (item.target.end === undefined ? 2 : 1)) fail(`${path}.at`, 'must list the fixed points');
+            item.at.forEach((p: any, i: number) => point(p, `${path}.at[${i}]`));
+          }
+        }
+      });
+    }
     if (floor.backgroundImage !== undefined) {
       const bg = record(floor.backgroundImage, `${path}.backgroundImage`), bgPath = `${path}.backgroundImage`;
       text(bg.dataUrl, `${bgPath}.dataUrl`, true); positioned(bg, bgPath); positive(bg.scale, `${bgPath}.scale`);
       defaults(bg, { opacity: 0.4, locked: false }); number(bg.opacity, `${bgPath}.opacity`, 0, 1); booleans(bg, ['locked'], bgPath);
     }
   }
+  return floorIds;
+  };
+  const floors = list(project!, 'floors', 'document', false);
+  const floorIds = validateFloors(floors, 'floors');
   if (project!.activeFloorId !== undefined) text(project!.activeFloorId, 'activeFloorId');
   if (!floorIds.has(project!.activeFloorId)) project!.activeFloorId = floors[0].id;
+  if (project!.alternatives !== undefined) {
+    const alternatives = list(project!, 'alternatives', 'document');
+    if (!alternatives.some(alt => alt?.id !== undefined && alt.id === project!.activeAlternativeId)) fail('activeAlternativeId', 'must refer to an alternative');
+    const seen = new Set<string>();
+    for (const [i, alt] of alternatives.entries()) {
+      const path = `alternatives[${i}]`;
+      record(alt, path); text(alt.id, `${path}.id`, true);
+      if (seen.has(alt.id)) fail(`${path}.id`, 'duplicates another alternative');
+      seen.add(alt.id); text(alt.name, `${path}.name`);
+      if (alt.thumbnail !== undefined && !(typeof alt.thumbnail === 'string' && /^data:image\/(?:png|jpeg|webp);base64,/.test(alt.thumbnail))) delete alt.thumbnail;
+      const date = new Date(alt.updatedAt ?? 0);
+      if (!Number.isFinite(date.getTime())) fail(`${path}.updatedAt`, 'must be a valid date');
+      alt.updatedAt = date;
+      // The active alternative's floors are the project's own floors.
+      if (alt.id === project!.activeAlternativeId) { alt.floors = []; alt.activeFloorId = project!.activeFloorId; continue; }
+      const ids = validateFloors(list(alt, 'floors', path, false), `${path}.floors`);
+      if (typeof alt.activeFloorId !== 'string' || !ids.has(alt.activeFloorId)) alt.activeFloorId = alt.floors[0].id;
+    }
+  } else delete project!.activeAlternativeId;
   if (project!.customEntourage !== undefined) {
     const seen = new Set<string>();
     for (const [i, item] of list(project!, 'customEntourage', 'document').entries()) {

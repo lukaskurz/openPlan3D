@@ -9,6 +9,7 @@ import { visiblePlanFloor, type PlanExportVisibility } from './exportVisibility'
 import { resolveRooms } from './roomDetection';
 import { drawRooms, drawDoorOnWall, drawWindowOnWall, drawFurnitureItem, drawStair, drawColumn, drawAnnotations, drawPersistedMeasurements, drawTextAnnotations, drawEntourageItems } from './canvasRenderer';
 import { worldToScreen, type CanvasState } from './canvasInteraction';
+import { drawFloorDimensions } from './constraintRenderer';
 import { activePrintFloor, printPageLayout, type PrintInk, type PrintOptions } from './printLayout';
 
 const PIXELS_PER_MM = 6;
@@ -76,6 +77,7 @@ export function renderPrintPage(canvas: HTMLCanvasElement, project: Project, opt
   for (const item of floor.stairs ?? []) drawStair(cs, item, false);
   for (const item of floor.columns ?? []) drawColumn(cs, item, false);
   drawAnnotations(cs, floor, null, settings);
+  drawFloorDimensions(cs, floor, settings.units);
   drawPersistedMeasurements(cs, floor, null, settings);
   drawTextAnnotations(cs, floor, null, null);
   ctx.restore();

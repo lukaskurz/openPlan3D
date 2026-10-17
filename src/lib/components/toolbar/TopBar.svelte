@@ -30,6 +30,7 @@
   import { saveState, saveError, lastSavedAt, manualSave, autoSave, initAutoSave } from '$lib/stores/saveStatus';
   import { initVersionHistory, stopVersionHistory, snapshotOnAction } from '$lib/stores/versionHistory';
   import VersionHistoryPanel from './VersionHistoryPanel.svelte';
+  import AlternativesMenu from './AlternativesMenu.svelte';
 
   const openingLifetime = new AbortController();
   onDestroy(() => openingLifetime.abort());
@@ -377,6 +378,8 @@
       title={$t('projectToolbar.rename')}
     >{projectName}</button>
   {/if}
+
+  <AlternativesMenu />
 
   <div class="h-5 w-px bg-white/20 max-xl:hidden"></div>
 

@@ -244,6 +244,32 @@
       "model": "loungeDesignSofa"
     },
     {
+      "id": "sofa_l",
+      "name": "L-Shaped Sofa",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 280,
+        "depth": 180,
+        "height": 80
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
+      "id": "sofa_chaise",
+      "name": "Corner Sofa with Chaise",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 300,
+        "depth": 225,
+        "height": 86
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
       "id": "loveseat",
       "name": "Loveseat",
       "category": "Living Room",
@@ -296,6 +322,32 @@
       "model": "cabinetTelevision"
     },
     {
+      "id": "tv_lowboard",
+      "name": "Wall-Hung TV Lowboard",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 200,
+        "depth": 40,
+        "height": 36
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
+      "id": "ceiling_projector",
+      "name": "Ceiling Projector",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 19.3,
+        "depth": 21.8,
+        "height": 35
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
       "id": "bookshelf",
       "name": "Bookshelf",
       "category": "Living Room",
@@ -307,6 +359,32 @@
       "dimensionStatus": "catalog-defaults-not-product-measurements",
       "webRepresentation": "glb-with-procedural-fallback",
       "model": "bookcaseOpen"
+    },
+    {
+      "id": "slat_divider",
+      "name": "Slat Room Divider",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 71.6,
+        "depth": 8,
+        "height": 245
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
+    },
+    {
+      "id": "shelf_divider",
+      "name": "Shelf Room Divider",
+      "category": "Living Room",
+      "dimensionsCm": {
+        "width": 71.6,
+        "depth": 20,
+        "height": 245
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
     },
     {
       "id": "side_table",
@@ -463,6 +541,19 @@
       "dimensionStatus": "catalog-defaults-not-product-measurements",
       "webRepresentation": "glb-with-procedural-fallback",
       "model": "kitchenStoveElectric"
+    },
+    {
+      "id": "wine_fridge",
+      "name": "Wine Fridge",
+      "category": "Kitchen",
+      "dimensionsCm": {
+        "width": 48,
+        "depth": 56.5,
+        "height": 83.8
+      },
+      "dimensionStatus": "catalog-defaults-not-product-measurements",
+      "webRepresentation": "procedural",
+      "model": null
     },
     {
       "id": "toilet",

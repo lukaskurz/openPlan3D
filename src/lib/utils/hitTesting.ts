@@ -8,6 +8,7 @@ import { roomHoles } from './roomNesting';
 import type { Point, Wall, Door, Window as Win, FurnitureItem, Stair, Column, Floor, Measurement, Annotation, TextAnnotation, EntourageItem } from '$lib/models/types';
 import type { Room } from '$lib/models/types';
 import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
+import { byElevation } from '$lib/utils/furnitureStacking';
 import { getRoomPolygon, roomLabelPosition } from '$lib/utils/roomDetection';
 import { wallPointAt, wallTangentAt } from '$lib/utils/canvasRenderer';
 import type { HandleType } from '$lib/utils/canvasInteraction';
@@ -110,7 +111,7 @@ export function findHandleAt(
 }
 
 export function findFurnitureAt(p: Point, furniture: FurnitureItem[]): FurnitureItem | null {
-  for (const fi of [...furniture].reverse()) {
+  for (const fi of [...byElevation(furniture)].reverse()) {
     const dx = p.x - fi.position.x;
     const dy = p.y - fi.position.y;
     const angle = -(fi.rotation * Math.PI) / 180;

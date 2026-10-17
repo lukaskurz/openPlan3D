@@ -5,7 +5,7 @@ function renderedFloor(floor: Floor) {
   // These fields belong to the 2D canvas. In particular, never walk embedded
   // background images or item photo payloads just to decide whether to rebuild.
   const { backgroundImage, guides, measurements, annotations, textAnnotations,
-    groups, entourage, ...rendered } = floor;
+    groups, entourage, constraints, ...rendered } = floor;
   const withoutDetails = <T extends { details?: unknown }>(items: T[]) =>
     items.map(({ details, ...item }) => item);
   return { ...rendered,

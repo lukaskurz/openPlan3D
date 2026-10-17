@@ -72,6 +72,7 @@
     snapToGrid: true,
     snapToWalls: true,
     gridSize: 25,
+    zoomSpeed: 5,
   });
 
   onDestroy(projectSettings.subscribe((s) => { settings = { ...s }; }));
@@ -293,6 +294,16 @@
                 {/each}
               </div>
             </div>
+            <label class="block">
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-300 block mb-2">{$t('settings.zoomSpeed')}</span>
+              <div class="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                <span>{$t('settings.zoomSpeedSlow')}</span>
+                <input type="range" min="1" max="10" step="1" value={settings.zoomSpeed} data-zoom-speed
+                  oninput={(e) => updateSetting('zoomSpeed', e.currentTarget.valueAsNumber)} class="flex-1 accent-slate-700" />
+                <span>{$t('settings.zoomSpeedFast')}</span>
+              </div>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{$t('settings.zoomSpeedHelp')}</span>
+            </label>
           </div>
         {:else if activeTab === 'ai'}
           <div class="space-y-4">

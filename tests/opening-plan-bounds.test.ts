@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { openingPlanBounds } from '$lib/utils/openingPlanBounds';
 import { drawDoorOnWall, drawWindowOnWall } from '$lib/utils/canvasRenderer';
 import type { Wall, Door, Window as PlanWindow } from '$lib/models/types';
-for (const [kind,types] of [['door',['single','double','french','sliding','pocket','bifold','opening','garage']],['window',['standard','fixed','bay','sliding','casement']]] as const) {
+for (const [kind,types] of [['door',['single','double','french','balcony','sliding','pocket','bifold','opening','garage']],['window',['standard','fixed','bay','sliding','casement']]] as const) {
   it.each(types)(`${kind} %s bounds enclose renderer paths at small zoom and on curved walls`, type => {
     for (const zoom of [.03,1,3]) for (const width of [2,180]) for (const curved of [false,true]) for (const flip of [false,true]) {
       const wall:Wall={id:'wall',start:{x:100,y:200},end:{x:600,y:700},thickness:10,height:250,color:'#000',...(curved?{curvePoint:{x:50,y:800}}:{})};

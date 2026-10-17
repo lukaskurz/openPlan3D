@@ -23,6 +23,7 @@ import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { resolveRooms, getRoomPolygon, roomLabelPosition } from '$lib/utils/roomDetection';
 import { drawStair, drawFurnitureItem, drawColumn, drawDoorOnWall, drawWindowOnWall, drawEntourageItems, drawTextAnnotations, drawAnnotations, drawPersistedMeasurements } from '$lib/utils/canvasRenderer';
 import type { CanvasState } from '$lib/utils/canvasInteraction';
+import { dimensionsSvg, drawFloorDimensions } from '$lib/utils/constraintRenderer';
 import { projectSettings, formatArea, formatLength } from '$lib/stores/settings';
 import { currentPlanExportVisibility } from '$lib/stores/planVisibility';
 import { visibleActiveFloor, type PlanExportVisibility } from './exportVisibility';
@@ -36,6 +37,8 @@ const DOOR_STROKES = {
   panel: 'stroke="#444" stroke-width="2"',
   track: 'stroke="#999" stroke-width="2" stroke-dasharray="4,3"',
   threshold: 'stroke="#999" stroke-width="1" stroke-dasharray="5,4"',
+  // Glass leaves carry a light glass line inside the leaf stroke, as on the canvas.
+  glass: 'stroke="#8ecae6" stroke-width="1"',
 };
 
 function download(blob: Blob, filename: string) {
@@ -316,6 +319,7 @@ export async function exportAsPNG(canvas: HTMLCanvasElement | null, project?: Pr
       drawPersistedMeasurements({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, get(projectSettings));
       ctx.restore();
       drawAnnotations({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, get(projectSettings));
+      drawFloorDimensions({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, get(projectSettings).units);
       drawTextAnnotations({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, null);
 
       // Title
@@ -595,6 +599,9 @@ export function exportAsSVG(project: Project, language: Locale = 'en', visibilit
     }
   }
 
+  // Parametric dimensions
+  paths += dimensionsSvg(floor, get(projectSettings).units, x => x - minX + pad, y => y - minY + pad, escapeXml);
+
   // Text annotations
   if (floor.textAnnotations) {
     for (const ta of floor.textAnnotations) {
@@ -813,6 +820,7 @@ function renderPDF(project: Project, preparedImages: ReadonlyMap<string,HTMLImag
   drawPersistedMeasurements({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, get(projectSettings));
   ctx.restore();
   drawAnnotations({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, get(projectSettings));
+  drawFloorDimensions({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, get(projectSettings).units);
   drawTextAnnotations({ ctx, width: pad * 2, height: pad * 2, zoom: 1, camX: minX, camY: minY }, floor, null, null);
 
   // Embed rendered plan into PDF

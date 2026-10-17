@@ -51,6 +51,96 @@ const drawSofa: DrawFn = (ctx, w, d, color) => {
   ctx.stroke();
 };
 
+/**
+ * Proportions shared by the 2D symbol and 3D model; the return runs along the right (+x) side.
+ * Purely proportional, because the 2D drawers receive zoomed sizes rather than centimetres.
+ */
+export function lSofaLayout(w: number, d: number) {
+  const seat = Math.min(d * 0.5, w * 0.35);
+  return { seat, back: seat * 0.22, arm: seat * 0.2 };
+}
+
+const drawSofaL: DrawFn = (ctx, w, d, color) => {
+  const { seat: S, back: B, arm: A } = lSofaLayout(w, d);
+  const x0 = -w / 2, y0 = -d / 2, x1 = w / 2, y1 = d / 2;
+  // Backs along the top and the right side
+  roundRect(ctx, x0, y0, w, B, 3); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - B, y0 + B, B, d - B, 3); ctx.fill(); ctx.stroke();
+  // Seats
+  ctx.fillStyle = color + '40';
+  roundRect(ctx, x0 + A, y0 + B, w - A - B, S - B, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - S, y0 + S, S - B, d - S - A, 2); ctx.fill(); ctx.stroke();
+  // Arms at both open ends
+  ctx.fillStyle = color + '80';
+  roundRect(ctx, x0, y0 + B, A, S - B, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - S, y1 - A, S - B, A, 2); ctx.fill(); ctx.stroke();
+  // Cushion lines on the long run and the return
+  ctx.beginPath();
+  const run = w - A - S, cushions = Math.max(1, Math.round(run / Math.max(S, 1)));
+  for (let i = 1; i <= cushions; i++) {
+    const x = x0 + A + run * i / cushions;
+    ctx.moveTo(x, y0 + B + 2); ctx.lineTo(x, y0 + S - 2);
+  }
+  const ret = d - S - A, returnCushions = Math.max(1, Math.round(ret / Math.max(S, 1)));
+  for (let i = 0; i < returnCushions; i++) {
+    const y = y0 + S + ret * i / returnCushions;
+    ctx.moveTo(x1 - S + 2, y); ctx.lineTo(x1 - B - 2, y);
+  }
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+};
+
+/**
+ * Big corner sofa with a chaise on the left (−x): a full-length arm along the chaise,
+ * a shorter main section on the right, loose back cushions and channel-quilted seats.
+ * Proportions follow a 300 × 225 cm (main section 135 cm deep) model.
+ */
+export function chaiseSofaLayout(w: number, d: number) {
+  const main = d * 0.6;
+  return {
+    arm: w / 12,                 // 25 cm
+    chaise: w * 0.5,             // arm + 125 cm seat
+    main,                        // 135 cm
+    backFrame: main * 0.16,      // ~22 cm
+    backCushion: main * 0.22,    // ~30 cm
+    channel: w / 12,             // quilting channel width
+  };
+}
+
+const drawChaiseSofa: DrawFn = (ctx, w, d, color) => {
+  const L = chaiseSofaLayout(w, d);
+  const x0 = -w / 2, y0 = -d / 2, x1 = w / 2, y1 = d / 2;
+  const seatY = y0 + L.backFrame;
+  // Frame: back and arms
+  ctx.fillStyle = color + '80';
+  roundRect(ctx, x0 + L.arm, y0, w - 2 * L.arm, L.backFrame, 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x0, y0, L.arm, d, L.arm / 2); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x1 - L.arm, y0, L.arm, L.main, L.arm / 2); ctx.fill(); ctx.stroke();
+  // Seats: chaise and main section
+  ctx.fillStyle = color + '40';
+  roundRect(ctx, x0 + L.arm, seatY, L.chaise - L.arm, y1 - seatY, 3); ctx.fill(); ctx.stroke();
+  roundRect(ctx, x0 + L.chaise, seatY, x1 - L.arm - (x0 + L.chaise), y0 + L.main - seatY, 3); ctx.fill(); ctx.stroke();
+  // Loose back cushions
+  ctx.fillStyle = color + '70';
+  const cushions = 4, span = w - 2 * L.arm;
+  for (let i = 0; i < cushions; i++) {
+    roundRect(ctx, x0 + L.arm + span * i / cushions + 1, seatY, span / cushions - 2, L.backCushion, L.backCushion / 3);
+    ctx.fill(); ctx.stroke();
+  }
+  // Quilting channels
+  ctx.beginPath();
+  const channels = (from: number, to: number, top: number, bottom: number) => {
+    const n = Math.max(1, Math.round((to - from) / L.channel));
+    for (let i = 1; i < n; i++) { const x = from + (to - from) * i / n; ctx.moveTo(x, top); ctx.lineTo(x, bottom); }
+  };
+  channels(x0 + L.arm, x0 + L.chaise, seatY + L.backCushion, y1 - 2);
+  channels(x0 + L.chaise, x1 - L.arm, seatY + L.backCushion, y0 + L.main - 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 0.5;
+  ctx.stroke();
+};
+
 const drawLoveseat: DrawFn = (ctx, w, d, color) => {
   // Same as sofa but 2 cushions
   const armW = w * 0.14;
@@ -285,6 +375,37 @@ const drawFridge: DrawFn = (ctx, w, d) => {
   ctx.stroke();
 };
 
+/** Wine fridge from above: cabinet, glass door along the front (+y) with a grip strip, and a bottle mark. */
+const drawWineFridge: DrawFn = (ctx, w, d, color) => {
+  const door = d * 0.08;
+  roundRect(ctx, -w/2, -d/2, w, d - door, 2);
+  ctx.fill(); ctx.stroke();
+  // Glass door
+  ctx.fillStyle = color + '90';
+  roundRect(ctx, -w/2, d/2 - door, w, door, 1);
+  ctx.fill(); ctx.stroke();
+  // Grip strip on the opening side
+  ctx.beginPath();
+  ctx.moveTo(-w/2 + w * 0.06, d/2 - door * 0.5);
+  ctx.lineTo(-w/2 + w * 0.3, d/2 - door * 0.5);
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // A bottle lying front to back
+  const r = Math.min(w, d) * 0.1, top = -d * 0.3, bottom = d * 0.3 - door;
+  ctx.beginPath();
+  ctx.moveTo(-r * 0.35, top);
+  ctx.lineTo(-r * 0.35, top + (bottom - top) * 0.3);
+  ctx.quadraticCurveTo(-r, top + (bottom - top) * 0.38, -r, top + (bottom - top) * 0.5);
+  ctx.lineTo(-r, bottom);
+  ctx.lineTo(r, bottom);
+  ctx.lineTo(r, top + (bottom - top) * 0.5);
+  ctx.quadraticCurveTo(r, top + (bottom - top) * 0.38, r * 0.35, top + (bottom - top) * 0.3);
+  ctx.lineTo(r * 0.35, top);
+  ctx.closePath();
+  ctx.lineWidth = 1;
+  ctx.stroke();
+};
+
 const drawCounter: DrawFn = (ctx, w, d) => {
   roundRect(ctx, -w/2, -d/2, w, d, 1);
   ctx.fill(); ctx.stroke();
@@ -353,6 +474,68 @@ const drawBookshelf: DrawFn = (ctx, w, d) => {
   }
 };
 
+/** WoodUpp Embrace divider modules: 71.6 cm wide, 2.8 × 8 cm oak profiles on 8 cm steel feet and rosettes. */
+export const DIVIDER_MODULE_WIDTH = 71.6;
+export const DIVIDER_SLAT = 2.8;
+export const DIVIDER_FOOT_RADIUS = 4;
+/** Rod heights above the bottom of the 230 cm profiles, from the makers' measured drawings. */
+export const SLAT_DIVIDER_RODS = [27.5, 97.5, 132.5, 202.5];
+export const SHELF_DIVIDER_RODS = [27.5, 62.5, 97.5, 132.5, 167.5, 202.5];
+
+/**
+ * Where the profiles of a divider `w` cm wide go (x from -w/2), one module per 71.6 cm. Each module's end
+ * profiles carry the posts, sitting on the feet; the rest are spread evenly between them (7.8 cm gaps
+ * for a 7-slat module). The 230 cm profiles are centred between floor and ceiling.
+ */
+export function dividerLayout(w: number, h: number, profilesPerModule: number) {
+  const modules = Math.max(1, Math.round(w / DIVIDER_MODULE_WIDTH));
+  const moduleWidth = w / modules;
+  const posts: [number, number][] = [], profiles: number[] = [];
+  for (let m = 0; m < modules; m++) {
+    const a = -w / 2 + m * moduleWidth + DIVIDER_FOOT_RADIUS, b = a + moduleWidth - 2 * DIVIDER_FOOT_RADIUS;
+    posts.push([a, b]);
+    for (let i = 0; i < profilesPerModule; i++) profiles.push(a + (b - a) * i / (profilesPerModule - 1));
+  }
+  const block = Math.min(230, h - 6);
+  const gap = (h - block) / 2;
+  return { modules, moduleWidth, posts, profiles, block, gap, rodHeight: (rod: number) => gap + rod * block / 230 };
+}
+
+/** Slat divider from above: the slat ends in a row, with a steel foot under each module's end slats. */
+const drawSlatDivider: DrawFn = (ctx, w, d, color) => {
+  const s = d / 8, L = dividerLayout(w / s, 245, 7);
+  const stroke = ctx.strokeStyle;
+  ctx.strokeStyle = '#9ca3af';
+  ctx.beginPath();
+  for (const [a, b] of L.posts) { ctx.moveTo(a * s, 0); ctx.lineTo(b * s, 0); }
+  ctx.stroke();
+  ctx.strokeStyle = stroke;
+  ctx.fillStyle = color;
+  for (const x of L.profiles) {
+    ctx.fillRect((x - DIVIDER_SLAT / 2) * s, -d/2, DIVIDER_SLAT * s, d);
+    ctx.strokeRect((x - DIVIDER_SLAT / 2) * s, -d/2, DIVIDER_SLAT * s, d);
+  }
+  ctx.fillStyle = '#9ca3af';
+  for (const post of L.posts) for (const x of post) {
+    ctx.beginPath(); ctx.arc(x * s, 0, DIVIDER_FOOT_RADIUS * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+};
+
+/** Shelf divider from above: the shelves (front is +y), with the two posts along the back. */
+const drawShelfDivider: DrawFn = (ctx, w, d, color) => {
+  const s = d / 20, L = dividerLayout(w / s, 245, 2), postY = -d/2 + DIVIDER_FOOT_RADIUS * s;
+  ctx.fillStyle = color + '90';
+  for (let m = 0; m < L.modules; m++) {
+    const cx = (-w / s / 2 + (m + 0.5) * L.moduleWidth) * s;
+    roundRect(ctx, cx - 32.9 * s, -d/2, 65.8 * s, d, 1);
+    ctx.fill(); ctx.stroke();
+  }
+  ctx.fillStyle = '#9ca3af';
+  for (const post of L.posts) for (const x of post) {
+    ctx.beginPath(); ctx.arc(x * s, postY, DIVIDER_FOOT_RADIUS * s, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+};
+
 const drawSideTable: DrawFn = (ctx, w, d) => {
   roundRect(ctx, -w/2, -d/2, w, d, 3);
   ctx.fill(); ctx.stroke();
@@ -366,6 +549,59 @@ const drawTvStand: DrawFn = (ctx, w, d) => {
   ctx.beginPath();
   ctx.moveTo(-w*0.4, -d*0.35);
   ctx.lineTo(w*0.4, -d*0.35);
+  ctx.stroke();
+};
+
+/** Wall-hung lowboard from above: the top board, with the flap seams marked along the front (+y). */
+const drawTvLowboard: DrawFn = (ctx, w, d, color) => {
+  // Light finishes vanish on wood floors in their own colour, so outline them darker (selection keeps its colour)
+  if (String(ctx.strokeStyle).toLowerCase() === color.toLowerCase() && /^#[0-9a-f]{6}$/i.test(color)) {
+    const dark = (i: number) => Math.round(parseInt(color.slice(i, i + 2), 16) * 0.55).toString(16).padStart(2, '0');
+    ctx.strokeStyle = '#' + dark(1) + dark(3) + dark(5);
+  }
+  ctx.fillStyle = color + 'c0';
+  roundRect(ctx, -w/2, -d/2, w, d, 1);
+  ctx.fill(); ctx.stroke();
+  const front = d/2 - Math.min(d * 0.12, 4);
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(-w/2, front);
+  ctx.lineTo(w/2, front);
+  const flaps = w >= 120 ? 4 : 2;
+  for (let i = 1; i < flaps; i++) {
+    ctx.moveTo(-w/2 + w * i / flaps, front);
+    ctx.lineTo(-w/2 + w * i / flaps, d/2);
+  }
+  ctx.stroke();
+};
+
+/** Ceiling projector from above, drawn dashed as ceiling-mounted items are, with the lens at the front (+y). */
+const drawCeilingProjector: DrawFn = (ctx, w, d, color) => {
+  ctx.fillStyle = color + 'c0';
+  ctx.fillRect(-w/2, -d/2, w, d);
+  // Dashes drawn as segments, since the SVG and DXF exports replay plain paths only
+  const dash = Math.max(w, d) * 0.12, gap = dash * 0.6;
+  const corners: [number, number][] = [[-w/2, -d/2], [w/2, -d/2], [w/2, d/2], [-w/2, d/2]];
+  ctx.beginPath();
+  corners.forEach(([x0, y0], i) => {
+    const [x1, y1] = corners[(i + 1) % 4], len = Math.hypot(x1 - x0, y1 - y0);
+    for (let t = 0; t < len; t += dash + gap) {
+      const a = t / len, b = Math.min(t + dash, len) / len;
+      ctx.moveTo(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a);
+      ctx.lineTo(x0 + (x1 - x0) * b, y0 + (y1 - y0) * b);
+    }
+  });
+  ctx.stroke();
+  // The lens on the front edge and a short wedge for the beam direction
+  const r = Math.min(w, d) * 0.17, lx = -w * 0.1;
+  ctx.beginPath();
+  ctx.arc(lx, d/2 - r * 1.3, r, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(lx - r * 0.8, d/2 - r * 0.4);
+  ctx.lineTo(lx - r * 1.8, d/2);
+  ctx.moveTo(lx + r * 0.8, d/2 - r * 0.4);
+  ctx.lineTo(lx + r * 1.8, d/2);
   ctx.stroke();
 };
 
@@ -915,11 +1151,17 @@ const iconDrawers: Record<string, DrawFn> = {
     ctx.stroke();
   },
   sofa: drawSofa,
+  sofa_l: drawSofaL,
+  sofa_chaise: drawChaiseSofa,
   loveseat: drawLoveseat,
   chair: drawChair,
   coffee_table: drawTable,
   tv_stand: drawTvStand,
+  tv_lowboard: drawTvLowboard,
+  ceiling_projector: drawCeilingProjector,
   bookshelf: drawBookshelf,
+  slat_divider: drawSlatDivider,
+  shelf_divider: drawShelfDivider,
   side_table: drawSideTable,
   bed_queen: drawBed,
   bed_twin: drawBed,
@@ -928,6 +1170,7 @@ const iconDrawers: Record<string, DrawFn> = {
   wardrobe: drawWardrobe,
   stove: drawStove,
   fridge: drawFridge,
+  wine_fridge: drawWineFridge,
   sink_k: drawSink,
   counter: drawCounter,
   dishwasher: drawDishwasher,

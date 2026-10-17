@@ -1,5 +1,7 @@
 import { get } from 'svelte/store';
-import { activeFloor, currentProject, beginUndoGroup, endUndoGroup } from '$lib/stores/project';
+import { activeFloor, currentProject, beginUndoGroup, endUndoGroup, showPlanNotice } from '$lib/stores/project';
+import { endpointKey, planConstraintSolve } from './constraints';
+import type { Wall } from '$lib/models/types';
 import { openingAlignmentPosition } from './openingAlignment';
 import { openingPlanBounds } from './openingPlanBounds';
 import { wallPointAt } from './canvasRenderer';
@@ -88,6 +90,7 @@ export function alignElements(ids: Set<string>, op: AlignmentOp, context?: Canva
   const updates = planAlignment(floor,ids,op,p.customEntourage,measurementContext,get(projectSettings).units);
   if (!updates.size) return;
   beginUndoGroup();
+  const saved: Wall[] = floor.walls.map(w => structuredClone(w));
   for (const item of alignmentItems(floor,ids)) {
     const pos = updates.get(item.id);
     if (!pos) continue;
@@ -101,6 +104,24 @@ export function alignElements(ids: Set<string>, op: AlignmentOp, context?: Canva
       const dx=pos.x-(item.x1+item.x2)/2, dy=pos.y-(item.y1+item.y2)/2;
       item.x1+=dx; item.x2+=dx; item.y1+=dy; item.y2+=dy;
     } else { item.x=pos.x; item.y=pos.y; }
+  }
+  if (floor.constraints?.length) {
+    // Aligned walls stay where they were put; the constraints settle around them, or the alignment is undone.
+    const before = new Map(saved.map(w => [w.id, w]));
+    const pinned = new Map<string, Point>();
+    for (const wall of floor.walls) {
+      const old = before.get(wall.id);
+      if (old && (old.start.x !== wall.start.x || old.start.y !== wall.start.y)) {
+        pinned.set(endpointKey(wall.id, 'start'), wall.start); pinned.set(endpointKey(wall.id, 'end'), wall.end);
+      }
+    }
+    try {
+      const solved = planConstraintSolve(floor.walls, floor.constraints, { pinned });
+      for (const wall of floor.walls) if (solved.has(wall.id)) Object.assign(wall, solved.get(wall.id));
+    } catch (error) {
+      floor.walls.forEach((wall, i) => Object.assign(wall, saved[i]));
+      showPlanNotice(error instanceof Error ? error.message : 'The constraints can’t accept this alignment.', 'error');
+    }
   }
   p.updatedAt = new Date();
   currentProject.set({...p});

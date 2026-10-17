@@ -3,6 +3,7 @@ import type { Locale } from '$lib/i18n';
 import { furnitureName, customModelName } from '$lib/i18n/furnitureNames';
 import { getEntourageDef } from './entourageCatalog';
 import { canvasSymbolDxf } from './canvasSymbolDxf';
+import { floorDimensionShapes, dxfArcAngles } from './constraintRenderer';
 import { drawStair } from './canvasRenderer';
 import { columnPlanCorners } from './columnPlanGeometry';
 import { hasPlanExportContent } from './planExportContent';
@@ -132,6 +133,19 @@ export function exportDXF(project: Project, language: Locale = 'en', visibility:
     d.drawText(g.center.x,-g.center.y+4,11,0,cadText(note.label || formatLength(g.length,get(projectSettings).units)),'center','bottom');
   }
 
+  for (const { shape } of floorDimensionShapes(floor, get(projectSettings).units)) {
+    if (shape.kind === 'linear') {
+      for (const [p, q] of shape.ext) d.drawLine(p.x, -p.y, q.x, -q.y);
+      d.drawLine(shape.from.x, -shape.from.y, shape.to.x, -shape.to.y);
+      d.drawText((shape.from.x + shape.to.x) / 2, -(shape.from.y + shape.to.y) / 2 + 4, 11, 0, shape.text, 'center', 'bottom');
+    } else if (shape.kind === 'arc') {
+      const { start, end } = dxfArcAngles(shape);
+      d.drawArc(shape.center.x, -shape.center.y, shape.radius, start, end);
+      const m = -(start + end) / 2 * Math.PI / 180;
+      d.drawText(shape.center.x + Math.cos(m) * (shape.radius + 14), -(shape.center.y + Math.sin(m) * (shape.radius + 14)), 11, 0, shape.text, 'center', 'middle');
+    }
+  }
+
   d.addLayer('MEASUREMENTS', 1, 'DASHED');
   d.addLayer('MEASUREMENT_LABELS', 1, 'CONTINUOUS');
   for (const m of floor.measurements ?? []) {
@@ -149,7 +163,7 @@ export function exportDXF(project: Project, language: Locale = 'en', visibility:
     const frame = planOpening(source, original.position, original.width);
     if (!frame) continue;
     for (const part of doorSymbol(frame.wall, { ...original, position: frame.position, width: frame.width })) {
-      if (part.role === 'hinge') continue; // screen-only marker
+      if (part.role === 'hinge' || part.role === 'glass') continue; // screen-only markers
       d.setActiveLayer(part.role === 'track' || part.role === 'threshold' ? 'DOORS_HIDDEN' : 'DOORS');
       if (part.role === 'swing') {
         // Negating y negates the angles and reverses the sweep; DXF arcs always run counter-clockwise.

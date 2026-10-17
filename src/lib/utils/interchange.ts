@@ -60,7 +60,7 @@ function transformAt(x: number, z: number, angle: number, y: number, mirrorX = f
 }
 
 const DOOR_STYLES: Record<Exclude<Door['type'], 'opening'>, 'single' | 'double' | 'sliding'> = {
-  single: 'single', double: 'double', sliding: 'sliding', french: 'double', pocket: 'sliding', bifold: 'single', garage: 'double',
+  single: 'single', double: 'double', sliding: 'sliding', french: 'double', balcony: 'single', pocket: 'sliding', bifold: 'single', garage: 'double',
 };
 
 /** roomplanImport's mapSectionLabel, reversed: the keys are itemDetails' ROOM_TYPES. */

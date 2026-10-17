@@ -1,5 +1,5 @@
 import { writable, get } from 'svelte/store';
-import { currentProject, loadProject } from './project';
+import { currentProject, loadProject, previewActive } from './project';
 import { localStore, storageErrorMessage, ProjectConflictError, PROJECTS_STORAGE_KEY, LIBRARY_CHANGE_KEY } from '$lib/services/datastore';
 import { saveSnapshot } from '$lib/stores/versionHistory';
 import type { Project } from '$lib/models/types';
@@ -35,6 +35,10 @@ export function initAutoSave() {
     }
     markDirty();
   });
+  // Proposed changes are saved once they are applied, never while only previewed.
+  const unsubscribePreview = previewActive.subscribe(active => {
+    if (!active && get(saveState) === 'unsaved') markDirty();
+  });
   let disposed = false;
   const checkCurrent = async () => {
     const project = get(currentProject);
@@ -62,6 +66,7 @@ export function initAutoSave() {
   const stop = () => {
     disposed = true;
     unsubscribe();
+    unsubscribePreview();
     clearSaveTimer();
     if (typeof window !== 'undefined') {
       window.removeEventListener('storage', onStorage);
@@ -85,24 +90,28 @@ export function markDirty() {
   clearSaveTimer();
   if (get(saveConflict)) return;
   debounceTimer = setTimeout(() => {
-    void autoSave();
+    if (!get(previewActive)) void autoSave();
   }, 1000);
 }
 
-function captureThumbnail(projectId: string) {
+/** A small JPEG of the editor's plan canvas, or undefined when there is none. */
+export function capturePlanThumbnail(size = 300, quality = 0.6): string | undefined {
   try {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    if (!canvas) return;
-    const size = 300;
+    if (!canvas || !canvas.width || !canvas.height) return;
     const tmp = document.createElement('canvas');
     tmp.width = size;
     tmp.height = Math.round(size * (canvas.height / canvas.width));
     const ctx = tmp.getContext('2d');
     if (!ctx) return;
     ctx.drawImage(canvas, 0, 0, tmp.width, tmp.height);
-    const dataUrl = tmp.toDataURL('image/jpeg', 0.6);
-    localStore.saveThumbnail(projectId, dataUrl);
-  } catch {}
+    return tmp.toDataURL('image/jpeg', quality);
+  } catch { return; }
+}
+
+function captureThumbnail(projectId: string) {
+  const dataUrl = capturePlanThumbnail();
+  if (dataUrl) localStore.saveThumbnail(projectId, dataUrl);
 }
 
 function scheduleThumbnail(project: Project) {
@@ -119,7 +128,7 @@ function scheduleThumbnail(project: Project) {
 async function persist(manual: boolean): Promise<boolean> {
   clearSaveTimer();
   const p = get(currentProject);
-  if (!p) return false;
+  if (!p || (!manual && get(previewActive))) return false;
   if (lastProjectId !== p.id) {
     lastSavedAt.set(null);
     saveError.set(null);

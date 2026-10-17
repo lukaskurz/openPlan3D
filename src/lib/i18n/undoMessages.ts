@@ -52,12 +52,22 @@ const keys: Extract<TranslationKey, `undoAction.${string}`>[] = [
   'undoAction.unlock',
   'undoAction.renameProject',
   'undoAction.describeProject',
+  'undoAction.addDimension',
+  'undoAction.addConstraint',
+  'undoAction.changeDimension',
+  'undoAction.editConstraint',
+  'undoAction.createAlternative',
+  'undoAction.switchAlternative',
+  'undoAction.renameAlternative',
+  'undoAction.deleteAlternative',
+  'undoAction.deleteSelection',
+  'undoAction.clearMeasurements',
 ];
 const messages = new Map(keys.map(key => [translate('en', key), key]));
 
 const doorTypes = {
   single: 'openingCatalog.single', double: 'openingCatalog.double',
-  sliding: 'openingCatalog.sliding', french: 'openingCatalog.french',
+  sliding: 'openingCatalog.sliding', french: 'openingCatalog.french', balcony: 'openingCatalog.balcony',
   pocket: 'openingCatalog.pocket', bifold: 'openingCatalog.bifold',
   opening: 'openingCatalog.doorway', garage: 'openingCatalog.garage',
 } satisfies Record<Door['type'], TranslationKey>;

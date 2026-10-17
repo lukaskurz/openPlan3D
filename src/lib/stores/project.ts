@@ -5,15 +5,20 @@ import { wallPathProfile } from '$lib/utils/wallProfiles';
 import { duplicatePlanSelection, pastePlanSelection, shiftedOpeningPosition } from '$lib/utils/duplicateSelection';
 import { writable, derived, get, type Writable } from 'svelte/store';
 import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState } from '$lib/models/types';
-import { planWallResize, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
+import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
 import { nextFloorLevel, floorElevations, validFloorElevation, orderedFloors, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
+import { getCatalogItem } from '$lib/utils/furnitureCatalog';
 import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight } from '$lib/models/types';
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
 import { readProject } from '$lib/utils/projectValidation';
 import { mergeRoomPlanFloors, selectableContentIds, type AddedContent } from '$lib/utils/roomplanMerge';
 import { doorJoin } from '$lib/utils/scanAlignment';
+import { branchAlternative, deleteAlternative, renameAlternative, switchAlternative } from '$lib/utils/planAlternatives';
+import type { Constraint, CornerRef, NewConstraint } from '$lib/models/types';
+import { buildSketch, checkNewConstraint, endpointKey, isActiveConstraint, isDimension, measureConstraint, planConstraintSolve, planConstraintValue } from '$lib/utils/constraints';
+import { constraintMentionsWall, constraintsWithoutWalls, reverseWallConstraints, splitWallConstraints } from '$lib/utils/constraints/cascade';
 
 
 function uid(): string {
@@ -190,6 +195,7 @@ function snapshot(description?: string, coalesceKey?: string, state?: string) {
 function reviveDates(p: Project): Project {
   if (p.createdAt && !(p.createdAt instanceof Date)) p.createdAt = new Date(p.createdAt as any);
   if (p.updatedAt && !(p.updatedAt instanceof Date)) p.updatedAt = new Date(p.updatedAt as any);
+  for (const alt of p.alternatives ?? []) if (!(alt.updatedAt instanceof Date)) alt.updatedAt = new Date(alt.updatedAt as any);
   return p;
 }
 
@@ -231,7 +237,8 @@ function pruneFloorContext(project: Project) {
 /** Restore a history state with the selection recorded for it; entries without one keep the current selection, pruned. */
 function restoreHistoryProject(state: string, selection?: SelectionSnapshot) {
   const project = reviveDates(JSON.parse(state));
-  if (get(currentProject)?.activeFloorId !== project.activeFloorId) clearFloorContext();
+  const current = get(currentProject);
+  if (current?.activeFloorId !== project.activeFloorId || current?.activeAlternativeId !== project.activeAlternativeId) clearFloorContext();
   currentProject.set(project);
   if (selection) {
     selectedElementId.set(selection.id);
@@ -240,7 +247,49 @@ function restoreHistoryProject(state: string, selection?: SelectionSnapshot) {
   pruneFloorContext(project);
 }
 
+// ── Previews ──────────────────────────────────────────────────────
+// The Assistant draws its proposed changes on the real plan. Everything from
+// beginPreview() on becomes a single undo step when committed; discarding (or
+// pressing undo) puts the plan back exactly as it was.
+
+/** True while proposed changes are shown on the plan but not yet applied. */
+export const previewActive = writable(false);
+let previewBaseline: string | null = null;
+
+export function beginPreview() {
+  if (previewBaseline !== null) return;
+  const p = get(currentProject);
+  if (!p) return;
+  previewBaseline = JSON.stringify(p);
+  beginUndoGroup();
+  previewActive.set(true);
+}
+
+export function commitPreview(description: string) {
+  if (previewBaseline === null) return;
+  previewBaseline = null;
+  undoGroupDepth = 1;
+  endUndoGroup(description);
+  previewActive.set(false);
+}
+
+export function discardPreview() {
+  if (previewBaseline === null) return;
+  const state = previewBaseline;
+  previewBaseline = null;
+  restoreHistoryProject(state);
+  undoGroupDepth = 1;
+  endUndoGroup();
+  previewActive.set(false);
+}
+
+/** Run an edit on the active floor as one undoable change. */
+export function editActiveFloor(fn: (floor: Floor) => void, description?: string) {
+  mutate(fn, description);
+}
+
 export function undo() {
+  if (previewBaseline !== null) { discardPreview(); return; }
   resetCoalescing();
   const prev = undoStack.pop();
   if (!prev) return;
@@ -251,6 +300,7 @@ export function undo() {
 }
 
 export function redo() {
+  if (previewBaseline !== null) return;
   resetCoalescing();
   const next = redoStack.pop();
   if (!next) return;
@@ -262,6 +312,7 @@ export function redo() {
 
 /** Jump to a specific undo history step by index (0 = oldest) */
 export function jumpToUndoStep(targetIndex: number) {
+  if (previewBaseline !== null) discardPreview();
   const total = undoStack.length; // total past states; current state is at index `total`
   if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex > total) return;
   if (targetIndex === total) return; // already at current state
@@ -316,6 +367,7 @@ export function removeWall(id: string) {
     f.walls = f.walls.filter((w) => w.id !== id);
     f.doors = f.doors.filter((d) => d.wallId !== id);
     f.windows = f.windows.filter((w) => w.wallId !== id);
+    if (f.constraints) f.constraints = constraintsWithoutWalls(f.constraints, new Set([id]));
   }, 'Deleted wall');
 }
 
@@ -325,7 +377,8 @@ export function addDoor(wallId: string, position: number, doorType: Door['type']
     single: { width: 90, height: 210 },
     double: { width: 150, height: 210 },
     sliding: { width: 180, height: 210 },
-    french: { width: 150, height: 210 },
+    french: { width: 150, height: 220 },
+    balcony: { width: 90, height: 220 },
     pocket: { width: 90, height: 210 },
     bifold: { width: 180, height: 210 },
     opening: { width: 100, height: 210 },
@@ -360,7 +413,8 @@ export function addWindow(wallId: string, position: number, windowType: import('
 export function addFurniture(catalogId: string, position: Point): string {
   const id = uid();
   mutate((f) => {
-    f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 } });
+    const elevation = getCatalogItem(catalogId)?.elevation;
+    f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...(elevation ? { elevation } : {}) });
   }, `Added ${catalogId}`);
   if (typeof window !== 'undefined') {
     import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-furniture', position.x + 20, position.y + 20)).catch(() => {});
@@ -389,7 +443,7 @@ export function moveFurniture(id: string, position: Point) {
 }
 
 /** Apply one drag frame atomically. The canvas owns the enclosing undo group. */
-export function transformFurnitureDuringDrag(id: string, updates: Partial<Pick<FurnitureItem, 'position' | 'rotation' | 'scale'>>) {
+export function transformFurnitureDuringDrag(id: string, updates: Partial<Pick<FurnitureItem, 'position' | 'rotation' | 'scale' | 'width' | 'depth'>>) {
   const p = get(currentProject);
   const floor = p?.floors.find(f => f.id === p.activeFloorId);
   const item = floor?.furniture.find(fi => fi.id === id);
@@ -675,6 +729,10 @@ export function removeElement(id: string) {
     if (f.measurements) f.measurements = f.measurements.filter(item => item.id !== id);
     if (f.annotations) f.annotations = f.annotations.filter(item => item.id !== id);
     if (f.entourage) f.entourage = f.entourage.filter((e) => e.id !== id);
+    if (f.constraints) {
+      f.constraints = f.constraints.filter(c => c.id !== id);
+      if (isWall) f.constraints = constraintsWithoutWalls(f.constraints, new Set([id]));
+    }
     if (f.groups) f.groups = f.groups.map(group => ({ ...group, elementIds: group.elementIds.filter(itemId => !removedIds.has(itemId)) })).filter(group => group.elementIds.length >= 2);
   }, 'Deleted element');
 }
@@ -712,21 +770,215 @@ export function moveWallGeometryDuringDrag(id: string, geometry: Pick<Wall, 'sta
   currentProject.set({ ...project });
 }
 
+/** Apply a solved drag step to several walls at once; the canvas owns the Undo group. */
+export function moveWallsDuringDrag(changes: Map<string, Partial<Wall>>) {
+  const project = get(currentProject);
+  const floor = project?.floors.find(f => f.id === project.activeFloorId);
+  if (!project || !floor || !changes.size) return;
+  for (const wall of floor.walls) {
+    const updates = changes.get(wall.id);
+    if (updates) Object.assign(wall, updates);
+  }
+  project.updatedAt = new Date();
+  currentProject.set({ ...project });
+}
+
 /** Resize joined corners atomically. Openings keep their normalized wall positions. */
 export function resizeWallLength(id: string, length: number, fixed: WallEndpoint = 'start'): string | null {
   const floor = get(activeFloor);
   if (!floor) return 'Select a floor first.';
+  // A wall with a length dimension changes through that dimension.
+  const dimension = floor.constraints?.find(c => c.kind === 'length' && c.wallId === id && !c.driven);
+  if (dimension?.kind === 'length') {
+    const wall = floor.walls.find(w => w.id === id);
+    if (!wall || !Number.isFinite(length)) return 'Enter a length.';
+    const value = dimension.side === 0 ? length : dimension.value + length - Math.hypot(wall.end.x - wall.start.x, wall.end.y - wall.start.y);
+    return updateConstraintValue(dimension.id, value, fixed);
+  }
   let changes: Map<string, Partial<Wall>>;
-  try { changes = planWallResize(floor.walls, id, length, fixed); }
+  try { changes = settleWallChanges(floor, planWallResize(floor.walls, id, length, fixed)); }
   catch (error) { return error instanceof Error ? error.message : 'The wall could not be resized.'; }
   if (!changes.size) return null;
+  applyWallChanges(changes, 'Resized connected wall', `wall-length:${id}:${fixed}`);
+  return null;
+}
+
+function applyWallChanges(changes: Map<string, Partial<Wall>>, description: string, coalesceKey?: string) {
   mutate(f => {
     for (const wall of f.walls) {
       const updates = changes.get(wall.id);
       if (updates) Object.assign(wall, updates);
     }
-  }, 'Resized connected wall', `wall-length:${id}:${fixed}`);
+  }, description, coalesceKey);
+}
+
+const withWallChanges = (walls: Wall[], changes: Map<string, Partial<Wall>>) => walls.map(w => changes.has(w.id) ? { ...w, ...changes.get(w.id) } : w);
+
+/**
+ * Re-solve the floor's constraints around planned wall changes: the endpoints the edit
+ * placed stay put and everything else moves as little as possible. Throws with a
+ * user-facing message when the constraints can't accept the edit. Unconstrained floors
+ * pass through unchanged.
+ */
+function settleWallChanges(floor: Floor, changes: Map<string, Partial<Wall>>, walls: Wall[] = floor.walls): Map<string, Partial<Wall>> {
+  if (!floor.constraints?.some(isActiveConstraint) || !changes.size) return changes;
+  const pinned = new Map<string, Point>();
+  for (const [id, updates] of changes) {
+    if (updates.start) pinned.set(endpointKey(id, 'start'), updates.start);
+    if (updates.end) pinned.set(endpointKey(id, 'end'), updates.end);
+  }
+  const solved = planConstraintSolve(withWallChanges(walls, changes), floor.constraints, { pinned });
+  const merged = new Map(changes);
+  for (const [id, updates] of solved) merged.set(id, { ...merged.get(id), ...updates });
+  return merged;
+}
+
+export function setWallAngle(id: string, angle: number, fixed: WallEndpoint = 'start'): string | null {
+  const floor = get(activeFloor);
+  if (!floor) return 'Select a floor first.';
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = settleWallChanges(floor, planWallAngle(floor.walls, id, angle, fixed)); }
+  catch (error) { return error instanceof Error ? error.message : 'The wall could not be rotated.'; }
+  if (changes.size) applyWallChanges(changes, 'Rotated wall', `wall-angle:${id}:${fixed}`);
   return null;
+}
+
+/** Returns the number of walls moved, or an error message. */
+export function straightenWalls(tolerance?: number): number | string {
+  const floor = get(activeFloor);
+  if (!floor) return 'Select a floor first.';
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = settleWallChanges(floor, planStraightenWalls(floor.walls, tolerance)); }
+  catch (error) { return error instanceof Error ? error.message : 'The walls could not be straightened.'; }
+  if (changes.size) applyWallChanges(changes, 'Straightened walls');
+  return changes.size;
+}
+
+// --- Constraints ---
+
+/** A short message about the plan (e.g. a dimension that became driven), shown by the canvas. */
+export const planNotice = writable<{ text: string; tone: 'info' | 'error'; at: number } | null>(null);
+export function showPlanNotice(text: string, tone: 'info' | 'error' = 'info') {
+  planNotice.set({ text, tone, at: Date.now() });
+}
+
+export type { NewConstraint } from '$lib/models/types';
+export type AddConstraintResult = { id: string; driven: boolean } | { error: string };
+
+/**
+ * Add a dimension or geometric constraint. A dimension that would over-constrain the
+ * plan is added as a driven (reference) dimension instead; an over-constraining
+ * geometric constraint is refused.
+ */
+export function addConstraint(input: NewConstraint): AddConstraintResult {
+  const floor = get(activeFloor);
+  if (!floor) return { error: 'Select a floor first.' };
+  const id = uid();
+  let constraint = { ...input, id } as Constraint;
+  const check = checkNewConstraint(floor.walls, floor.constraints ?? [], constraint);
+  if (check.status === 'unsatisfiable') return { error: check.message };
+  let changes = check.status === 'ok' ? check.changes : new Map<string, Partial<Wall>>();
+  if (check.status === 'overConstrained') {
+    if (!isDimension(constraint)) return { error: 'This would over-constrain the plan: the walls are already held this way.' };
+    constraint = { ...constraint, driven: true };
+    changes = new Map();
+  }
+  mutate(f => {
+    for (const wall of f.walls) { const updates = changes.get(wall.id); if (updates) Object.assign(wall, updates); }
+    (f.constraints ??= []).push(constraint);
+  }, isDimension(constraint) ? 'Added dimension' : 'Added constraint');
+  return { id, driven: !!constraint.driven };
+}
+
+/** Change a dimension's value and move the plan to match. Returns an error message, or null. */
+export function updateConstraintValue(id: string, value: number, fixedEnd: WallEndpoint = 'start'): string | null {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint || !isDimension(constraint)) return 'Select a dimension to change.';
+  if (Object.is(constraint.value, value)) return null;
+  let changes: Map<string, Partial<Wall>>;
+  try { changes = planConstraintValue(floor.walls, floor.constraints!, id, value, fixedEnd); }
+  catch (error) { return error instanceof Error ? error.message : 'The dimension could not be changed.'; }
+  mutate(f => {
+    for (const wall of f.walls) { const updates = changes.get(wall.id); if (updates) Object.assign(wall, updates); }
+    const c = f.constraints?.find(c => c.id === id);
+    if (c && isDimension(c)) c.value = value;
+  }, 'Changed dimension', `constraint-value:${id}`);
+  return null;
+}
+
+/** Current measured value of a dimension on the active floor (cm or degrees). */
+export function measuredConstraintValue(c: Constraint, walls = get(activeFloor)?.walls ?? []): number | null {
+  return measureConstraint(c, buildSketch(walls));
+}
+
+/** Switch a dimension between driving (moves the plan) and driven (reports only). */
+export function setConstraintDriven(id: string, driven: boolean): string | null {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint || !isDimension(constraint)) return 'Select a dimension.';
+  if (!!constraint.driven === driven) return null;
+  const value = measuredConstraintValue(constraint, floor.walls) ?? constraint.value;
+  if (!driven) {
+    const others = floor.constraints!.filter(c => c.id !== id);
+    const check = checkNewConstraint(floor.walls, others, { ...constraint, driven: false, value } as Constraint);
+    if (check.status === 'overConstrained') return 'This dimension would over-constrain the plan. Remove another constraint first.';
+    if (check.status === 'unsatisfiable') return check.message;
+  }
+  mutate(f => {
+    const c = f.constraints?.find(c => c.id === id);
+    if (c && isDimension(c)) { c.value = value; if (driven) c.driven = true; else delete c.driven; }
+  }, 'Edited constraint');
+  return null;
+}
+
+/** Edit how a dimension measures (faces, axis) or where its line sits, without moving walls. */
+export function updateConstraint(id: string, updates: Partial<{ side: 0 | 1 | -1; sideA: 0 | 1 | -1; sideB: 0 | 1 | -1; axis: 'aligned' | 'x' | 'y'; offset: number }>) {
+  const floor = get(activeFloor);
+  const constraint = floor?.constraints?.find(c => c.id === id);
+  if (!floor || !constraint) return;
+  const next = { ...constraint, ...updates } as Constraint;
+  if (isDimension(next) && Object.keys(updates).some(key => key !== 'offset')) {
+    const value = measuredConstraintValue(next, floor.walls);
+    if (value !== null) next.value = value;
+  }
+  mutate(f => {
+    const index = f.constraints?.findIndex(c => c.id === id) ?? -1;
+    if (index >= 0) f.constraints![index] = next;
+  }, 'Edited constraint', coalesceKeyFor('constraint', id, updates));
+}
+
+export function removeConstraint(id: string) {
+  removeElement(id);
+}
+
+export type GeometricConstraintKind = 'horizontal' | 'vertical' | 'parallel' | 'perpendicular' | 'fix';
+/** Constrain tool waiting for walls (or a corner, for Fix) to be clicked; null when inactive. */
+export const constraintPickMode = writable<GeometricConstraintKind | null>(null);
+selectedTool.subscribe(() => constraintPickMode.set(null));
+
+/** Add a geometric constraint to walls (and a corner, for Fix), holding them as they are now. */
+export function addGeometricConstraint(kind: GeometricConstraintKind, wallIds: string[], corner?: CornerRef): AddConstraintResult {
+  const floor = get(activeFloor);
+  if (!floor) return { error: 'Select a floor first.' };
+  const walls = wallIds.map(id => floor.walls.find(w => w.id === id));
+  if (walls.some(w => !w)) return { error: 'Pick walls on this floor.' };
+  if (walls.some(w => w!.curvePoint)) return { error: 'Curved walls can’t be constrained.' };
+  if (kind === 'fix') {
+    if (corner) {
+      const wall = floor.walls.find(w => w.id === corner.wallId);
+      return wall ? addConstraint({ kind, target: corner, at: [{ ...wall[corner.end] }] }) : { error: 'Pick a corner on this floor.' };
+    }
+    return addConstraint({ kind, target: { wallId: walls[0]!.id }, at: [{ ...walls[0]!.start }, { ...walls[0]!.end }] });
+  }
+  if (kind === 'horizontal' || kind === 'vertical') return addConstraint({ kind, wallId: walls[0]!.id });
+  if (walls.length < 2 || walls[0]!.id === walls[1]!.id) return { error: 'Pick two different walls.' };
+  return addConstraint({ kind, wallA: walls[0]!.id, wallB: walls[1]!.id });
+}
+
+/** The geometric constraint of `kind` on exactly this wall, if any (H, V or a whole-wall fix). */
+export function wallConstraint(floor: Floor | null | undefined, wallId: string, kind: 'horizontal' | 'vertical' | 'fix'): Constraint | undefined {
+  return floor?.constraints?.find(c => c.kind === kind && (c.kind === 'fix' ? !('end' in c.target) && c.target.wallId === wallId : 'wallId' in c && c.wallId === wallId));
 }
 
 function unchangedFields(current: object, updates: object): boolean {
@@ -750,10 +1002,26 @@ export function updateWall(id: string, updates: Partial<Wall>) {
   if (['start', 'end'].some(key => key in updates && !finitePoint(updates[key as 'start' | 'end']))) return;
   if (updates.curvePoint !== undefined && !finitePoint(updates.curvePoint)) return;
   if (['height', 'startHeight', 'endHeight'].some(key => key in updates && !validWallHeight(updates[key as keyof Wall]))) return;
+  // Constraints: curving a constrained wall releases it; geometry and thickness edits re-solve.
+  const floor = get(activeFloor)!;
+  let settled = new Map<string, Partial<Wall>>(), releaseConstraints = false;
+  if (floor.constraints?.length) {
+    if (updates.curvePoint && !wall.curvePoint && floor.constraints.some(c => constraintMentionsWall(c, id))) releaseConstraints = true;
+    else if (['start', 'end', 'thickness', 'curvePoint'].some(key => key in updates)) {
+      try { settled = settleWallChanges(floor, new Map([[id, updates]])); }
+      catch (error) { showPlanNotice(error instanceof Error ? error.message : 'The constraints can’t accept this change.', 'error'); return; }
+    }
+  }
   mutate((f) => {
+    if (releaseConstraints) {
+      f.constraints = f.constraints?.filter(c => !constraintMentionsWall(c, id));
+      showPlanNotice('Curved walls can’t be constrained, so this wall’s constraints were removed.');
+    }
+    for (const other of f.walls) if (other.id !== id && settled.has(other.id)) Object.assign(other, settled.get(other.id));
     const w = f.walls.find((w) => w.id === id);
     if (w) {
       Object.assign(w, updates);
+      if (settled.has(id)) Object.assign(w, settled.get(id));
       if (updates.height !== undefined && updates.startHeight === undefined && updates.endHeight === undefined) {
         w.startHeight = updates.height;
         w.endHeight = updates.height;
@@ -796,6 +1064,7 @@ export function reverseWall(id: string) {
         win.position = 1 - win.position;
       }
     }
+    if (f.constraints) f.constraints = reverseWallConstraints(f.constraints, id);
   }, 'Reversed wall direction');
 }
 
@@ -958,6 +1227,54 @@ export function setActiveFloor(floorId: string) {
   }
 }
 
+// ── Plan alternatives ────────────────────────────────────────────────
+
+/** Default names for new alternatives, e.g. "Option B"; the UI passes its language's version. */
+export type AlternativeNamer = (letter: string) => string;
+const defaultAlternativeName: AlternativeNamer = letter => `Option ${letter}`;
+
+/** Keep the current plan and continue working in a copy of it. */
+export function createAlternative(options: { name?: string; thumbnail?: string; nameFor?: AlternativeNamer } = {}) {
+  const p = get(currentProject);
+  if (!p) return;
+  snapshot('Created alternative');
+  branchAlternative(p, { id: uid(), originalId: uid(), now: new Date(), thumbnail: options.thumbnail,
+    nameFor: options.nameFor ?? defaultAlternativeName, name: options.name });
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+/** Make another alternative the plan being edited. The thumbnail pictures the one being left. */
+export function switchPlanAlternative(id: string, thumbnail?: string) {
+  const p = get(currentProject);
+  if (!p?.alternatives?.some(alt => alt.id === id) || p.activeAlternativeId === id) return;
+  snapshot('Switched alternative');
+  clearFloorContext();
+  switchAlternative(p, id, new Date(), thumbnail);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+export function renamePlanAlternative(id: string, name: string) {
+  const p = get(currentProject);
+  const alt = p?.alternatives?.find(alt => alt.id === id);
+  if (!p || !alt || !name.trim() || alt.name === name.trim()) return;
+  snapshot('Renamed alternative');
+  renameAlternative(p, id, name);
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
+export function deletePlanAlternative(id: string) {
+  const p = get(currentProject);
+  if (!p?.alternatives || p.alternatives.length < 2 || !p.alternatives.some(alt => alt.id === id)) return;
+  snapshot('Deleted alternative');
+  if (id === p.activeAlternativeId) clearFloorContext();
+  deleteAlternative(p, id, new Date());
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
 /** An omitted elevation restores the legacy level-based default. */
 export function updateFloorElevation(floorId: string, elevation?: number) {
   const p = get(currentProject);
@@ -1005,6 +1322,8 @@ export function updateProjectDescription(description: string) {
 }
 
 export function loadProject(project: Project) {
+  previewBaseline = null;
+  previewActive.set(false);
   undoStack.length = 0;
   redoStack.length = 0;
   undoGroupDepth = 0;
@@ -1239,6 +1558,11 @@ export function splitWall(id: string, t: number): string | null {
       group.elementIds = group.elementIds.flatMap(member => member === id ? [id, newId] : [member]);
     }
   }
+  if (floor.constraints?.length) {
+    const split = splitWallConstraints(floor.constraints, id, newId, midPt, uid);
+    floor.constraints = split.constraints;
+    if (split.dropped) showPlanNotice(`Removed ${split.dropped} face dimension${split.dropped === 1 ? '' : 's'} on the split wall.`);
+  }
   w.end = { ...midPt };
   if (geometry.first.curvePoint) w.curvePoint = geometry.first.curvePoint;
   w.startHeight = startH;
@@ -1392,8 +1716,8 @@ export function moveTextAnnotation(id: string, position: { x: number; y: number 
 
 // Layer visibility store (used by LayersPanel, FloorPlanCanvas and the plan exports)
 /** `floorBelow` is the dimmed reference underlay of the storey beneath the active one; `roomLabels` shows room names and areas. */
-export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean; roomLabels: boolean }>({
-  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true,
+export const layerVisibility = writable<{ walls: boolean; doors: boolean; windows: boolean; furniture: boolean; stairs: boolean; columns: boolean; guides: boolean; measurements: boolean; annotations: boolean; textAnnotations: boolean; entourage: boolean; floorBelow: boolean; roomLabels: boolean; constraints: boolean }>({
+  walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true, constraints: true,
 });
 
 // --- Lock ---

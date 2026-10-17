@@ -1,5 +1,6 @@
 <script lang="ts">
   import { t, locale, type TranslationKey } from '$lib/i18n';
+  import Icon from '$lib/components/chrome/Icon.svelte';
   import { furnitureName } from '$lib/i18n/furnitureNames';
   import { catalogCategoryLabels } from '$lib/i18n/catalogCategories';
   import { aiRenderLabels } from '$lib/i18n/aiRenderLabels';
@@ -20,7 +21,7 @@
   import { createRoomSlabGeometry } from '$lib/utils/roomSlabGeometry';
   import { roomHoles } from '$lib/utils/roomNesting';
   import { createSlopedBoxGeometry, mapWallUVs } from '$lib/utils/slopedWallGeometry';
-  import { buildWallSegments, roomCeilingHeight, wallProfileSpans, wallPathProfile, pathOpening, doorPanelPose } from '$lib/utils/wallProfiles';
+  import { buildWallSegments, roomCeilingHeight, wallProfileSpans, wallPathProfile, pathOpening } from '$lib/utils/wallProfiles';
   import { assembleFloorStack } from '$lib/utils/floorStack';
   import { setFloorCameraPose } from '$lib/utils/floorCamera';
   import { frameScene } from '$lib/utils/frameScene';
@@ -29,6 +30,7 @@
   import { sceneSignature } from '$lib/utils/sceneSignature';
   import { framingContext, shouldFrameScene, type FramingContext } from '$lib/utils/sceneFraming';
   import { WalkthroughMotion } from '$lib/utils/walkthroughMotion';
+  import { resolveWalk, walkBarriers, type WalkBarrier } from '$lib/utils/walkCollision';
   import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
   import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
   import { getCatalogItem, furnitureCatalog, furnitureCategories } from '$lib/utils/furnitureCatalog';
@@ -36,6 +38,7 @@
   import { createWallHighlight } from '$lib/utils/wallHighlight';
   import { applyWallXray } from '$lib/utils/wallXray';
   import { disposeModel } from '$lib/utils/furnitureModelResources';
+  import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { ownColorCanvasTexture, refreshBackgroundTexture } from '$lib/utils/viewerTextures';
   import { createFurnitureModelWithGLB, createPlacedFurnitureModel } from '$lib/utils/furnitureModelLoader';
   import { addFurniture } from '$lib/stores/project';
@@ -96,6 +99,9 @@
   let walkthroughMode = $state(false);
   let walkthroughMouseUnavailable = $state(false);
   const walkthroughMotion = new WalkthroughMotion();
+  let walkthroughBarriers: WalkBarrier[] = [];
+  const collideWalk = (from: { x: number; z: number }, to: { x: number; z: number }) =>
+    resolveWalk(from, to, walkthroughBarriers);
   let moveSpeed = $state(800);
   let sprintSpeed = $state(1600);
   let eyeHeight = $state(160); // cm
@@ -876,9 +882,19 @@
       selectedElementId.set(hitWallId);
     });
 
+    const lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
     // Hover highlight in edit mode
     let hoveredMesh: THREE.Mesh | null = null;
     renderer.domElement.addEventListener('mousemove', (e) => {
+      // Without pointer lock, dragging looks around the way locked mouse moves do.
+      if (walkthroughMode && !pointerControls.isLocked && (e.buttons & 1)) {
+        lookEuler.setFromQuaternion(camera.quaternion, 'YXZ');
+        lookEuler.y -= e.movementX * 0.002 * pointerControls.pointerSpeed;
+        lookEuler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, lookEuler.x - e.movementY * 0.002 * pointerControls.pointerSpeed));
+        camera.quaternion.setFromEuler(lookEuler);
+        markSceneDirty();
+        return;
+      }
       // Furniture placement ghost preview
       if (editMode && furniturePlacementMode && selectedCatalogId) {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -1006,9 +1022,16 @@
     }
   }
 
+  // Frame each project once, as soon as it has geometry. Later rebuilds (edits,
+  // switching plan versions or floors) keep the viewer's current perspective.
+  let framedProjectId: string | null | undefined;
   function autoCenterCamera() {
-    frameScene(camera, new THREE.Box3().setFromObject(wallGroup), controls.target);
+    const projectId = get(currentProject)?.id ?? null;
+    if (framedProjectId === projectId) return;
+    const bounds = new THREE.Box3().setFromObject(wallGroup);
+    frameScene(camera, bounds, controls.target);
     controls.update();
+    if (!bounds.isEmpty()) framedProjectId = projectId;
   }
 
   /** Generate a wall texture. Wall UVs already count 200 cm tiles (mapWallUVs), so it sets no repeat. */
@@ -1352,7 +1375,7 @@
       const angle = Math.atan2(right.y - left.y, right.x - left.x);
       const wt = Math.max(wall.thickness, WALL_THICKNESS);
 
-      const frameMat = new THREE.MeshStandardMaterial({ color: 0x6b4423, roughness: 0.6 });
+      const frameMat = new THREE.MeshStandardMaterial({ color: doorUsesWhiteFrame(door.type) ? 0xf2f2ef : 0x6b4423, roughness: 0.6 });
       const doorHeight = opening.top;
       const jamb = 5; // jamb thickness
 
@@ -1379,34 +1402,14 @@
           wallGroup.add(secMesh);
         }
       } else {
-        // Door panel — honor the saved hinge and opening side, slightly ajar (15°)
-        const panelMat = new THREE.MeshStandardMaterial({ color: 0x8B6914, roughness: 0.5 });
-        const panelGeo = new THREE.BoxGeometry(door.width - 2, doorHeight - 4, 4);
-        // Shift geometry so pivot is at left edge
-        panelGeo.translate(door.width / 2 - 1, 0, 0);
-        const panelMesh = new THREE.Mesh(panelGeo, panelMat);
-        const pose = doorPanelPose({ ...wall, start: left, end: right, curvePoint: undefined }, { ...door, position: 0.5 });
-        panelMesh.position.set(pose.x, doorHeight / 2 - 2, pose.z);
-        panelMesh.rotation.y = -pose.yaw;
-        panelMesh.castShadow = true;
-        panelMesh.userData.xray = true;
-        wallGroup.add(panelMesh);
-
-        // Door handle (small sphere)
-        const handleMat = new THREE.MeshStandardMaterial({ color: 0xc0c0c0, metalness: 0.8, roughness: 0.2 });
-        const handleGeo = new THREE.SphereGeometry(3, 8, 8);
-        const handleMesh = new THREE.Mesh(handleGeo, handleMat);
-        // Place on the door panel's right side at handle height
-        const handleLocalX = door.width - 12;
-        const handleCos = Math.cos(pose.yaw);
-        const handleSin = Math.sin(pose.yaw);
-        handleMesh.position.set(
-          panelMesh.position.x + handleLocalX * handleCos,
-          Math.min(100, doorHeight * 0.5),
-          panelMesh.position.z + handleLocalX * handleSin
-        );
-        handleMesh.userData.xray = true;
-        wallGroup.add(handleMesh);
+        // Leaves by type: wood, glass (balcony/French), sliding, pocket and bifold
+        const model = createDoorModel(door, door.width, doorHeight, wt);
+        if (model) {
+          model.position.set(px, 0, py);
+          model.rotation.y = -angle;
+          model.traverse(child => { child.userData.xray = true; });
+          wallGroup.add(model);
+        }
       }
     }
 
@@ -1772,6 +1775,7 @@
     if (shouldFrameScene(framedContext, context)) autoCenterCamera();
     framedContext = context;
     wallHighlight.apply(wallMeshMap, selectedWallId3D);
+    if (walkthroughMode) walkthroughBarriers = walkBarriers(currentFloor);
     if (walkingPosition && walkingRotation) {
       camera.position.copy(walkingPosition);
       camera.position.y = activeFloorElevation + eyeHeight;
@@ -1820,6 +1824,42 @@
     markSceneDirty();
   }
 
+  /** The 3D strip's modes: one of them is always on. */
+  let viewerMode = $derived(walkthroughMode ? 'walk' : cameraPlacementMode || (cameraPreviewOpen && cameraPlaced) ? 'camera' : furniturePlacementMode ? 'furniture' : editMode ? 'edit' : 'orbit');
+  let moreOpen = $state(false);
+
+  function orbitMode() {
+    if (walkthroughMode) exitWalkthroughMode();
+    cameraPlacementMode = false;
+    if (furniturePlacementMode) { furniturePlacementMode = false; removeGhostPreview(); selectedCatalogId = null; furniturePickerOpen = false; }
+    if (editMode) { editMode = false; selectedElementId.set(null); }
+  }
+  function walkMode() {
+    if (walkthroughMode) return;
+    orbitMode();
+    toggleWalkthroughMode();
+  }
+  function cameraMode() {
+    if (cameraPlacementMode) { cameraPlacementMode = false; return; }
+    cameraPlacementMode = true;
+    cameraPlaced = false;
+    editMode = true;
+    if (walkthroughMode) exitWalkthroughMode();
+    furniturePlacementMode = false;
+  }
+  function editModeToggle() {
+    editMode = !editMode;
+    if (editMode && walkthroughMode) exitWalkthroughMode();
+    if (!editMode) selectedElementId.set(null);
+  }
+  function furnitureMode() {
+    if (walkthroughMode) exitWalkthroughMode();
+    editMode = true;
+    furniturePlacementMode = !furniturePlacementMode;
+    if (!furniturePlacementMode) { removeGhostPreview(); selectedCatalogId = null; furniturePickerOpen = false; }
+    else furniturePickerOpen = true;
+  }
+
   function toggleWalkthroughMode() {
     if (walkthroughMode) {
       exitWalkthroughMode();
@@ -1836,6 +1876,7 @@
     removeGhostPreview();
     walkthroughMode = true;
     walkthroughMotion.reset();
+    walkthroughBarriers = currentFloor ? walkBarriers(currentFloor) : [];
     walkthroughMouseUnavailable = false;
     controls.enabled = false;
 
@@ -1898,7 +1939,7 @@
     if (walkthroughMode) {
       lastOrbitFrame = undefined;
       const moving = walkthroughMotion.active;
-      walkthroughMotion.advance(timestamp, camera, { moveSpeed, sprintSpeed, eyeHeight, floorElevation: activeFloorElevation });
+      walkthroughMotion.advance(timestamp, camera, { moveSpeed, sprintSpeed, eyeHeight, floorElevation: activeFloorElevation, collide: collideWalk });
       if (sceneDirty || moving) {
         sceneDirty = false;
         renderer.render(scene, camera);
@@ -2033,143 +2074,74 @@
       <p role="alert" class="max-w-md rounded-lg bg-black/80 px-4 py-3 text-center text-sm text-white">{$t('viewerNav.webglUnavailable')}</p>
     </div>
   {:else}<!-- Every control below needs the renderer. -->
-  <div class="absolute bottom-16 left-4 z-10 max-w-xs">
-    {#if renderExportMessage}<p role="status" class="mb-2 rounded bg-black/80 p-2 text-xs text-white">{renderExportLabels[renderExportMessage] ? $t(renderExportLabels[renderExportMessage]) : renderExportMessage}</p>{/if}
-    <button class="rounded bg-black/70 px-3 py-2 text-sm text-white hover:bg-black/80" onclick={exportBlenderScene}
-      title={$t('viewerExport.help')}>{$t('viewerExport.button')}</button>
-  </div>
+  {#if renderExportMessage}
+    <p role="status" class="absolute bottom-[84px] right-4 z-10 max-w-xs op-float px-3 py-2 text-xs">{renderExportLabels[renderExportMessage] ? $t(renderExportLabels[renderExportMessage]) : renderExportMessage}</p>
+  {/if}
   {#if showAllFloors && currentFloor}
-    <div class="absolute bottom-4 right-4 z-10 rounded bg-black/70 px-3 py-2 text-xs text-white pointer-events-none">
+    <div class="absolute bottom-6 left-1/2 -translate-x-1/2 z-10 op-pill pointer-events-none">
       {$t('viewerExport.elevation', { name: currentFloor.name, value: activeFloorElevation })}
     </div>
   {/if}
-  <!-- 3D Toolbar Row -->
-  <div class="absolute top-4 right-4 z-50 flex gap-1.5">
-    <!-- Multi-Floor Stacking Toggle -->
-    <button
-      onclick={() => { showAllFloors = !showAllFloors; rebuildScene(); }}
-      class="p-2 rounded-lg transition-colors {showAllFloors ? 'bg-purple-600 text-white ring-2 ring-purple-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-      title={showAllFloors ? $t('viewerNav.activeFloor') : $t('viewerNav.allFloors')}
-      aria-label={showAllFloors ? $t('viewerNav.activeFloor') : $t('viewerNav.allFloors')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="4" y="14" width="16" height="4" rx="1"/>
-        <rect x="4" y="8" width="16" height="4" rx="1" opacity="0.6"/>
-        <rect x="4" y="2" width="16" height="4" rx="1" opacity="0.3"/>
-      </svg>
+  <!-- 3D modes, where the plan tools sit in 2D -->
+  <div class="absolute top-4 left-1/2 -translate-x-1/2 z-50 op-float op-cluster max-w-[calc(100vw-2rem)] max-[1150px]:top-[80px]" role="toolbar" aria-label={$t('viewerNav.region')} data-viewer-modes>
+    <button class="op-btn {viewerMode === 'orbit' ? 'is-active' : ''}" aria-pressed={viewerMode === 'orbit'} onclick={orbitMode} title={$t('viewer3d.orbit')}>
+      <Icon name="orbit" />{#if viewerMode === 'orbit'}<span class="max-md:hidden">{$t('viewer3d.orbit')}</span>{/if}
     </button>
+    <button class="op-btn {viewerMode === 'walk' ? 'is-active' : ''}" aria-pressed={viewerMode === 'walk'} onclick={walkMode}
+      title={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')} aria-label={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')}>
+      <Icon name="walk" />{#if viewerMode === 'walk'}<span class="max-md:hidden">{$t('viewer3d.walk')}</span>{/if}
+    </button>
+    <button class="op-btn {viewerMode === 'camera' ? 'is-active' : ''}" aria-pressed={viewerMode === 'camera'} onclick={cameraMode}
+      title={cameraPlacementMode ? $t('viewerNav.cameraCancel') : $t('viewerNav.cameraHelp')} aria-label={$t('viewerNav.camera')}>
+      <Icon name="camera" />{#if viewerMode === 'camera'}<span class="max-md:hidden">{$t('viewerNav.camera')}</span>{/if}
+    </button>
+    <button class="op-btn {viewerMode === 'edit' ? 'is-active' : ''}" aria-pressed={viewerMode === 'edit'} onclick={editModeToggle}
+      title={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.editHelp')} aria-label={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.edit')}>
+      <Icon name="select" />{#if viewerMode === 'edit'}<span class="max-md:hidden">{$t('viewerNav.edit')}</span>{/if}
+    </button>
+    <button class="op-btn {viewerMode === 'furniture' ? 'is-active' : ''}" aria-pressed={viewerMode === 'furniture'} onclick={furnitureMode}
+      title={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')} aria-label={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')}>
+      <Icon name="sofa" />{#if viewerMode === 'furniture'}<span class="max-md:hidden">{$t('chrome.tool.furniture')}</span>{/if}
+    </button>
+  </div>
 
-    <!-- Top-Down View Button -->
-    <button
-      onclick={viewTopDown}
-      class="p-2 rounded-lg bg-black/70 text-white hover:bg-black/80 transition-colors"
-      title={$t('viewerNav.top')}
-      aria-label={$t('viewerNav.top')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="10"/>
-        <line x1="12" y1="2" x2="12" y2="6"/>
-        <line x1="12" y1="18" x2="12" y2="22"/>
-        <line x1="2" y1="12" x2="6" y2="12"/>
-        <line x1="18" y1="12" x2="22" y2="12"/>
-      </svg>
+  <!-- 3D settings, bottom right -->
+  <div class="absolute bottom-4 right-4 z-50 op-float op-cluster" data-viewer-settings>
+    <button class="op-action {lightingPanelOpen ? 'is-active' : ''}" aria-expanded={lightingPanelOpen} onclick={() => { lightingPanelOpen = !lightingPanelOpen; moreOpen = false; }} title={$t('viewerLighting.title')}>
+      <Icon name="sun" /><span>{$t('viewer3d.light')}</span>
     </button>
-
-    <!-- Wall Transparency Toggle -->
-    <button
-      onclick={toggleWallTransparency}
-      class="p-2 rounded-lg transition-colors {wallsTransparent ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-      title={wallsTransparent ? $t('viewerNav.solid') : $t('viewerNav.transparent')}
-      aria-label={wallsTransparent ? $t('viewerNav.solid') : $t('viewerNav.transparent')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="3" width="18" height="18" rx="2" opacity={wallsTransparent ? 0.3 : 1}/>
-        <line x1="3" y1="12" x2="21" y2="12"/>
-        <line x1="12" y1="3" x2="12" y2="21"/>
-      </svg>
+    <button class="op-action {wallsTransparent ? 'is-active' : ''}" aria-pressed={wallsTransparent} onclick={toggleWallTransparency} title={wallsTransparent ? $t('viewerNav.solid') : $t('viewerNav.transparent')}>
+      <Icon name="cube" /><span>{wallsTransparent ? $t('viewer3d.wallsSeeThrough') : $t('viewer3d.wallsSolid')}</span>
     </button>
-
-    <!-- Edit Mode Toggle -->
-    <button
-      onclick={() => { editMode = !editMode; if (editMode && walkthroughMode) { exitWalkthroughMode(); } if (!editMode) { selectedElementId.set(null); } }}
-      class="p-2 rounded-lg transition-colors {editMode ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-      title={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.editHelp')}
-      aria-label={editMode ? $t('viewerNav.exitEdit') : $t('viewerNav.edit')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
-      </svg>
+    <button class="op-action {showAllFloors ? 'is-active' : ''}" aria-pressed={showAllFloors} onclick={() => { showAllFloors = !showAllFloors; rebuildScene(); }} title={showAllFloors ? $t('viewerNav.activeFloor') : $t('viewerNav.allFloors')}>
+      <Icon name="layers" /><span>{showAllFloors ? $t('viewer3d.allFloors') : $t('viewer3d.thisFloor')}</span>
     </button>
-
-    <!-- Interior Camera Button -->
-    <button
-      onclick={() => {
-        if (cameraPlacementMode) {
-          cameraPlacementMode = false;
-        } else {
-          cameraPlacementMode = true;
-          cameraPlaced = false;
-          editMode = true;
-          if (walkthroughMode) exitWalkthroughMode();
-          furniturePlacementMode = false;
-        }
-      }}
-      class="p-2 rounded-lg transition-colors {cameraPlacementMode ? 'bg-blue-600 text-white ring-2 ring-blue-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-      title={cameraPlacementMode ? $t('viewerNav.cameraCancel') : $t('viewerNav.cameraHelp')}
-      aria-label={$t('viewerNav.camera')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M23 7l-7 5 7 5V7z"/>
-        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>
-      </svg>
+    <button class="op-action" onclick={viewTopDown} title={$t('viewerNav.top')}>
+      <Icon name="fit" /><span>{$t('viewer3d.top')}</span>
     </button>
-
-    <!-- 3D Screenshot Button -->
-    <button
-      onclick={takeScreenshot}
-      class="p-2 rounded-lg bg-black/70 text-white hover:bg-black/80 transition-colors"
-      title={$t('viewerNav.screenshot')}
-      aria-label={$t('viewerNav.screenshot')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
-        <circle cx="12" cy="13" r="4"/>
-      </svg>
+    <button class="op-action" onclick={takeScreenshot} title={$t('viewerNav.screenshot')}>
+      <Icon name="image" /><span>{$t('viewer3d.saveImage')}</span>
     </button>
-
-    <!-- Walkthrough Mode Toggle Button -->
-    <button
-      onclick={toggleWalkthroughMode}
-      class="p-2 rounded-lg bg-black/70 text-white hover:bg-black/80 transition-colors"
-      title={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')}
-      aria-label={walkthroughMode ? $t('viewerNav.exitWalk') : $t('viewerNav.enterWalk')}
-  >
-    {#if walkthroughMode}
-      <!-- Exit/Eye closed icon -->
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-        <line x1="1" y1="1" x2="23" y2="23"/>
-      </svg>
-    {:else}
-      <!-- Walking person icon -->
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="4" r="2"/>
-        <path d="M10 16v6"/>
-        <path d="M14 16v6"/>
-        <path d="M12 6h2l4 4"/>
-        <path d="M10 14l2-2 1 2"/>
-      </svg>
-    {/if}
-    </button>
-  </div><!-- end 3D toolbar row -->
+    <div class="relative">
+      <button class="op-action" aria-expanded={moreOpen} onclick={() => { moreOpen = !moreOpen; lightingPanelOpen = false; }}>
+        <Icon name="more" /><span>{$t('chrome.more')}</span>
+      </button>
+      {#if moreOpen}
+        <div class="op-popover op-enter op-menu absolute right-0 bottom-full mb-3 w-72" role="menu">
+          <button class="op-menu-item" role="menuitem" onclick={() => { moreOpen = false; exportBlenderScene(); }}>
+            <Icon name="download" size={18} /><span>{$t('viewerExport.button')}<span class="op-sub">{$t('viewerExport.help')}</span></span>
+          </button>
+        </div>
+      {/if}
+    </div>
+  </div>
 
   {#if cameraPlacementMode && !cameraPlaced}
-    <div class="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-black/80 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-sm">
+    <div class="absolute top-[84px] left-1/2 -translate-x-1/2 z-50 op-tip !h-10 !text-sm">
       {$t('viewerNav.cameraPosition')}
     </div>
   {:else if cameraPlacementMode && cameraPlaced}
-    <div class="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-black/80 text-white px-4 py-2 rounded-lg text-sm backdrop-blur-sm">
+    <div class="absolute top-[84px] left-1/2 -translate-x-1/2 z-50 op-tip !h-10 !text-sm">
       {$t('viewerNav.cameraAim')}
     </div>
   {/if}
@@ -2366,7 +2338,7 @@
     </div>
 
     <!-- Controls Panel -->
-    <div class="absolute top-4 left-4 z-10 bg-black/70 text-white text-xs rounded-lg backdrop-blur-sm p-3 space-y-2 min-w-[180px]">
+    <div class="absolute top-[84px] left-4 z-10 bg-black/70 text-white text-xs rounded-xl backdrop-blur-sm p-3 space-y-2 min-w-[180px]">
       <div class="font-semibold text-white/90 mb-1">{$t('viewerNav.walkControls')}</div>
       {#if walkthroughMouseUnavailable}
         <p role="status" class="max-w-56 text-amber-200">{$t('viewerNav.mouseUnavailable')}</p>
@@ -2417,24 +2389,10 @@
       </div>
     </div>
 
-    <!-- Furniture Placement Toggle -->
-    <button
-      onclick={() => { furniturePlacementMode = !furniturePlacementMode; if (!furniturePlacementMode) { removeGhostPreview(); selectedCatalogId = null; furniturePickerOpen = false; } else { furniturePickerOpen = true; } }}
-      class="absolute top-16 right-28 z-50 p-2 rounded-lg transition-colors {furniturePlacementMode ? 'bg-green-600 text-white ring-2 ring-green-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-      title={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')}
-      aria-label={furniturePlacementMode ? $t('viewerFurniture.exit') : $t('viewerFurniture.place')}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="3" y="12" width="18" height="8" rx="1"/>
-        <path d="M5 12V8a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v4"/>
-        <line x1="5" y1="20" x2="5" y2="22"/>
-        <line x1="19" y1="20" x2="19" y2="22"/>
-      </svg>
-    </button>
 
     <!-- Furniture Picker Panel -->
     {#if furniturePlacementMode && furniturePickerOpen}
-      <div class="absolute top-4 left-4 z-50 bg-black/85 text-white rounded-lg backdrop-blur-sm w-56 max-h-[70vh] flex flex-col overflow-hidden select-none">
+      <div class="absolute top-[84px] left-4 z-50 bg-black/85 text-white rounded-xl backdrop-blur-sm w-64 max-h-[70vh] flex flex-col overflow-hidden select-none">
         <div class="p-2 border-b border-white/10 flex items-center justify-between">
           <span class="font-semibold text-sm">{$t('viewerFurniture.title')}</span>
           <button onclick={() => { furniturePickerOpen = false; }} aria-label={$t('viewerFurniture.close')} class="text-white/50 hover:text-white text-lg leading-none">&times;</button>
@@ -2466,26 +2424,10 @@
     {/if}
   {/if}
 
-  <!-- Lighting Controls Toggle Button -->
-  <button
-    onclick={() => { lightingPanelOpen = !lightingPanelOpen; }}
-    class="absolute bottom-4 left-4 md:left-14 z-50 p-2 rounded-lg transition-colors {lightingPanelOpen ? 'bg-amber-500 text-white ring-2 ring-amber-300' : 'bg-black/70 text-white hover:bg-black/80'}"
-    title={$t('viewerLighting.title')}
-    aria-label={$t('viewerLighting.title')}
-    aria-expanded={lightingPanelOpen}
-  >
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-      <circle cx="12" cy="12" r="5"/>
-      <line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
-      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
-      <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
-      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
-    </svg>
-  </button>
 
   <!-- Lighting Controls Panel -->
   {#if lightingPanelOpen}
-    <div class="absolute bottom-14 left-4 md:left-14 z-50 bg-black/80 text-white text-xs rounded-lg backdrop-blur-sm p-3 space-y-3 min-w-[220px] select-none">
+    <div class="absolute bottom-[92px] right-4 z-50 bg-black/80 text-white text-xs rounded-xl backdrop-blur-sm p-4 space-y-3 min-w-[260px] select-none">
       <div class="font-semibold text-white/90 text-sm flex items-center gap-1.5">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/></svg>
         {$t('viewerLighting.title')}

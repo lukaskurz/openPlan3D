@@ -21,7 +21,7 @@
   import FurnitureThumbnail from './FurnitureThumbnail.svelte';
   import CustomModelPanel from './CustomModelPanel.svelte';
   import { createProjectFromRoomPlan, extractRoomJsonFromZip, importRoomPlanFloors, interchangeStateFromRoomPlan, roomPlanImportOptions, validateRoomPlan, ORTHO_VERSION } from '$lib/utils/roomplanImport';
-  import { addRoomPlanFloorsToProject, currentProject, selectImportedElements } from '$lib/stores/project';
+  import { addRoomPlanFloorsToProject, currentProject, selectImportedElements, constraintPickMode, addGeometricConstraint, selectedElementId, selectedElementIds, showPlanNotice, beginUndoGroup, endUndoGroup, type GeometricConstraintKind } from '$lib/stores/project';
   import { selectableContentIds, type AddedContent } from '$lib/utils/roomplanMerge';
   import { interchangeProjectName } from '$lib/utils/interchange';
 
@@ -54,6 +54,28 @@
 
   let currentTool = $state<Tool>('select');
   onDestroy(selectedTool.subscribe((t) => { currentTool = t; }));
+
+  let pickMode = $state<GeometricConstraintKind | null>(null);
+  onDestroy(constraintPickMode.subscribe(mode => { pickMode = mode; }));
+
+  /** Apply to the selected walls when they fit; otherwise wait for walls to be clicked. */
+  function constrain(kind: GeometricConstraintKind) {
+    const floor = get(activeFloor);
+    const multi = [...get(selectedElementIds)], single = get(selectedElementId);
+    const walls = (multi.length ? multi : single ? [single] : []).filter(id => floor?.walls.some(w => w.id === id && !w.curvePoint));
+    const pair = kind === 'parallel' || kind === 'perpendicular';
+    if (pair ? walls.length === 2 : walls.length > 0) {
+      beginUndoGroup();
+      const results = pair ? [addGeometricConstraint(kind, walls)] : walls.map(id => addGeometricConstraint(kind, [id]));
+      endUndoGroup('Added constraint');
+      const failed = results.find(r => 'error' in r);
+      if (failed && 'error' in failed) showPlanNotice(failed.error, 'error');
+      return;
+    }
+    if (pickMode === kind) { constraintPickMode.set(null); return; }
+    setTool('select');
+    constraintPickMode.set(kind);
+  }
 
   let currentPlacing = $state<string | null>(null);
   onDestroy(placingFurnitureId.subscribe((id) => { currentPlacing = id; }));
@@ -135,7 +157,8 @@
     { type: 'single', name: $t('openingCatalog.single'), desc: $t('openingCatalog.singleDescription'), icon: 'M6 3h12v18H6z' },
     { type: 'double', name: $t('openingCatalog.double'), desc: $t('openingCatalog.doubleDescription'), icon: 'M3 3h8v18H3zM13 3h8v18h-8z' },
     { type: 'sliding', name: $t('openingCatalog.sliding'), desc: $t('openingCatalog.slidingDescription'), icon: 'M3 6h18v12H3z' },
-    { type: 'french', name: $t('openingCatalog.french'), desc: $t('openingCatalog.frenchDescription'), icon: 'M3 3h8v18H3zM13 3h8v18h-8z' },
+    { type: 'french', name: $t('openingCatalog.french'), desc: $t('openingCatalog.frenchDescription'), icon: 'M3 3h8v18H3zM13 3h8v18h-8zM5 5h4v14H5zM15 5h4v14h-4z' },
+    { type: 'balcony', name: $t('openingCatalog.balcony'), desc: $t('openingCatalog.balconyDescription'), icon: 'M6 3h12v18H6zM8 5h8v14H8z' },
     { type: 'pocket', name: $t('openingCatalog.pocket'), desc: $t('openingCatalog.pocketDescription'), icon: 'M6 3h12v18H6z' },
     { type: 'bifold', name: $t('openingCatalog.bifold'), desc: $t('openingCatalog.bifoldDescription'), icon: 'M3 3h5v18H3zM9 3h6v18H9zM16 3h5v18h-5z' },
     { type: 'opening', name: $t('openingCatalog.doorway'), desc: $t('openingCatalog.doorwayDescription'), icon: 'M6 3h2v18H6zM16 3h2v18h-2z' },
@@ -509,6 +532,28 @@
             <div class="text-xs text-gray-400">{$t('buildTools.measureHelp')}</div>
           </div>
         </button>
+
+        <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2 mt-3">{$t('buildTools.constrain')}</h3>
+        <div class="grid grid-cols-3 gap-1.5" data-constrain-tools>
+          {#each [
+            ['horizontal', 'M4 12h16M4 9v6M20 9v6'],
+            ['vertical', 'M12 4v16M9 4h6M9 20h6'],
+            ['parallel', 'M7 20L13 4M11 20L17 4'],
+            ['perpendicular', 'M5 19h14M12 19V5'],
+            ['fix', 'M12 16v5M8 3h8l-1 6 3 3v2H6v-2l3-3z'],
+          ] as const as [kind, path]}
+            <button
+              class="flex flex-col items-center gap-1 rounded-lg px-1 py-2 text-xs transition-colors {pickMode === kind ? 'bg-indigo-50 text-indigo-800 ring-1 ring-indigo-200' : 'hover:bg-gray-50 text-gray-700'}"
+              title={$t(`constrainTools.${kind}Help`)}
+              aria-pressed={pickMode === kind}
+              data-constrain={kind}
+              onclick={() => constrain(kind)}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={path}/></svg>
+              <span>{$t(`constraintKinds.${kind}`)}</span>
+            </button>
+          {/each}
+        </div>
 
         <h3 class="text-xs font-semibold text-gray-400 uppercase mb-2 mt-3">{$t('buildTools.import')}</h3>
         <button

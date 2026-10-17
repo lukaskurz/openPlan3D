@@ -8,7 +8,7 @@ export function openingPlanBounds(wall: Wall, opening: Door | PlanWindow, kind: 
   let minU = -half, maxU = half, reach = thickness / 2 + 2 * pixel;
   if (kind === 'door') {
     const door = opening as Door, type = door.type || 'single';
-    if (type === 'single') reach = Math.max(reach,door.width);
+    if (type === 'single' || type === 'balcony') reach = Math.max(reach,door.width);
     if (type === 'double' || type === 'french') reach = Math.max(reach,half);
     if (type === 'garage') reach = Math.max(reach,half*.8);
     if (type === 'bifold') reach = Math.max(reach,door.width/4);

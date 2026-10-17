@@ -1,0 +1,8 @@
+{
+  "projectId": "34c17a2f-f367-4fdc-8b0c-94d1ac8839d5",
+  "pkg": "open3dfloorplan",
+  "globalName": "OpenPlan3D",
+  "shape": "package",
+  "buildCmd": "node .design-sync/build.mjs",
+  "readmeHeader": ".design-sync/conventions.md"
+}

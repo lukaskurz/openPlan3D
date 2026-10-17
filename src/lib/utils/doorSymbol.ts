@@ -3,10 +3,11 @@ import type { Door, Point, Wall } from '$lib/models/types';
 /** Plan-view door glyph parts in plan coordinates (y down, like the editor canvas).
  * A swing arc runs from `from` to `to` (screen radians); the DXF exporter flips both.
  * `leaf` is the door panel, `panel` a sliding/bifold panel run, `track` the pocket cavity
- * and `threshold` the open-doorway face lines (both dashed); `hinge` is a screen marker. */
+ * and `threshold` the open-doorway face lines (both dashed); `glass` is the light pane line
+ * drawn over a glazed (balcony/French) leaf; `hinge` is a screen marker. */
 export type DoorSymbolPart =
   | { role: 'swing'; cx: number; cy: number; r: number; from: number; to: number }
-  | { role: 'leaf' | 'panel' | 'track' | 'threshold'; points: Point[] }
+  | { role: 'leaf' | 'panel' | 'track' | 'threshold' | 'glass'; points: Point[] }
   | { role: 'hinge'; x: number; y: number; r: number };
 
 /** Shared by the SVG and DXF exporters so the symbol matches drawDoorOnWall and cannot drift.
@@ -22,16 +23,18 @@ export function doorSymbol(wall: Wall, door: Pick<Door, 'position' | 'width' | '
   const sideFlip = (door.flipSide ?? false) ? -1 : 1;
   const type = door.type || 'single';
   const parts: DoorSymbolPart[] = [];
-  const line = (role: 'leaf' | 'panel' | 'track' | 'threshold', x1: number, y1: number, x2: number, y2: number) =>
+  const glazed = type === 'balcony' || type === 'french';
+  const line = (role: 'leaf' | 'panel' | 'track' | 'threshold' | 'glass', x1: number, y1: number, x2: number, y2: number) =>
     parts.push({ role, points: [{ x: x1, y: y1 }, { x: x2, y: y2 }] });
 
-  if (type === 'single' || type === 'pocket') {
+  if (type === 'single' || type === 'balcony' || type === 'pocket') {
     const r = door.width, hx = px + ux * hw * swingDir, hy = py + uy * hw * swingDir;
     const sa = wallAngle + (swingDir === 1 ? Math.PI : 0), ea = sa + (-swingDir) * sideFlip * (Math.PI / 2);
     if (type === 'pocket') line('track', hx, hy, hx + ux * door.width * swingDir, hy + uy * door.width * swingDir);
     else parts.push({ role: 'swing', cx: hx, cy: hy, r, from: sa, to: ea });
     const panelAngle = type === 'pocket' ? sa : ea;
     line('leaf', hx, hy, hx + r * Math.cos(panelAngle), hy + r * Math.sin(panelAngle));
+    if (glazed) line('glass', hx, hy, hx + r * Math.cos(panelAngle), hy + r * Math.sin(panelAngle));
     parts.push({ role: 'hinge', x: hx, y: hy, r: 2.5 });
   } else if (type === 'double' || type === 'french') {
     const r = hw;
@@ -41,6 +44,7 @@ export function doorSymbol(wall: Wall, door: Pick<Door, 'position' | 'width' | '
       const sa = wallAngle + Math.PI * (side === 1 ? 1 : 0), ea = sa + arcSwing * sideFlip * (Math.PI / 2);
       parts.push({ role: 'swing', cx: hx, cy: hy, r, from: sa, to: ea });
       line('leaf', hx, hy, hx + r * Math.cos(ea), hy + r * Math.sin(ea));
+      if (glazed) line('glass', hx, hy, hx + r * Math.cos(ea), hy + r * Math.sin(ea));
       parts.push({ role: 'hinge', x: hx, y: hy, r: 2 });
     }
   } else if (type === 'sliding') {

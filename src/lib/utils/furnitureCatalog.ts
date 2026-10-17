@@ -12,16 +12,24 @@ export interface FurnitureDef {
   height: number;
   /** If set, this is a 2D-only architectural symbol (not rendered in 3D) */
   symbol?: boolean;
+  /** Height of the bottom above the floor when placed, in cm (wall-hung items) */
+  elevation?: number;
 }
 
 export const furnitureCatalog: FurnitureDef[] = [
   // Living Room
   { id: 'sofa', name: 'Sofa', category: 'Living Room', icon: '🛋️', color: '#a78bfa', width: 200, depth: 90, height: 80 },
+  { id: 'sofa_l', name: 'L-Shaped Sofa', category: 'Living Room', icon: '🛋️', color: '#a78bfa', width: 280, depth: 180, height: 80 },
+  { id: 'sofa_chaise', name: 'Corner Sofa with Chaise', category: 'Living Room', icon: '🛋️', color: '#a8a29e', width: 300, depth: 225, height: 86 },
   { id: 'loveseat', name: 'Loveseat', category: 'Living Room', icon: '🛋️', color: '#8b5cf6', width: 140, depth: 85, height: 80 },
   { id: 'chair', name: 'Armchair', category: 'Living Room', icon: '💺', color: '#c084fc', width: 80, depth: 80, height: 90 },
   { id: 'coffee_table', name: 'Coffee Table', category: 'Living Room', icon: '☕', color: '#92400e', width: 120, depth: 60, height: 45 },
   { id: 'tv_stand', name: 'TV Stand', category: 'Living Room', icon: '📺', color: '#475569', width: 150, depth: 45, height: 50 },
+  { id: 'tv_lowboard', name: 'Wall-Hung TV Lowboard', category: 'Living Room', icon: '📺', color: '#cbbfb1', width: 200, depth: 40, height: 36, elevation: 25 },
+  { id: 'ceiling_projector', name: 'Ceiling Projector', category: 'Living Room', icon: '📽️', color: '#e7e5e4', width: 19.3, depth: 21.8, height: 35, elevation: 245 },
   { id: 'bookshelf', name: 'Bookshelf', category: 'Living Room', icon: '📚', color: '#92400e', width: 80, depth: 30, height: 180 },
+  { id: 'slat_divider', name: 'Slat Room Divider', category: 'Living Room', icon: '🪵', color: '#c8a27a', width: 71.6, depth: 8, height: 245 },
+  { id: 'shelf_divider', name: 'Shelf Room Divider', category: 'Living Room', icon: '🪵', color: '#c8a27a', width: 71.6, depth: 20, height: 245 },
   { id: 'side_table', name: 'Side Table', category: 'Living Room', icon: '🪑', color: '#a16207', width: 50, depth: 50, height: 55 },
   // Bedroom
   { id: 'bed_queen', name: 'Queen Bed', category: 'Bedroom', icon: '🛏️', color: '#60a5fa', width: 200, depth: 150, height: 50 },
@@ -36,6 +44,7 @@ export const furnitureCatalog: FurnitureDef[] = [
   { id: 'counter', name: 'Counter', category: 'Kitchen', icon: '🔲', color: '#78716c', width: 120, depth: 60, height: 85 },
   { id: 'dishwasher', name: 'Dishwasher', category: 'Kitchen', icon: '🫧', color: '#cbd5e1', width: 60, depth: 60, height: 85 },
   { id: 'oven', name: 'Oven', category: 'Kitchen', icon: '🔥', color: '#78716c', width: 60, depth: 60, height: 85 },
+  { id: 'wine_fridge', name: 'Wine Fridge', category: 'Kitchen', icon: '🍷', color: '#18181b', width: 48, depth: 56.5, height: 83.8 },
   // Bathroom
   { id: 'toilet', name: 'Toilet', category: 'Bathroom', icon: '🚽', color: '#e5e7eb', width: 40, depth: 65, height: 40 },
   { id: 'bathtub', name: 'Bathtub', category: 'Bathroom', icon: '🛁', color: '#93c5fd', width: 170, depth: 75, height: 60 },

@@ -21,10 +21,18 @@
   import { snapFurnitureToWalls } from '$lib/utils/furnitureGeometry';
   import { getCatalogItem, getFurnitureSize, type FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { drawFurnitureIcon } from '$lib/utils/furnitureIcons';
+  import { byElevation } from '$lib/utils/furnitureStacking';
+  import { createWheelInterpreter, pinchFactor, wheelStep } from '$lib/utils/wheelGestures';
   import { handleGlobalShortcut, isEditingField, isControlKey } from '$lib/utils/shortcuts';
   import { hasOpenModal } from '$lib/utils/modalDialog';
   import { focusInlineEditor } from '$lib/utils/inlineEditorFocus';
   import ContextMenu from './ContextMenu.svelte';
+  import DimensionEditor from './DimensionEditor.svelte';
+  import { moveWallsDuringDrag, addConstraint, addGeometricConstraint, constraintPickMode, planNotice, showPlanNotice, updateConstraint, type GeometricConstraintKind } from '$lib/stores/project';
+  import { analyzeConstraints, buildSketch, endpointKey, planConstrainedDrag, type ConstraintAnalysis, type Sketch } from '$lib/utils/constraints';
+  import { dimensionFromPicks, dimensionOffset, pickAt, samePick, type DimensionPick } from '$lib/utils/constraints/picking';
+  import { constraintLabelPosition, drawConstraintPreview, drawConstraints, drawPickHighlight, hitTestConstraint } from '$lib/utils/constraintRenderer';
+  import type { Constraint } from '$lib/models/types';
   import { roomPresets, placePreset } from '$lib/utils/roomPresets';
   import { roomTemplates, placeRoomTemplate } from '$lib/utils/roomTemplates';
   import { openingDropTarget } from '$lib/utils/openingDrop';
@@ -33,6 +41,8 @@
   import type { ProjectSettings } from '$lib/stores/settings';
   import { snapStatus } from '$lib/utils/snapStep';
   import { angleSnapWithin, resizeFurnitureFromHandle, snap as _snap, type CanvasState } from '$lib/utils/canvasInteraction';
+  import { checkResult, type CheckResult } from '$lib/assistant/checks';
+  import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, type SelectMode, type SnapOptions } from '$lib/stores/planView';
   import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { translatedOpeningPosition } from '$lib/utils/openingTranslation';
@@ -51,7 +61,6 @@
 
   let width = $state(800);
   let height = $state(600);
-  let zoomControlsBottom = $state(12);
 
   // Camera
   let camX = $state(0);
@@ -87,6 +96,9 @@
   let isPanning = $state(false);
   let panStartX = 0;
   let panStartY = 0;
+  // Look around (pan mode): every press pans, and a press that never moves is a tap that selects what is under it.
+  let viewTapStart: { x: number; y: number } | null = null;
+  let viewTap = false;
   let spaceDown = $state(false);
   let shiftDown = $state(false);
 
@@ -121,6 +133,153 @@
   let editingDimensionId: string | null = $state(null);
   let dimensionLabel = $state('');
 
+  // Parametric dimensions: picks made so far (corners / walls), what's under the pointer,
+  // and the dimension whose inline value editor is open.
+  let dimensionPicks: DimensionPick[] = $state([]);
+  let dimensionHover: DimensionPick | null = null;
+  let editingConstraintId: string | null = $state(null);
+  let editingConstraintPos = $state({ x: 0, y: 0 });
+  let draggingConstraintId: string | null = null;
+  /** Shown while working with constraints: remaining freedom, and anything left unsatisfied. */
+  let constraintStatus: { dof: number; conflicts: number; fixed: boolean; show: boolean } | null = $state(null);
+  let constraintDragStarted = false;
+  let notice: { text: string; tone: 'info' | 'error'; at: number } | null = $state(null);
+  let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(planNotice.subscribe(value => {
+    notice = value;
+    clearTimeout(noticeTimer);
+    if (value) noticeTimer = setTimeout(() => { if (notice?.at === value.at) planNotice.set(null); }, value.tone === 'error' ? 6000 : 4000);
+  }));
+
+  // Constraint analysis is cached until the floor's walls or constraints change.
+  let constraintCache: { key: string; sketch: Sketch; analysis: ConstraintAnalysis } | null = null;
+  function constraintInfo(floor: Floor): { sketch: Sketch; analysis: ConstraintAnalysis } | null {
+    if (!floor.constraints?.length) return null;
+    const key = JSON.stringify([floor.id, floor.constraints, floor.walls.map(w => [w.id, w.start.x, w.start.y, w.end.x, w.end.y, w.thickness, !!w.curvePoint])]);
+    if (constraintCache?.key !== key) constraintCache = { key, sketch: buildSketch(floor.walls, floor.constraints), analysis: analyzeConstraints(floor.walls, floor.constraints) };
+    return constraintCache;
+  }
+  function constraintAt(sx: number, sy: number): string | null {
+    if (!currentFloor || !layerVis.constraints) return null;
+    const info = constraintInfo(currentFloor);
+    if (!info) return null;
+    return hitTestConstraint(getCS(), { x: sx, y: sy }, { walls: currentFloor.walls, constraints: currentFloor.constraints!, measures: info.analysis.measures, units: dimSettings.units }, info.sketch);
+  }
+  function isConstraintId(id: string | null): boolean {
+    return !!id && !!currentFloor?.constraints?.some(c => c.id === id);
+  }
+  function selectConstraint(id: string) {
+    clearAuxiliarySelection();
+    selectedElementIds.set(new Set());
+    selectedRoomId.set(null);
+    selectedElementId.set(id);
+  }
+  function openConstraintEditor(id: string) {
+    editingConstraintId = id;
+    selectConstraint(id);
+    updateConstraintEditorPosition();
+  }
+  function updateConstraintEditorPosition() {
+    const c = editingConstraintId ? currentFloor?.constraints?.find(c => c.id === editingConstraintId) : null;
+    if (!c || !currentFloor) { editingConstraintId = null; return; }
+    const p = constraintLabelPosition(getCS(), c, currentFloor.walls, dimSettings.units);
+    if (p && (Math.abs(p.x - editingConstraintPos.x) > 0.5 || Math.abs(p.y - editingConstraintPos.y) > 0.5)) editingConstraintPos = p;
+  }
+  // Constrain tool: walls (or a corner for Fix) are clicked to receive the constraint.
+  let constraintPick: GeometricConstraintKind | null = $state(null);
+  let constraintPickWalls: string[] = $state([]);
+  onDestroy(constraintPickMode.subscribe(mode => {
+    constraintPick = mode;
+    // Started from a selected wall's Constrain menu: that wall is the first of the pair.
+    const selected = get(selectedElementId);
+    const pair = mode === 'parallel' || mode === 'perpendicular';
+    constraintPickWalls = pair && selected && get(activeFloor)?.walls.some(w => w.id === selected) ? [selected] : [];
+    dimensionHover = null;
+    markDirty();
+  }));
+  function constraintPickClick(wp: Point) {
+    if (!currentFloor || !constraintPick) return;
+    const pick = pickAt(currentFloor.walls, wp, zoom, { corners: constraintPick === 'fix' });
+    if (!pick) return;
+    let result;
+    if (pick.kind === 'corner') result = addGeometricConstraint('fix', [pick.ref.wallId], pick.ref);
+    else if (constraintPick === 'parallel' || constraintPick === 'perpendicular') {
+      if (!constraintPickWalls.length || constraintPickWalls[0] === pick.wallId) { constraintPickWalls = [pick.wallId]; return; }
+      result = addGeometricConstraint(constraintPick, [constraintPickWalls[0], pick.wallId]);
+      constraintPickWalls = [];
+    } else result = addGeometricConstraint(constraintPick, [pick.wallId]);
+    if ('error' in result) showPlanNotice(result.error, 'error');
+  }
+
+  // Constrained dragging: the solver moves walls in constrained parts of the plan, with the
+  // corner topology frozen at drag start so corners passing close by don't weld mid-drag.
+  let dragSketch: Sketch | null = null;
+  /** Drag endpoints towards targets through the constraints; returns the endpoints it took care of. */
+  function constrainedDragTo(targets: Map<string, Point>): Set<string> {
+    const floor = currentFloor;
+    if (!floor?.constraints?.length) return new Set();
+    dragSketch ??= buildSketch(floor.walls, floor.constraints);
+    const plan = planConstrainedDrag(floor.walls, floor.constraints, targets, dragSketch);
+    if (!plan) return new Set();
+    moveWallsDuringDrag(plan.changes);
+    return plan.handled;
+  }
+
+  /** Surfaces between two walls; otherwise the Dimensions setting (centreline or edge). */
+  function dimensionSurface(picks: DimensionPick[]) {
+    return (picks.length === 2 && picks.every(p => p.kind === 'wall')) || dimSettings.wallMeasureMode === 'edge';
+  }
+  function resetDimensionTool() {
+    dimensionPicks = [];
+    dimensionHover = null;
+    annotationStart = null;
+  }
+  /** One click of the Dimension tool. Returns true when the click was used. */
+  function dimensionToolClick(wp: Point, sx: number, sy: number, e: MouseEvent): boolean {
+    if (!currentFloor) return false;
+    const pick = e.altKey ? null : pickAt(currentFloor.walls, wp, zoom);
+    const [first, second] = dimensionPicks;
+    if (!first) {
+      // Clicking a dimension selects it (double click edits); clicking plan geometry starts one.
+      const hit = !pick || pick.kind === 'wall' ? constraintAt(sx, sy) : null;
+      if (hit) { if (e.detail >= 2) openConstraintEditor(hit); else selectConstraint(hit); return true; }
+      if (pick) { dimensionPicks = [pick]; return true; }
+      return false; // free point: plain annotation
+    }
+    if (!second && pick && !samePick(pick, first) && !(first.kind === 'corner' && pick.kind === 'corner' && pick.ref.wallId === first.ref.wallId && false)) {
+      dimensionPicks = [first, pick];
+      return true;
+    }
+    if (!second && first.kind === 'corner') {
+      // A corner then empty space: a plain annotation from the corner.
+      annotationStart = { ...first.point };
+      dimensionPicks = [];
+      return false;
+    }
+    placeDimension(dimensionPicks, wp, e);
+    return true;
+  }
+  function placeDimension(picks: DimensionPick[], place: Point, e: MouseEvent) {
+    if (!currentFloor) return;
+    const input = dimensionFromPicks(currentFloor.walls, picks, place, dimensionSurface(picks));
+    dimensionPicks = [];
+    if (!input) return;
+    const result = addConstraint(input);
+    if ('error' in result) { showPlanNotice(result.error, 'error'); return; }
+    if (result.driven) showPlanNotice($t('dimensionEditor.addedDriven'));
+    // Keep the canvas's default mousedown focus from blurring the editor that is about to open.
+    e.preventDefault();
+    openConstraintEditor(result.id);
+  }
+  /** The dimension the current picks would create if placed at the pointer. */
+  function dimensionPreview(): Constraint | null {
+    if (!currentFloor || !dimensionPicks.length) return null;
+    const [first] = dimensionPicks;
+    if (dimensionPicks.length === 1 && (first.kind === 'corner' || (dimensionHover && !samePick(dimensionHover, first)))) return null;
+    const input = dimensionFromPicks(currentFloor.walls, dimensionPicks, mousePos, dimensionSurface(dimensionPicks));
+    return input ? { ...input, id: '__preview' } as Constraint : null;
+  }
+
   function finishDimensionLabel() {
     if (editingDimensionId && dimensionLabel.trim()) {
       updateAnnotation(editingDimensionId, { label: dimensionLabel.trim() });
@@ -141,10 +300,10 @@
   let showGrid = $state(true);
 
   // Ruler toggle
-  let showRulers = $state(true);
+  let showRulers = $state(false);
 
   // Layer visibility toggles
-  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true });
+  let layerVis = $state({ walls: true, doors: true, windows: true, furniture: true, stairs: true, columns: true, guides: true, measurements: true, annotations: true, textAnnotations: true, entourage: true, floorBelow: true, roomLabels: true, constraints: true });
   // Sync showFurnitureStore ↔ layerVisibility.furniture
   let showFurniture = $derived(layerVis.furniture);
   $effect(() => { showFurnitureStore.set(layerVis.furniture); });
@@ -157,15 +316,28 @@
     units: 'metric', showDimensions: true, showExternalDimensions: true,
     showInternalDimensions: false, showExtensionLines: true,
     showObjectDistance: true, dimensionLineColor: '#1e293b',
-    wallMeasureMode: 'centerline', snapToGrid: true, snapToWalls: true, gridSize: 25,
+    wallMeasureMode: 'centerline', snapToGrid: true, snapToWalls: true, gridSize: 25, zoomSpeed: 5,
   });
   onDestroy(projectSettings.subscribe((s) => {
     dimSettings = s;
     showDimensions = s.showDimensions;
   }));
   let showStairs = $derived(layerVis.stairs);
-  let showLayerPanel = $state(false);
-  let showMinimap = $state(true);
+  let showMinimap = $state(false);
+  // The View menu owns these switches; the canvas mirrors them.
+  onDestroy(planDisplay.subscribe((d) => {
+    showGrid = d.grid; showRulers = d.rulers; showMinimap = d.minimap;
+  }));
+  let currentSnapOptions: SnapOptions = { angleStep: 45, objects: true };
+  onDestroy(snapOptions.subscribe((o) => { currentSnapOptions = o; markDirty(); }));
+  let previewIds: ReadonlySet<string> = new Set();
+  onDestroy(previewHighlight.subscribe((ids) => { previewIds = ids; markDirty(); }));
+  let checkFindings: CheckResult | null = null;
+  onDestroy(checkResult.subscribe((result) => { checkFindings = result; markDirty(); }));
+  let insetRight = 0;
+  onDestroy(planInsetRight.subscribe((px) => { insetRight = px; }));
+  let currentSelectMode: SelectMode = 'tap';
+  onDestroy(selectMode.subscribe((m) => { currentSelectMode = m; }));
   let minimapCanvas = $state<HTMLCanvasElement>();
   const RULER_SIZE = 24;
 
@@ -339,12 +511,25 @@
    * Returns adjusted position and rotation, or null if no wall is close enough.
    */
   function snapFurnitureToWall(pos: Point, furniture: FurnitureItem | FurnitureDef): { position: Point; rotation: number; wallId: string; side: 'normal' | 'anti'; wallAngle: number } | null {
-    if (!currentFloor || !currentSnapToWalls) return null;
+    if (!currentFloor || !currentSnapToWalls || snapBypass) return null;
 
     return snapFurnitureToWalls(pos, furniture, currentFloor.walls, snap);
   }
 
+  // Holding ⌘ (macOS) or Ctrl while dragging moves freely: no grid, wall, guide or endpoint snapping.
+  let snapBypass = false;
+  let lastPointer: { clientX: number; clientY: number } | null = null;
+  function setSnapBypass(on: boolean) {
+    if (on === snapBypass) return;
+    snapBypass = on;
+    // Re-apply the active drag at the same pointer so the item moves as soon as the key changes.
+    if (canvasGestureActive && lastPointer) {
+      onMouseMove(new MouseEvent('mousemove', { ...lastPointer, buttons: 1, metaKey: on, ctrlKey: on }));
+    }
+  }
+
   function snap(v: number): number {
+    if (snapBypass) return v;
     return _snap(v, currentSnapEnabled, currentSnapToGrid, currentGridSize);
   }
 
@@ -363,7 +548,7 @@
 
   function magneticSnap(p: Point, excludeWallIds?: Set<string>): Point & { snappedToEndpoint?: boolean; snappedToWall?: boolean; snappedWallId?: string } {
     // The top-bar Snap to Grid switch turns the magnet off along with grid and angle snapping.
-    if (!currentFloor || !currentSnapEnabled) return { x: snap(p.x), y: snap(p.y) };
+    if (!currentFloor || !currentSnapEnabled || snapBypass || !currentSnapOptions.objects) return { x: snap(p.x), y: snap(p.y) };
     let best: Point & { snappedToEndpoint?: boolean; snappedToWall?: boolean; snappedWallId?: string } = { x: snap(p.x), y: snap(p.y) };
     let bestDist = MAGNETIC_SNAP / zoom;
     // First pass: snap to endpoints (highest priority)
@@ -403,18 +588,18 @@
   }
 
   function angleSnap(start: Point, end: Point): Point {
-    if (!currentSnapEnabled) return end;
+    const stepDeg = currentSnapOptions.angleStep;
+    if (!currentSnapEnabled || snapBypass || !stepDeg) return end;
     const dx = end.x - start.x;
     const dy = end.y - start.y;
     const len = Math.hypot(dx, dy);
     if (len < 5) return end;
     const angle = Math.atan2(dy, dx);
-    const snapAngles = [0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4, Math.PI, -Math.PI, -3 * Math.PI / 4, -Math.PI / 2, -Math.PI / 4];
-    const ANGLE_THRESHOLD = Math.PI / 18;
-    for (const sa of snapAngles) {
-      if (Math.abs(angle - sa) < ANGLE_THRESHOLD) {
-        return { x: start.x + len * Math.cos(sa), y: start.y + len * Math.sin(sa) };
-      }
+    const step = stepDeg * Math.PI / 180;
+    const nearest = Math.round(angle / step) * step;
+    // Latch within 10°, or less when the steps are closer together than that.
+    if (Math.abs(angle - nearest) < Math.min(Math.PI / 18, step / 3)) {
+      return { x: start.x + len * Math.cos(nearest), y: start.y + len * Math.sin(nearest) };
     }
     return end;
   }
@@ -529,7 +714,8 @@
   }
 
   function drawWall(w: Wall, selected: boolean) {
-    _drawWall(getCS(), w, selected, showDimensions, dimSettings, currentFloor?.walls);
+    const dimensioned = layerVis.constraints && !!currentFloor?.constraints?.some(c => c.kind === 'length' && c.wallId === w.id);
+    _drawWall(getCS(), w, selected, showDimensions, dimSettings, currentFloor?.walls, dimensioned);
   }
 
   function drawDoorOnWall(wall: Wall, door: Door) {
@@ -618,7 +804,7 @@
     const nx = -uy, ny = ux;
     const isDoor = placementPreview.type === 'door';
     const doorWidths: Record<string, number> = {
-      single: 90, double: 150, sliding: 180, french: 150,
+      single: 90, double: 150, sliding: 180, french: 150, balcony: 90,
       pocket: 90, bifold: 180, opening: 100, garage: 240,
     };
     const itemWidth = isDoor ? (doorWidths[currentDoorType] ?? 90) : 120;
@@ -1149,7 +1335,6 @@
 
 
   function draw() {
-    if (canvas) updateZoomControlsPosition();
     if (!ctx) return;
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = '#f8f9fa';
@@ -1210,7 +1395,7 @@
 
     // Furniture
     if (showFurniture) {
-      for (const fi of floor.furniture) {
+      for (const fi of byElevation(floor.furniture)) {
         const selected = isSelected(fi.id);
         if (selected && draggingFurnitureId === fi.id) drawAlignmentGuides(fi);
         drawFurniture(fi, selected);
@@ -1690,6 +1875,49 @@
     if (layerVis.annotations && floor) drawAnnotations(floor);
     // Annotation preview
     if (annotating && annotationStart) drawAnnotationPreview();
+    // Parametric dimensions and constraint badges
+    const constraintData = floor && layerVis.constraints ? constraintInfo(floor) : null;
+    if (floor && constraintData) {
+      drawConstraints(getCS(), {
+        walls: floor.walls, constraints: floor.constraints!, measures: constraintData.analysis.measures,
+        conflicts: constraintData.analysis.conflicts, units: dimSettings.units,
+        selectedId: isConstraintId(currentSelectedId) ? currentSelectedId : null,
+      }, constraintData.sketch);
+    }
+    // Constraint status: fully constrained walls dark, the rest blue, while constraints are being edited.
+    const editingConstraints = annotating || !!constraintPick || isConstraintId(currentSelectedId);
+    if (floor && constraintData && editingConstraints) {
+      ctx.save();
+      ctx.lineWidth = 2; ctx.lineCap = 'round';
+      for (const w of floor.walls) {
+        if (!constraintData.analysis.constrainedWalls.has(w.id) || w.curvePoint) continue;
+        const a = worldToScreen(w.start.x, w.start.y), b = worldToScreen(w.end.x, w.end.y);
+        ctx.strokeStyle = constraintData.analysis.fullyConstrainedWalls.has(w.id) ? '#1e1b4b' : '#3b82f6';
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.restore();
+    }
+    const status = floor && constraintData ? {
+      dof: constraintData.analysis.dof, conflicts: constraintData.analysis.conflicts.size,
+      fixed: !!floor.constraints?.some(c => c.kind === 'fix'), show: editingConstraints || constraintData.analysis.conflicts.size > 0,
+    } : null;
+    if (JSON.stringify(status) !== JSON.stringify(constraintStatus)) constraintStatus = status;
+    if (annotating && floor) {
+      for (const pick of dimensionPicks) drawPickHighlight(getCS(), pick, floor.walls, '#4f46e5');
+      if (dimensionHover) drawPickHighlight(getCS(), dimensionHover, floor.walls);
+      const preview = dimensionPreview();
+      if (preview) drawConstraintPreview(getCS(), preview, floor.walls, dimSettings.units);
+      else if (dimensionPicks.length === 1 && dimensionPicks[0].kind === 'corner') {
+        const a = worldToScreen(dimensionPicks[0].point.x, dimensionPicks[0].point.y), b = worldToScreen(mousePos.x, mousePos.y);
+        ctx.save(); ctx.strokeStyle = '#0ea5e9'; ctx.setLineDash([4, 4]); ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
+      }
+    }
+    if (constraintPick && floor) {
+      for (const wallId of constraintPickWalls) drawPickHighlight(getCS(), { kind: 'wall', wallId }, floor.walls, '#4f46e5');
+      if (dimensionHover) drawPickHighlight(getCS(), dimensionHover, floor.walls);
+    }
+    if (editingConstraintId) updateConstraintEditorPosition();
     // Text annotations
     if (layerVis.textAnnotations && floor) drawTextAnnotations(floor);
 
@@ -1735,12 +1963,173 @@
       ctx.restore();
     }
 
+    drawPreviewOutlines();
+    drawCheckFindings();
+
     // Rulers (drawn last, on top of everything)
     drawRulers();
 
     // Mini-map
     drawMinimap();
 
+    publishOverlayState();
+  }
+
+  /** What the active check (a tool the Assistant made) finds: narrow gaps or small rooms, in red. */
+  function drawCheckFindings() {
+    if (!checkFindings) return;
+    const label = (text: string, x: number, y: number) => {
+      ctx.font = '600 12px system-ui, sans-serif';
+      const w = ctx.measureText(text).width + 14;
+      ctx.fillStyle = '#dc2626';
+      ctx.beginPath();
+      ctx.roundRect(x - w / 2, y - 12, w, 24, 6);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, x, y);
+    };
+    ctx.save();
+    if (checkFindings.kind === 'walkway') {
+      for (const gap of checkFindings.gaps) {
+        const a = worldToScreen(gap.from.x, gap.from.y), b = worldToScreen(gap.to.x, gap.to.y);
+        ctx.strokeStyle = 'rgba(220, 38, 38, 0.35)';
+        ctx.lineWidth = 14;
+        ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        label(`${gap.distance} cm`, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      }
+    } else {
+      for (const room of checkFindings.rooms) {
+        const points = room.polygon.map(p => worldToScreen(p.x, p.y));
+        ctx.fillStyle = 'rgba(220, 38, 38, 0.12)';
+        ctx.strokeStyle = '#dc2626';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        points.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.setLineDash([]);
+        const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length, cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+        label(`${room.area.toFixed(1)} m²`, cx, cy + 22);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Dashed outlines around what an Assistant proposal added or changed. */
+  function drawPreviewOutlines() {
+    if (!previewIds.size || !currentFloor) return;
+    const floor = currentFloor;
+    const pad = 4 / zoom;
+    /** A rectangle of `length` × `width` world units centred on c, along direction (ux, uy). */
+    const box = (c: Point, ux: number, uy: number, length: number, width: number) => {
+      const hl = length / 2 + pad, hw = width / 2 + pad;
+      return [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([a, b]) => worldToScreen(c.x + ux * a * hl - uy * b * hw, c.y + uy * a * hl + ux * b * hw));
+    };
+    const shapes: { x: number; y: number }[][] = [];
+    for (const id of previewIds) {
+      const wall = floor.walls.find(w => w.id === id);
+      const opening = floor.doors.find(d => d.id === id) ?? floor.windows.find(w => w.id === id);
+      const item = floor.furniture.find(f => f.id === id);
+      if (wall || opening) {
+        const host = wall ?? floor.walls.find(w => w.id === opening!.wallId);
+        if (!host) continue;
+        const len = Math.hypot(host.end.x - host.start.x, host.end.y - host.start.y) || 1;
+        const ux = (host.end.x - host.start.x) / len, uy = (host.end.y - host.start.y) / len;
+        const t = wall ? 0.5 : opening!.position;
+        const centre = { x: host.start.x + ux * len * t, y: host.start.y + uy * len * t };
+        shapes.push(box(centre, ux, uy, wall ? len : opening!.width, host.thickness));
+      } else if (item) {
+        const { width: w, depth: d } = getFurnitureSize(item);
+        const a = (item.rotation || 0) * Math.PI / 180;
+        shapes.push(box(item.position, Math.cos(a), Math.sin(a), Math.abs(w), Math.abs(d)));
+      } else if (floor.stairs?.some(x => x.id === id) || floor.columns?.some(x => x.id === id)) {
+        const b = boundsForFloor(floor, zoom, new Set([id]));
+        if (!b) continue;
+        shapes.push([[b.minX, b.minY], [b.maxX, b.minY], [b.maxX, b.maxY], [b.minX, b.maxY]].map(([x, y]) => worldToScreen(x, y)));
+      }
+    }
+    ctx.save();
+    ctx.strokeStyle = '#2563eb';
+    ctx.fillStyle = 'rgba(37, 99, 235, 0.08)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    for (const shape of shapes) {
+      ctx.beginPath();
+      shape.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // ── State the floating chrome reads ───────────────────────────────
+  let lastAnchorKey = '';
+  let lastDraftKey = '';
+  function sameRect(a: { left: number; top: number; right: number; bottom: number } | null, key: string) {
+    return key === (a ? `${Math.round(a.left)},${Math.round(a.top)},${Math.round(a.right)},${Math.round(a.bottom)}` : '');
+  }
+  let wallChainCorners = 0;
+  let countedWallStart: Point | null = null;
+  function publishOverlayState() {
+    if (!canvas) return;
+    if (wallStart !== countedWallStart) {
+      wallChainCorners = !wallStart ? 0 : !countedWallStart ? 1 : wallChainCorners + 1;
+      countedWallStart = wallStart;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const canvasKey = `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.right)},${Math.round(rect.bottom)}`;
+    if (!sameRect(get(canvasRect), canvasKey)) canvasRect.set({ left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
+
+    // Selection rectangle in viewport pixels, for the selection bar.
+    let anchor: { left: number; top: number; right: number; bottom: number } | null = null;
+    const ids = fitSelectionIds();
+    if (currentFloor && ids.size && currentTool === 'select' && !elevationOpen && !isPanning) {
+      const b = boundsForFloor(currentFloor, zoom, ids);
+      if (b) {
+        const a = worldToScreen(b.minX, b.minY), c = worldToScreen(b.maxX, b.maxY);
+        anchor = { left: rect.left + Math.min(a.x, c.x), top: rect.top + Math.min(a.y, c.y), right: rect.left + Math.max(a.x, c.x), bottom: rect.top + Math.max(a.y, c.y) };
+      }
+    }
+    const anchorKey = anchor ? `${Math.round(anchor.left)},${Math.round(anchor.top)},${Math.round(anchor.right)},${Math.round(anchor.bottom)}` : '';
+    if (anchorKey !== lastAnchorKey) { lastAnchorKey = anchorKey; selectionAnchor.set(anchor); }
+
+    // Live values of the wall being drawn.
+    let draft: import('$lib/stores/planView').WallDraft | null = null;
+    if (currentTool === 'wall' && wallStart) {
+      const snapped = magneticSnap(mousePos);
+      const end = applyTypedWallLength(snapWallEndPoint(mousePos));
+      const dx = end.x - wallStart.x, dy = end.y - wallStart.y;
+      const near = !!wallSequenceFirst && (wallStart.x !== wallSequenceFirst.x || wallStart.y !== wallSequenceFirst.y)
+        && Math.hypot(mousePos.x - wallSequenceFirst.x, mousePos.y - wallSequenceFirst.y) < 20;
+      draft = {
+        lengthCm: Math.hypot(dx, dy),
+        angleDeg: ((Math.atan2(-dy, dx) * 180 / Math.PI) + 360) % 360,
+        corners: wallChainCorners,
+        nearFirst: near,
+        snappedTo: snapped.snappedToEndpoint ? 'corner' : snapped.snappedToWall ? 'wall' : null,
+      };
+    }
+    const draftKey = draft ? `${draft.lengthCm.toFixed(1)}|${draft.angleDeg.toFixed(1)}|${draft.corners}|${draft.nearFirst}|${draft.snappedTo}` : '';
+    if (draftKey !== lastDraftKey) { lastDraftKey = draftKey; wallDraft.set(draft); }
+
+    const hint = joinMode
+      ? joinHint
+      : annotating
+      ? (annotationStart ? 'dimensionHints.plain' : dimensionPicks.length === 2 ? 'dimensionHints.place' : dimensionPicks[0]?.kind === 'corner' ? 'dimensionHints.cornerSecond' : dimensionPicks.length ? 'dimensionHints.second' : 'dimensionHints.start')
+      : constraintPick
+        ? (constraintPick === 'fix' ? 'constrainHints.pickFix' : constraintPick === 'parallel' || constraintPick === 'perpendicular'
+          ? (constraintPickWalls.length ? 'constrainHints.pickSecond' : 'constrainHints.pickFirst') : 'constrainHints.pickWall')
+        : null;
+    if (hint !== get(canvasHint)) canvasHint.set(hint);
   }
 
   /** True while the integrated elevation view covers the canvas area */
@@ -1770,6 +2159,8 @@
       requestAnimationFrame(() => {
         initialFitPending = false;
         if (!mounted || initialFitDone) return;
+        // Someone is already drawing on an empty plan: don't move the view under their finger.
+        if (wallStart || canvasGestureActive) { initialFitDone = true; return; }
         // An image-only active floor takes priority over the floor below once loaded.
         if (backgroundLoading && currentFloor && !boundsForFloor(currentFloor)) return;
         if (!getFitBounds()) return;
@@ -1790,6 +2181,8 @@
         measureEnd = null;
         annotationStart = null;
         editingDimensionId = null;
+        dimensionPicks = [];
+        dimensionHover = null;
         wallStart = null;
         wallSequenceFirst = null;
         typedWallLength = '';
@@ -1853,7 +2246,9 @@
         ...(!v.textAnnotations ? currentFloor?.textAnnotations ?? [] : []),
         ...(!v.measurements ? currentFloor?.measurements ?? [] : []),
         ...(!v.annotations ? currentFloor?.annotations ?? [] : []),
+        ...(!v.constraints ? currentFloor?.constraints ?? [] : []),
       ].map(item => item.id));
+      if (!v.constraints) editingConstraintId = null;
       if (hiddenIds.size) {
         if (hiddenIds.has(selectedTextAnnotationId ?? '')) selectedTextAnnotationId = null;
         if (hiddenIds.has(selectedMeasurementId ?? '')) selectedMeasurementId = null;
@@ -1923,14 +2318,34 @@
     }
     document.addEventListener('paste', handlePaste);
 
+    planViewApi.set({
+      zoomBy: (factor) => { const r = canvas.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, factor); markDirty(); },
+      resetZoom: () => { zoom = 1; markDirty(); },
+      zoomToFit: (selectionOnly) => zoomToFit(selectionOnly),
+      closeWallLoop,
+      finishWall,
+      placeWallSegment,
+      runAction: (action, targetId) => runActionOn(action, targetId ?? null),
+      openActionsAt: (clientX, clientY) => onContextMenu(new MouseEvent('contextmenu', { clientX, clientY })),
+      renameRoom: (roomId) => runActionOn('rename-room', roomId),
+      copySelection: () => { copySelectionToClipboard(); },
+      paste: pasteClipboard,
+      hasClipboard: () => !!clipboard?.ids.length,
+      panBy: (dx, dy) => { camX -= dx / zoom; camY -= dy / zoom; markDirty(); },
+    });
+
     // Touch input — registered manually so the handlers are non-passive
     // (Svelte attaches touch listeners passively, which blocks preventDefault)
     canvas.addEventListener('touchstart', onTouchStart, { passive: false });
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd, { passive: false });
     canvas.addEventListener('touchcancel', onTouchEnd, { passive: false });
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('gesturestart', onGestureStart, { passive: false });
+    canvas.addEventListener('gesturechange', onGestureChange, { passive: false });
+    canvas.addEventListener('gestureend', onGestureEnd, { passive: false });
 
-    return () => { mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub_join(); unsub14(); unsub_col(); unsub_cols(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); };
+    return () => { planViewApi.set(null); selectionAnchor.set(null); wallDraft.set(null); canvasHint.set(null); mounted = false; drawing?.stop(); stopTextures(); resizeObs.disconnect(); unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); unsub6(); unsub7(); unsub8(); unsub9(); unsub10(); unsub11(); unsub12(); unsub13(); unsub_multi(); unsub_elevopen(); unsub_elevpick(); unsub_join(); unsub14(); unsub_col(); unsub_cols(); unsub_layers(); unsub_snapgrid(); unsubEnt1(); unsubEnt2(); document.removeEventListener('paste', handlePaste); canvas.removeEventListener('touchstart', onTouchStart); canvas.removeEventListener('touchmove', onTouchMove); canvas.removeEventListener('touchend', onTouchEnd); canvas.removeEventListener('touchcancel', onTouchEnd); canvas.removeEventListener('wheel', onWheel); canvas.removeEventListener('gesturestart', onGestureStart); canvas.removeEventListener('gesturechange', onGestureChange); canvas.removeEventListener('gestureend', onGestureEnd); };
   });
 
   /** Compute world bounding box of all elements */
@@ -2014,11 +2429,6 @@
     return visibleHeight;
   }
 
-  function updateZoomControlsPosition() {
-    const visibleHeight = visibleCanvasHeight();
-    zoomControlsBottom = 12 + (height-visibleHeight) * canvas.getBoundingClientRect().height / Math.max(1,height);
-  }
-
   function clearAuxiliarySelection() {
     selectedGuideId = null;
     selectedMeasurementId = null;
@@ -2085,7 +2495,9 @@
     // On phones the properties sheet overlays the lower canvas. Fit into the
     // visible area, then compensate for the renderer's full-canvas origin.
     const visibleHeight = visibleCanvasHeight();
-    const availableWidth = Math.max(1, width - 80), availableHeight = Math.max(1, visibleHeight - 80);
+    // Leave room for the floating controls along each edge.
+    const chromeX = width > 900 ? 200 : 80, chromeY = height > 600 ? 200 : 120;
+    const availableWidth = Math.max(1, width - chromeX - insetRight), availableHeight = Math.max(1, visibleHeight - chromeY);
     const initialZoom = Math.min(availableWidth / (maxX - minX + padding * 2),
       availableHeight / (maxY - minY + padding * 2), 3);
     // Minimum screen fonts make text bounds scale-dependent. Find the largest
@@ -2105,7 +2517,7 @@
     zoom = lower || initialZoom;
     ({ minX, minY, maxX, maxY } = fittedBounds);
     minimumZoom = Math.min(0.1, zoom / 4);
-    camX = (minX + maxX) / 2;
+    camX = (minX + maxX) / 2 + insetRight / (2 * zoom);
     camY = (minY + maxY) / 2 + (height - visibleHeight) / (2 * zoom);
     markDirty();
   }
@@ -2179,6 +2591,7 @@
     finishCanvasGesture();
     spaceDown = false;
     shiftDown = false;
+    snapBypass = false;
   }
 
   // A press that starts on the canvas can end somewhere else: the selection toolbar appears
@@ -2204,7 +2617,9 @@
     selectionPress = null;
     canvasGestureActive = true;
     canvasPressPosition = { x: e.clientX, y: e.clientY };
-    if (e.button === 0 && e.shiftKey && currentTool === 'select' && currentFloor && !spaceDown && !$panMode) {
+    const addToSelection = e.shiftKey || currentSelectMode === 'add';
+    const panning = $panMode && !viewTap;
+    if (e.button === 0 && addToSelection && currentTool === 'select' && currentFloor && !spaceDown && !panning) {
       const rect = canvas.getBoundingClientRect();
       const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
       const measurement = hitTestMeasurement(wp, currentFloor);
@@ -2223,20 +2638,23 @@
         return;
       }
     }
-    if (e.button === 1 || (e.button === 0 && (spaceDown || $panMode || (e.shiftKey && currentTool === 'select')))) {
+    if (e.button === 1 || (e.button === 0 && (spaceDown || panning || (e.shiftKey && currentTool === 'select')))) {
       isPanning = true;
       panStartX = e.clientX;
       panStartY = e.clientY;
+      viewTapStart = e.button === 0 && panning && !spaceDown ? { x: e.clientX, y: e.clientY } : null;
       return;
     }
     if (e.button !== 0) return;
 
     const rect = canvas.getBoundingClientRect();
-    const wp = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const wp = screenToWorld(sx, sy);
     const tool = currentTool;
     if (tool === 'select' && currentFloor && e.detail === 1) {
       selectionPress = { floorId: currentFloor.id, x: e.clientX, y: e.clientY, world: wp };
     }
+    if (constraintPick && currentFloor) { constraintPickClick(wp); return; }
 
     // Elevation pick mode: the next wall clicked opens its elevation view;
     // clicking empty canvas cancels. Consumes the click either way so the
@@ -2304,7 +2722,8 @@
       return;
     }
 
-    // Annotation tool: click first point, then second point
+    // Dimension tool: corners and walls make parametric dimensions; free points make plain annotations.
+    if (annotating && !annotationStart && dimensionToolClick(wp, sx, sy, e)) return;
     if (annotating) {
       const snapped = magneticSnap(wp);
       if (!annotationStart) {
@@ -2389,6 +2808,17 @@
         return;
       }
       selectedTextAnnotationId = null;
+    }
+
+    // Parametric dimension / constraint badge click (select); dragging moves the dimension line.
+    if (tool === 'select' && currentFloor) {
+      const hitId = constraintAt(sx, sy);
+      if (hitId) {
+        selectConstraint(hitId);
+        draggingConstraintId = hitId;
+        constraintDragStarted = false;
+        return;
+      }
     }
 
     // Annotation click detection (select)
@@ -2629,7 +3059,15 @@
           return;
         }
         const room = findRoomLabelAt(wp) ?? findRoomAt(wp);
-        if (room) {
+        if (room && touchPress === 'finger' && currentSelectMode === 'tap' && get(selectedRoomId) !== room.id) {
+          // A room is most of the plan: a finger only moves one that is already selected. Until then
+          // the press moves the view, and a tap selects the room on release.
+          isPanning = true;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          touchPanFromEmpty = true;
+          touchPanRoomId = room.id;
+        } else if (room) {
           selectedRoomId.set(room.id);
           selectedElementId.set(null);
           selectedElementIds.set(new Set());
@@ -2641,11 +3079,17 @@
             const w = currentFloor!.walls.find(wall => wall.id === wid);
             if (w) roomDragStartPositions.set(wid, wallGeometryOf(w));
           }
+        } else if (touchPress === 'finger' && currentSelectMode === 'tap') {
+          // A finger on empty plan moves the view; the tap itself clears the selection on release.
+          isPanning = true;
+          panStartX = e.clientX;
+          panStartY = e.clientY;
+          touchPanFromEmpty = true;
         } else {
           // Empty space — start marquee selection
           marqueeStart = { ...wp };
           marqueeEnd = { ...wp };
-          if (!e.shiftKey) {
+          if (!e.shiftKey && currentSelectMode !== 'add') {
             selectedElementId.set(null);
             selectedElementIds.set(new Set());
           }
@@ -2653,21 +3097,18 @@
         }
       }
     } else if (tool === 'door') {
+      // The tool stays on so each tap adds another; Done in the tray returns to Select.
       const wall = findWallAt(wp);
-      if (wall) {
-        addDoor(wall.id, positionOnWall(wp, wall), currentDoorType);
-        selectedTool.set('select');
-      }
+      if (wall) addDoor(wall.id, positionOnWall(wp, wall), currentDoorType);
     } else if (tool === 'window') {
       const wall = findWallAt(wp);
-      if (wall) {
-        addWindow(wall.id, positionOnWall(wp, wall), currentWindowType);
-        selectedTool.set('select');
-      }
+      if (wall) addWindow(wall.id, positionOnWall(wp, wall), currentWindowType);
     }
   }
 
   function onDblClick(e: MouseEvent) {
+    // Looking around never opens editing (renaming a room, finishing walls).
+    if ($panMode) return;
     const rect = canvas.getBoundingClientRect();
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
@@ -2686,6 +3127,14 @@
       const wp = screenToWorld(sx, sy);
       addGuide('vertical', wp.x);
       return;
+    }
+
+    // Double-click on a dimension to edit its value
+    if ((currentTool === 'select' || currentTool === 'annotate') && currentFloor) {
+      // The first click may have opened Properties and resized the canvas: use the press's world point.
+      const press = worldToScreen(selectionPoint.x, selectionPoint.y);
+      const hit = constraintAt(press.x, press.y);
+      if (hit) { openConstraintEditor(hit); return; }
     }
 
     // Double-click on a text annotation to edit it
@@ -2751,8 +3200,31 @@
     // Recover if a release outside the window was never delivered to this page.
     if (canvasGestureActive && e.buttons === 0) finishCanvasGesture();
     markDirty();
+    snapBypass = e.metaKey || e.ctrlKey;
+    lastPointer = { clientX: e.clientX, clientY: e.clientY };
     const rect = canvas.getBoundingClientRect();
     mousePos = screenToWorld(e.clientX - rect.left, e.clientY - rect.top);
+
+    if (annotating && currentFloor && !annotationStart) {
+      dimensionHover = e.altKey ? null : pickAt(currentFloor.walls, mousePos, zoom);
+      markDirty();
+    }
+    if (constraintPick && currentFloor) {
+      dimensionHover = pickAt(currentFloor.walls, mousePos, zoom, { corners: constraintPick === 'fix' });
+      markDirty();
+    }
+    if (draggingConstraintId && currentFloor) {
+      if (!constraintDragStarted) {
+        if (Math.hypot(e.clientX - canvasPressPosition.x, e.clientY - canvasPressPosition.y) < 3) return;
+        beginUndoGroup();
+        constraintDragStarted = true;
+      }
+      const c = currentFloor.constraints?.find(c => c.id === draggingConstraintId);
+      const offset = c ? dimensionOffset(c, currentFloor.walls, mousePos) : undefined;
+      if (offset !== undefined) updateConstraint(draggingConstraintId, { offset });
+      markDirty();
+      return;
+    }
 
     if ((draggingFurnitureId || draggingHandle) && !furnitureGestureStarted) {
       // Treat small pointer movement during a click as selection, not a snapped move.
@@ -2814,10 +3286,13 @@
           else if (currentSnapEnabled && !pt.snappedToEndpoint && !pt.snappedToWall) pt = angleSnapWithin(other, pt, MAGNETIC_SNAP / zoom);
         }
       }
-      moveWallEndpoint(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint, pt);
-      // Move all connected endpoints together
-      for (const conn of draggingConnectedEndpoints) {
-        moveWallEndpoint(conn.wallId, conn.endpoint, pt);
+      const handled = constrainedDragTo(new Map([[endpointKey(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint), pt]]));
+      if (!handled.has(endpointKey(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint))) {
+        moveWallEndpoint(draggingWallEndpoint.wallId, draggingWallEndpoint.endpoint, pt);
+        // Move all connected endpoints together
+        for (const conn of draggingConnectedEndpoints) {
+          moveWallEndpoint(conn.wallId, conn.endpoint, pt);
+        }
       }
     }
     if (draggingWallParallel && currentFloor) {
@@ -2839,14 +3314,17 @@
             x: draggingWallParallel.origEnd.x + dx,
             y: draggingWallParallel.origEnd.y + dy,
           };
-          moveWallEndpoint(draggingWallParallel.wallId, 'start', newStart);
-          moveWallEndpoint(draggingWallParallel.wallId, 'end', newEnd);
-          // Move connected walls' shared endpoints so adjacent walls stretch to stay connected
-          for (const conn of draggingWallParallel.connectedStart) {
-            moveWallEndpoint(conn.wallId, conn.endpoint, newStart);
-          }
-          for (const conn of draggingWallParallel.connectedEnd) {
-            moveWallEndpoint(conn.wallId, conn.endpoint, newEnd);
+          const handled = constrainedDragTo(new Map([[endpointKey(wall.id, 'start'), newStart], [endpointKey(wall.id, 'end'), newEnd]]));
+          if (!handled.has(endpointKey(wall.id, 'start'))) {
+            moveWallEndpoint(draggingWallParallel.wallId, 'start', newStart);
+            moveWallEndpoint(draggingWallParallel.wallId, 'end', newEnd);
+            // Move connected walls' shared endpoints so adjacent walls stretch to stay connected
+            for (const conn of draggingWallParallel.connectedStart) {
+              moveWallEndpoint(conn.wallId, conn.endpoint, newStart);
+            }
+            for (const conn of draggingWallParallel.connectedEnd) {
+              moveWallEndpoint(conn.wallId, conn.endpoint, newEnd);
+            }
           }
         }
       }
@@ -2854,7 +3332,17 @@
     if (draggingMultiSelect && currentFloor) {
       const dx = snap(mousePos.x - draggingMultiSelect.startMousePos.x);
       const dy = snap(mousePos.y - draggingMultiSelect.startMousePos.y);
+      // Selected walls in constrained parts of the plan move through the solver.
+      const wallTargets = new Map<string, Point>();
       for (const [id, orig] of draggingMultiSelect.origPositions) {
+        if (orig.start && orig.end && !orig.curvePoint && currentFloor.walls.some(w => w.id === id)) {
+          wallTargets.set(endpointKey(id, 'start'), { x: orig.start.x + dx, y: orig.start.y + dy });
+          wallTargets.set(endpointKey(id, 'end'), { x: orig.end.x + dx, y: orig.end.y + dy });
+        }
+      }
+      const solvedWalls = constrainedDragTo(wallTargets);
+      for (const [id, orig] of draggingMultiSelect.origPositions) {
+        if (solvedWalls.has(endpointKey(id, 'start'))) continue;
         if (orig.opening) {
           const wall=currentFloor.walls.find(item => item.id === orig.opening!.wallId);
           if (wall) {
@@ -2886,8 +3374,17 @@
     if (draggingRoomId && currentFloor && roomDragStartPositions.size > 0) {
       const dx = snap(mousePos.x - roomDragStartMouse.x);
       const dy = snap(mousePos.y - roomDragStartMouse.y);
-      // Rigid move of every boundary wall; a curved wall's control point travels with it.
-      for (const [wid, orig] of roomDragStartPositions) moveWallGeometryDuringDrag(wid, translatedWallGeometry(orig, dx, dy));
+      const targets = new Map<string, Point>();
+      for (const [wid, orig] of roomDragStartPositions) {
+        targets.set(endpointKey(wid, 'start'), { x: orig.start.x + dx, y: orig.start.y + dy });
+        targets.set(endpointKey(wid, 'end'), { x: orig.end.x + dx, y: orig.end.y + dy });
+      }
+      const handled = constrainedDragTo(targets);
+      // Rigid move of every other boundary wall; a curved wall's control point travels with it.
+      for (const [wid, orig] of roomDragStartPositions) {
+        if (handled.has(endpointKey(wid, 'start'))) continue;
+        moveWallGeometryDuringDrag(wid, translatedWallGeometry(orig, dx, dy));
+      }
     }
     if (draggingCurveHandle && currentFloor) {
       const wall = currentFloor.walls.find(w => w.id === draggingCurveHandle);
@@ -2927,10 +3424,14 @@
             handle: draggingHandle,
             pointer: mousePos,
             preserveAspectRatio: shiftDown,
+            step: 1,
           });
+          // Store the real size so Properties shows it; scale only keeps the mirror sign.
           transformFurnitureDuringDrag(currentSelectedId, {
             position: resized.position,
-            scale: { ...resized.scale, z: fi.scale?.z ?? 1 },
+            width: resized.width,
+            depth: resized.depth,
+            scale: { x: Math.sign(resized.scale.x) || 1, y: Math.sign(resized.scale.y) || 1, z: fi.scale?.z ?? 1 },
           });
         }
       }
@@ -2980,7 +3481,7 @@
           const snapped = { x: snap(basePos.x), y: snap(basePos.y) };
           // Snap to guide lines
           const GUIDE_SNAP = 10; // world units
-          if (currentFloor?.guides) {
+          if (currentFloor?.guides && !snapBypass) {
             for (const g of currentFloor.guides) {
               if (g.orientation === 'horizontal' && Math.abs(snapped.y - g.position) < GUIDE_SNAP) {
                 snapped.y = g.position;
@@ -3043,9 +3544,29 @@
 
   function onMouseUp(e: MouseEvent) {
     markDirty();
+    const tap = viewTapStart;
+    viewTapStart = null;
+    if (tap && isPanning && Math.hypot(e.clientX - tap.x, e.clientY - tap.y) <= 6) {
+      // A tap while looking around: select like the Select tool would, with nothing left to drag.
+      isPanning = false;
+      canvasGestureActive = false;
+      viewTap = true;
+      try {
+        const press = { clientX: e.clientX, clientY: e.clientY, button: 0, detail: 1 };
+        onMouseDown(new MouseEvent('mousedown', press));
+        onMouseUp(new MouseEvent('mouseup', press));
+      } finally { viewTap = false; }
+      return;
+    }
     canvasGestureActive = false;
     isPanning = false;
     draggingGuideId = null;
+
+    if (draggingConstraintId) {
+      if (constraintDragStarted) endUndoGroup('Edited constraint');
+      draggingConstraintId = null;
+      constraintDragStarted = false;
+    }
 
     // Finalize only actual label movement, never a selection click.
     if (draggingRoomLabelId) {
@@ -3107,49 +3628,62 @@
     draggingWindowId = null;
     draggingHandle = null;
     draggingWallEndpoint = null;
+    dragSketch = null;
     draggingConnectedEndpoints = [];
     wallSnapInfo = null;
   }
 
+  function zoomAt(clientX: number, clientY: number, factor: number) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = clientX - rect.left, sy = clientY - rect.top;
+    const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
+    // Keep the world point under the cursor fixed
+    const worldX = (sx - width / 2) / zoom + camX;
+    const worldY = (sy - height / 2) / zoom + camY;
+    camX = worldX - (sx - width / 2) / newZoom;
+    camY = worldY - (sy - height / 2) / newZoom;
+    zoom = newZoom;
+  }
+
+  const interpretWheel = createWheelInterpreter(() => get(projectSettings).zoomSpeed);
   function onWheel(e: WheelEvent) {
     markDirty();
     e.preventDefault();
-    if (currentPlacingId && !e.ctrlKey) {
-      // Rotate furniture preview
-      const delta = e.deltaY > 0 ? 15 : -15;
-      placingRotation.update(r => (r + delta) % 360);
-      return;
-    }
-
-    const rect = canvas.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-
-    if (e.ctrlKey) {
-      // Pinch-to-zoom on trackpad (or Ctrl+scroll)
-      const factor = e.deltaY > 0 ? 0.95 : 1.05;
-      const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
-      // Zoom towards cursor position
-      const worldX = (sx - width / 2) / zoom + camX;
-      const worldY = (sy - height / 2) / zoom + camY;
-      camX = worldX - (sx - width / 2) / newZoom;
-      camY = worldY - (sy - height / 2) / newZoom;
-      zoom = newZoom;
-    } else if (Math.abs(e.deltaX) > 0) {
-      // Two-finger trackpad pan (deltaX present means trackpad gesture)
-      camX += e.deltaX / zoom;
-      camY += e.deltaY / zoom;
+    const action = interpretWheel(e as WheelEvent & { wheelDeltaY?: number });
+    if (action.kind === 'zoom') {
+      // Safari reports the same pinch through gesture events; don't apply it twice.
+      if (!safariGesture) zoomAt(e.clientX, e.clientY, action.factor);
+    } else if (action.kind === 'pan') {
+      // Two-finger trackpad scroll pans in every direction
+      camX += action.dx / zoom;
+      camY += action.dy / zoom;
+    } else if (currentPlacingId) {
+      // Mouse wheel rotates the furniture preview
+      placingRotation.update(r => (r + action.direction * 15) % 360);
     } else {
-      // Regular scroll wheel: zoom towards cursor
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoom = Math.max(minimumZoom, Math.min(10, zoom * factor));
-      // Zoom towards cursor position
-      const worldX = (sx - width / 2) / zoom + camX;
-      const worldY = (sy - height / 2) / zoom + camY;
-      camX = worldX - (sx - width / 2) / newZoom;
-      camY = worldY - (sy - height / 2) / newZoom;
-      zoom = newZoom;
+      const step = wheelStep(get(projectSettings).zoomSpeed);
+      zoomAt(e.clientX, e.clientY, action.direction > 0 ? 1 / step : step);
     }
+  }
+
+  // Safari (macOS) delivers trackpad pinches as non-standard gesture events with a cumulative scale.
+  type SafariGestureEvent = UIEvent & { scale: number; clientX: number; clientY: number };
+  let safariGesture: { scale: number } | null = null;
+  function onGestureStart(e: Event) {
+    e.preventDefault();
+    safariGesture = { scale: (e as SafariGestureEvent).scale || 1 };
+  }
+  function onGestureChange(e: Event) {
+    e.preventDefault();
+    const g = e as SafariGestureEvent;
+    if (!safariGesture || !g.scale) return;
+    zoomAt(g.clientX, g.clientY, pinchFactor(g.scale / safariGesture.scale, get(projectSettings).zoomSpeed));
+    safariGesture.scale = g.scale;
+    markDirty();
+  }
+  function onGestureEnd(e: Event) {
+    e.preventDefault();
+    safariGesture = null;
   }
 
   // ── Touch input (phones/tablets) ──────────────────────────────────
@@ -3166,7 +3700,29 @@
   let lastTapX = 0;
   let lastTapY = 0;
 
+  /** Set while a synthetic mouse event from a touch is being handled: 'finger' or 'pen'. */
+  let touchPress: 'finger' | 'pen' | null = null;
+  let touchKind: 'finger' | 'pen' = 'finger';
+  /** A finger press on empty plan (or on a room not yet selected) that became a pan; a tap without movement deselects (or selects that room). */
+  let touchPanFromEmpty = false;
+  let touchPanRoomId: string | null = null;
+  // Long-press opens the actions menu for that spot.
+  const HOLD_MS = 550;
+  let holdTimer: ReturnType<typeof setTimeout> | null = null;
+  let holdFired = false;
+  let holdRing: { x: number; y: number } | null = $state(null);
+  function cancelHold() {
+    if (holdTimer) clearTimeout(holdTimer);
+    holdTimer = null;
+    holdRing = null;
+  }
+
   function dispatchMouse(type: 'mousedown' | 'mousemove' | 'mouseup' | 'click' | 'dblclick', clientX: number, clientY: number) {
+    touchPress = touchKind;
+    try { dispatchMouseEvent(type, clientX, clientY); } finally { touchPress = null; }
+  }
+
+  function dispatchMouseEvent(type: 'mousedown' | 'mousemove' | 'mouseup' | 'click' | 'dblclick', clientX: number, clientY: number) {
     canvas.dispatchEvent(new MouseEvent(type, {
       clientX,
       clientY,
@@ -3180,11 +3736,35 @@
   function onTouchStart(e: TouchEvent) {
     e.preventDefault();
     if (e.touches.length === 1) {
+      const touch = e.touches[0];
       singleTouchActive = true;
-      singleTouchOrigin = { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+      singleTouchOrigin = { clientX: touch.clientX, clientY: touch.clientY };
       singleTouchMoved = false;
-      dispatchMouse('mousedown', e.touches[0].clientX, e.touches[0].clientY);
+      holdFired = false;
+      touchPanFromEmpty = false;
+      touchPanRoomId = null;
+      // Apple Pencil reports itself as a stylus; it drag-selects instead of panning.
+      touchKind = (touch as Touch & { touchType?: string }).touchType === 'stylus' ? 'pen' : 'finger';
+      dispatchMouse('mousedown', touch.clientX, touch.clientY);
+      cancelHold();
+      if (currentTool === 'select' && touchKind === 'finger') {
+        const rect = canvas.getBoundingClientRect();
+        const origin = { clientX: touch.clientX, clientY: touch.clientY };
+        holdRing = { x: origin.clientX - rect.left, y: origin.clientY - rect.top };
+        holdTimer = setTimeout(() => {
+          holdTimer = null;
+          holdRing = null;
+          if (!singleTouchActive || singleTouchMoved) return;
+          holdFired = true;
+          // End whatever the press started (a pan, a drag that never moved) before opening the menu.
+          dispatchMouse('mouseup', origin.clientX, origin.clientY);
+          isPanning = false;
+          touchPanFromEmpty = false;
+          onContextMenu(new MouseEvent('contextmenu', { clientX: origin.clientX, clientY: origin.clientY }));
+        }, HOLD_MS);
+      }
     } else if (e.touches.length === 2) {
+      cancelHold();
       lastTapTime = 0;
       singleTouchOrigin = null;
       // Second finger landed: abandon any single-finger drag and start pinching
@@ -3224,13 +3804,15 @@
       markDirty();
     } else if (singleTouchActive && e.touches.length === 1) {
       if (singleTouchOrigin && Math.hypot(e.touches[0].clientX - singleTouchOrigin.clientX,
-          e.touches[0].clientY - singleTouchOrigin.clientY) > 10) singleTouchMoved = true;
+          e.touches[0].clientY - singleTouchOrigin.clientY) > 10) { singleTouchMoved = true; cancelHold(); }
+      if (holdFired) return;
       dispatchMouse('mousemove', e.touches[0].clientX, e.touches[0].clientY);
     }
   }
 
   function onTouchEnd(e: TouchEvent) {
     e.preventDefault();
+    cancelHold();
     if (e.type === 'touchcancel') {
       pinchState = null;
       lastTapTime = 0;
@@ -3247,6 +3829,13 @@
       if (e.touches.length < 2) pinchState = null;
       return;
     }
+    if (singleTouchActive && e.touches.length === 0 && holdFired) {
+      // The long-press already ended the gesture and opened the menu.
+      singleTouchActive = false;
+      singleTouchOrigin = null;
+      lastTapTime = 0;
+      return;
+    }
     if (singleTouchActive && e.touches.length === 0) {
       const t = e.changedTouches[0] ?? singleTouchOrigin;
       singleTouchActive = false;
@@ -3255,6 +3844,17 @@
       singleTouchOrigin = null;
       if (!t) return;
       dispatchMouse('mouseup', t.clientX, t.clientY);
+      if (touchPanFromEmpty) {
+        touchPanFromEmpty = false;
+        // A tap on empty plan (no drag) clears the selection, like a click on empty space.
+        if (!singleTouchMoved && currentTool === 'select' && currentSelectMode === 'tap') {
+          selectedElementId.set(null);
+          selectedElementIds.set(new Set());
+          selectedRoomId.set(touchPanRoomId);
+          clearAuxiliarySelection();
+        }
+        touchPanRoomId = null;
+      }
       if (singleTouchMoved) { lastTapTime = 0; return; }
       // Synthesize click so document-level click-outside handlers (menus) fire
       dispatchMouse('click', t.clientX, t.clientY);
@@ -3310,8 +3910,80 @@
     return { x: wallStart.x + (dx / d) * lenCm, y: wallStart.y + (dy / d) * lenCm };
   }
 
+  /** Copy the selection to the plan clipboard. Returns false when nothing copyable is selected. */
+  function copySelectionToClipboard(): boolean {
+    if (!currentFloor) return false;
+    const copyable = [...currentFloor.walls,...currentFloor.doors,...currentFloor.windows,...currentFloor.furniture,
+      ...currentFloor.stairs ?? [],...currentFloor.columns ?? [],...currentFloor.entourage ?? [],
+      ...currentFloor.textAnnotations ?? [],...currentFloor.measurements ?? [],...currentFloor.annotations ?? []];
+    const ids = [...fitSelectionIds()].filter(id => copyable.some(item => item.id === id));
+    if (!ids.length) return false;
+    clipboard = { floor: structuredClone(get(activeFloor)!), ids, step: 1, projectId: get(currentProject)!.id };
+    return true;
+  }
+
+  function pasteClipboard() {
+    if (!clipboard || !clipboard.ids.length || !currentFloor) return;
+    const newIds = pasteSelection(clipboard.floor, new Set(clipboard.ids), clipboard.step);
+    if (newIds.length) {
+      clipboard = { ...clipboard, step: clipboard.step + 1 };
+      selectedElementIds.set(new Set(newIds));
+      selectedElementId.set(newIds[0]);
+    }
+  }
+
+  /** Close the wall chain back to its first corner (the old C key). */
+  function closeWallLoop() {
+    if (!wallStart || !wallSequenceFirst) return;
+    if (Math.hypot(wallStart.x - wallSequenceFirst.x, wallStart.y - wallSequenceFirst.y) > 5) {
+      addWall(wallStart, wallSequenceFirst);
+    }
+    wallStart = null;
+    wallSequenceFirst = null;
+    typedWallLength = '';
+    markDirty();
+  }
+
+  /** Stop drawing the current chain and keep what was placed (the old Esc). */
+  function finishWall() {
+    wallStart = null;
+    wallSequenceFirst = null;
+    typedWallLength = '';
+    markDirty();
+  }
+
+  /** Add the next segment of the chain at an exact length and angle. */
+  function placeWallSegment(lengthCm: number, angleDeg: number) {
+    if (!wallStart || !(lengthCm > 0)) return;
+    const rad = angleDeg * Math.PI / 180;
+    const end = { x: wallStart.x + Math.cos(rad) * lengthCm, y: wallStart.y - Math.sin(rad) * lengthCm };
+    addWall(wallStart, end);
+    wallStart = end;
+    mousePos = end;
+    typedWallLength = '';
+    markDirty();
+  }
+
+  /** Run a canvas action on a specific element, as if picked from its context menu. */
+  function runActionOn(action: string, targetId: string | null) {
+    const floor = currentFloor;
+    if (!floor) return;
+    const room = targetId ? detectedRooms.find(item => item.id === targetId) ?? null : null;
+    const wall = targetId ? floor.walls.find(item => item.id === targetId) ?? null : null;
+    const furniture = targetId ? floor.furniture.find(item => item.id === targetId) ?? null : null;
+    ctxMenuTargetId = targetId;
+    ctxMenuRoom = room;
+    ctxMenuWall = wall;
+    ctxMenuFurniture = furniture;
+    ctxMenuTargetType = room ? 'room' : wall ? 'wall' : furniture ? 'furniture' : targetId ? null : 'canvas';
+    handleContextMenuAction(action);
+    markDirty();
+  }
+
   function onKeyDown(e: KeyboardEvent) {
     if (hasOpenModal()) return;
+    markDirty(); // key handlers change tool state (Escape, typed lengths) that the next frame must show
+    if (e.key === 'Meta' || e.key === 'Control') setSnapBypass(true);
     if (e.target === canvas && (e.key === 'ContextMenu' || (e.key === 'F10' && e.shiftKey))) {
       e.preventDefault();
       openKeyboardContextMenu();
@@ -3415,6 +4087,10 @@
       measureStart = null;
       measureEnd = null;
       annotationStart = null;
+      dimensionPicks = [];
+      dimensionHover = null;
+      editingConstraintId = null;
+      constraintPickMode.set(null);
       marqueeStart = null;
       marqueeEnd = null;
     }
@@ -3467,16 +4143,9 @@
 
     // Copy (Ctrl+C / Cmd+C)
     if ((e.ctrlKey || e.metaKey) && e.key === 'c' && !e.shiftKey) {
-      if (currentFloor) {
-        const copyable = [...currentFloor.walls,...currentFloor.doors,...currentFloor.windows,...currentFloor.furniture,
-          ...currentFloor.stairs ?? [],...currentFloor.columns ?? [],...currentFloor.entourage ?? [],
-          ...currentFloor.textAnnotations ?? [],...currentFloor.measurements ?? [],...currentFloor.annotations ?? []];
-        const ids = [...fitSelectionIds()].filter(id => copyable.some(item => item.id === id));
-        if (ids.length) {
-          clipboard = { floor: structuredClone(get(activeFloor)!), ids, step: 1, projectId: get(currentProject)!.id };
-          e.preventDefault();
-          return;
-        }
+      if (copySelectionToClipboard()) {
+        e.preventDefault();
+        return;
       }
     }
 
@@ -3484,12 +4153,7 @@
     if ((e.ctrlKey || e.metaKey) && e.key === 'v' && !e.shiftKey) {
       if (clipboard && clipboard.ids.length && currentFloor) {
         e.preventDefault();
-        const newIds = pasteSelection(clipboard.floor, new Set(clipboard.ids), clipboard.step);
-        if (newIds.length) {
-          clipboard = { ...clipboard, step: clipboard.step + 1 };
-          selectedElementIds.set(new Set(newIds));
-          selectedElementId.set(newIds[0]);
-        }
+        pasteClipboard();
         return;
       }
     }
@@ -3517,7 +4181,7 @@
       projectSettings.update(s => ({ ...s, snapToGrid: !s.snapToGrid }));
     }
     if (e.key === 'g' || e.key === 'G') {
-      showGrid = !showGrid;
+      planDisplay.update(d => ({ ...d, grid: !d.grid }));
     }
     if ((e.key === 'f' || e.key === 'F') && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
@@ -3534,6 +4198,7 @@
   }
 
   function onKeyUp(e: KeyboardEvent) {
+    if (e.key === 'Meta' || e.key === 'Control') setSnapBypass(e.metaKey || e.ctrlKey);
     shiftDown = e.shiftKey;
     if (e.code === 'Space') spaceDown = false;
   }
@@ -3814,8 +4479,7 @@
 
       // Canvas actions
       case 'paste':
-        // Trigger paste via synthetic keyboard event
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, metaKey: true }));
+        pasteClipboard();
         break;
       case 'select-all':
         selectAllPlanElements();
@@ -3902,33 +4566,19 @@
     bind:this={canvas}
     class="block w-full h-full touch-none"
     tabindex="0"
+    data-plan-canvas
     aria-label={$t('canvas.editorLabel')}
     style="cursor: {cursorStyle}"
     onmousedown={onMouseDown}
     onmousemove={onMouseMove}
     onmouseup={onMouseUp}
     ondblclick={onDblClick}
-    onwheel={onWheel}
     oncontextmenu={onContextMenu}
     ondragover={onDragOver}
     ondragleave={onDragLeave}
     ondrop={onDrop}
   ></canvas>
-  <!-- Elevation pick mode hint chip -->
-  {#if pickingElevation}
-    <div class="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-800/90 text-white text-xs font-medium px-3.5 py-1.5 rounded-full shadow-lg pointer-events-none flex items-center gap-1.5">
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7v9H3z"/><rect x="10" y="14" width="4" height="6"/><rect x="5.5" y="13" width="3" height="3"/></svg>
-      <span class="max-md:hidden">{$t('canvasHints.pick')}</span>
-      <span class="md:hidden">{$t('canvasHints.pickTouch')}</span>
-    </div>
-  {/if}
-  <!-- Scan door-join hint chip: shows while the second door is awaited -->
-  {#if joinMode && !pickingElevation}
-    <div role="status" class="absolute top-3 left-1/2 -translate-x-1/2 z-30 bg-slate-800/90 text-white text-xs font-medium px-3.5 py-1.5 rounded-full shadow-lg pointer-events-none flex items-center gap-1.5">
-      <span aria-hidden="true">🚪</span>
-      <span>{$t(joinHint)}</span>
-    </div>
-  {/if}
+
   <!-- Inline room name editor -->
   {#if editingRoomId}
     <input
@@ -3976,6 +4626,26 @@
         }}
         onblur={finishDimensionLabel}
       />
+    </div>
+  {/if}
+  {#if editingConstraintId}
+    <DimensionEditor id={editingConstraintId} x={Math.max(136, Math.min(width - 136, editingConstraintPos.x))} y={Math.min(editingConstraintPos.y, height - 150)} onclose={() => { editingConstraintId = null; canvas.focus(); }} />
+  {/if}
+  {#if constraintStatus?.show}
+    <div class="pointer-events-none absolute left-1/2 -translate-x-1/2 bottom-[72px] z-20 rounded-full border px-3 py-1.5 text-xs shadow-sm {constraintStatus.conflicts ? 'border-red-200 bg-red-50 text-red-700' : constraintStatus.dof === 0 ? 'border-indigo-200 bg-indigo-50 text-indigo-800' : 'border-gray-200 bg-white text-gray-600'}" data-constraint-status>
+      {#if constraintStatus.conflicts}
+        {$t('constraintStatus.conflicts', { count: constraintStatus.conflicts })}
+      {:else if constraintStatus.dof === 0}
+        ✓ {$t('constraintStatus.full')}
+      {:else}
+        {$t(constraintStatus.dof === 1 ? 'constraintStatus.dofOne' : 'constraintStatus.dof', { count: constraintStatus.dof })}{#if !constraintStatus.fixed} · {$t('constraintStatus.fixHint')}{/if}
+      {/if}
+    </div>
+  {/if}
+  {#if notice}
+    <div class="pointer-events-auto absolute top-[148px] left-1/2 z-30 flex max-w-md -translate-x-1/2 items-center gap-2 rounded-xl border px-4 py-2.5 text-sm shadow-lg {notice.tone === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-indigo-200 bg-white text-gray-700'}" role={notice.tone === 'error' ? 'alert' : 'status'} data-plan-notice>
+      <span>{notice.text}</span>
+      <button class="text-gray-400 hover:text-gray-600" aria-label={$t('editorRecovery.dismiss')} onclick={() => planNotice.set(null)}>✕</button>
     </div>
   {/if}
   <!-- Inline text annotation editor -->
@@ -4026,278 +4696,26 @@
       use:focusInlineEditor
     />
   {/if}
-  <!-- Empty state hint -->
-  {#if currentFloor && !hasPlanContent(currentFloor) && !(layerVis.floorBelow && floorBelow && hasPlanContent(floorBelow))}
-    <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
-      <div class="text-center opacity-60">
-        <div class="text-5xl mb-3">🏠</div>
-        <div class="text-sm font-medium text-gray-500">{$t('canvasHints.start')}</div>
-        <div class="text-xs text-gray-400 mt-1">{$t('canvasHints.draw')} <span class="font-mono bg-gray-100 px-1 rounded">W</span> {$t('canvasHints.drag')}</div>
-      </div>
-    </div>
-  {/if}
   <!-- Mini-map -->
   {#if showMinimap && currentFloor && hasPlanContent(currentFloor)}
     <canvas
       bind:this={minimapCanvas}
+      data-plan-minimap
       aria-label={$t('canvasHints.minimap')}
       width="180"
       height="120"
-      class="absolute bottom-10 right-2 rounded-lg shadow-lg border border-gray-300 cursor-crosshair bg-white max-md:hidden"
-      style="z-index: 15;"
+      class="absolute right-4 rounded-xl shadow-lg border border-gray-200 cursor-crosshair bg-white max-md:hidden"
+      style="z-index: 15; bottom: 84px;"
       onclick={onMinimapClick}
     ></canvas>
   {/if}
-  <!-- Keep controls above classic horizontal scrollbars, which consume height on Linux. -->
-  <div style:--visible-bottom={`${zoomControlsBottom}px`} class="absolute bottom-2 right-2 max-md:bottom-[calc(var(--visible-bottom)+3rem)] max-md:left-2 max-md:overflow-x-auto max-md:min-h-12 max-md:items-center max-md:whitespace-nowrap max-md:[&>*]:shrink-0 bg-white/80 rounded px-2 py-1 text-xs text-gray-500 flex gap-3">
-    {#if detectedRooms.length > 0}
-      <span>{$t(detectedRooms.length === 1 ? 'canvasStatus.roomsOne' : 'canvasStatus.roomsMany', { count: detectedRooms.length })}</span>
-      <span>{formatArea(detectedRooms.reduce((s, r) => s + r.area, 0), $projectSettings.units)}</span>
-      <span class="text-gray-300">|</span>
-    {/if}
-    {#if currentFloor}
-      <span>{$t(currentFloor.walls.length === 1 ? 'canvasStatus.wallsOne' : 'canvasStatus.wallsMany', { count: currentFloor.walls.length })}</span>
-      {#if currentFloor.doors.length > 0}
-        <span>{$t(currentFloor.doors.length === 1 ? 'canvasStatus.doorsOne' : 'canvasStatus.doorsMany', { count: currentFloor.doors.length })}</span>
-      {/if}
-      {#if currentFloor.windows.length > 0}
-        <span>{$t(currentFloor.windows.length === 1 ? 'canvasStatus.windowsOne' : 'canvasStatus.windowsMany', { count: currentFloor.windows.length })}</span>
-      {/if}
-      {#if currentFloor.furniture.length > 0}
-        <span>{$t(currentFloor.furniture.length === 1 ? 'canvasStatus.objectsOne' : 'canvasStatus.objectsMany', { count: currentFloor.furniture.length })}</span>
-      {/if}
-      <span class="text-gray-300">|</span>
-    {/if}
-    {#if currentSelectedIds.size > 1}
-      <span class="text-blue-600 font-medium">{$t('canvasStatus.selected', { count: currentSelectedIds.size })}</span>
-      <span class="text-gray-300">|</span>
-    {/if}
-    <span>{$t('canvasStatus.zoom', { value: Math.round(zoom * 100) })}</span>
-    <button class="hover:text-gray-700" onclick={() => zoomToFit()} title={$t('canvasZoom.fitHint')}>⊞ {$t('canvasDisplay.fit')}</button>
-    <button class="hover:text-gray-700" onclick={() => showGrid = !showGrid} title={$t('canvasDisplay.gridHint')} aria-pressed={showGrid}>
-      {showGrid ? '▦' : '▢'} {$t('canvasDisplay.grid')}
-    </button>
-    <!-- Snap (S) picks the step snapping rounds to and shows it; the top-bar Snap to Grid turns snapping off, and then this reads "Snap off". -->
-    <button class="hover:text-gray-700" onclick={() => projectSettings.update(s => ({ ...s, snapToGrid: !s.snapToGrid }))} title={snapControl.title} aria-pressed={snapControl.pressed}>
-      <span class:opacity-40={!currentSnapEnabled}>🧲</span> {snapControl.label}
-    </button>
-    <button class="hover:text-gray-700" onclick={() => layerVisibility.update(v => ({ ...v, furniture: !v.furniture }))} title={$t('canvasDisplay.furnitureHint')} aria-pressed={showFurniture}>
-      {showFurniture ? '🪑' : '👻'} {$t('canvasDisplay.furniture')}
-    </button>
-    <button class="hover:text-gray-700" onclick={() => showLayerPanel = !showLayerPanel} title={$t('layerVisibility.title')}>
-      🗂 {$t('layers.title')}
-    </button>
-    <button class="hover:text-gray-700" onclick={() => showRulers = !showRulers} title={$t('canvasDisplay.rulersHint')} aria-pressed={showRulers}>
-      {showRulers ? '📏' : '📐'} {$t('canvasDisplay.rulers')}
-    </button>
-    <button class="hover:text-gray-700" onclick={() => showMinimap = !showMinimap} title={$t('canvasDisplay.mapHint')} aria-pressed={showMinimap}>
-      {showMinimap ? '🗺' : '🗺'} {$t('canvasDisplay.map')}
-    </button>
-  </div>
-  <!-- Layer Visibility Panel -->
-  {#if showLayerPanel}
-    <div style:--visible-bottom={`${zoomControlsBottom}px`} class="absolute bottom-12 right-2 max-md:bottom-[calc(var(--visible-bottom)+6rem)] z-20 bg-white rounded-lg shadow-lg border border-gray-200 p-3 text-xs min-w-[160px]">
-      <div class="font-semibold text-gray-700 mb-2">{$t('layers.title')}</div>
-      {#each [['walls',$t('layers.walls')],['doors',$t('layers.doors')],['windows',$t('layers.windows')],['furniture',$t('layers.furniture')],['stairs',$t('layers.stairs')],['columns',$t('layers.columns')],['guides',$t('layers.guides')],['measurements',$t('layers.measurements')],['annotations',$t('layerVisibility.dimensions')],['textAnnotations',$t('layers.textAnnotations')]] as [key, label]}
-        <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
-          <input type="checkbox" checked={(layerVis as Record<string, boolean>)[key]} onchange={() => layerVisibility.update(v => ({ ...v, [key]: !(v as Record<string, boolean>)[key] }))} class="accent-blue-500" />
-          <span>{label}</span>
-        </label>
-      {/each}
-      <hr class="my-1 border-gray-100" />
-      <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1" class:opacity-40={!floorBelow}>
-        <input type="checkbox" checked={layerVis.floorBelow} disabled={!floorBelow} onchange={() => layerVisibility.update(v => ({ ...v, floorBelow: !v.floorBelow }))} class="accent-blue-500" />
-        <span>{floorBelow ? $t('layerVisibility.belowNamed', { name: floorBelow.name }) : $t('layerVisibility.below')}</span>
-      </label>
-      <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
-        <input type="checkbox" checked={showRoomLabels} onchange={() => layerVisibility.update(v => ({ ...v, roomLabels: !v.roomLabels }))} class="accent-blue-500" />
-        <span>{$t('layerVisibility.roomLabels')}</span>
-      </label>
-      <label class="flex items-center gap-2 py-0.5 cursor-pointer hover:bg-gray-50 rounded px-1">
-        <input type="checkbox" checked={showDimensions} onchange={() => projectSettings.update(s => ({ ...s, showDimensions: !s.showDimensions }))} class="accent-blue-500" />
-        <span>{$t('layerVisibility.automaticDimensions')}</span>
-      </label>
-    </div>
+  {#if holdRing}
+    <div class="op-hold-ring" style="left: {holdRing.x}px; top: {holdRing.y}px;" aria-hidden="true"></div>
   {/if}
 
-  <!-- Contextual Toolbar (hidden while the integrated elevation view covers the canvas) -->
-  {#if (currentSelectedId || currentSelectedIds.size > 0) && currentFloor && currentTool === 'select' && !elevationOpen}
-    {@const el = (() => {
-      const f = currentFloor;
-      const wall = f.walls.find(w => w.id === currentSelectedId);
-      if (wall) {
-        const s = worldToScreen((wall.start.x + wall.end.x) / 2, (wall.start.y + wall.end.y) / 2);
-        return { type: 'wall', pos: s };
-      }
-      const door = f.doors.find(d => d.id === currentSelectedId);
-      if (door) {
-        const w = f.walls.find(w => w.id === door.wallId);
-        if (w) {
-          const s = worldToScreen(w.start.x + (w.end.x - w.start.x) * door.position, w.start.y + (w.end.y - w.start.y) * door.position);
-          return { type: 'door', pos: s, door };
-        }
-      }
-      const win = f.windows.find(w => w.id === currentSelectedId);
-      if (win) {
-        const w = f.walls.find(w => w.id === win.wallId);
-        if (w) {
-          const s = worldToScreen(w.start.x + (w.end.x - w.start.x) * win.position, w.start.y + (w.end.y - w.start.y) * win.position);
-          return { type: 'window', pos: s };
-        }
-      }
-      const furn = f.furniture.find(fi => fi.id === currentSelectedId);
-      if (furn) {
-        const s = worldToScreen(furn.position.x, furn.position.y);
-        return { type: 'furniture', pos: s };
-      }
-      const positioned = [...f.stairs ?? [], ...f.columns ?? [], ...f.entourage ?? []].find(item => item.id === currentSelectedId);
-      if (positioned) return { type: 'object', pos: worldToScreen(positioned.position.x, positioned.position.y) };
-      return null;
-    })()}
-    {#if el}
-      <div
-        class="absolute z-40 flex items-center gap-0.5 bg-white rounded-lg shadow-lg border border-gray-200 px-1 py-0.5"
-        style="left: {el.pos.x}px; top: {el.pos.y - 44}px; transform: translateX(-50%);"
-      >
-        <button
-          class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-          title={$t('contextMenu.duplicate')}
-          aria-label={$t('contextMenu.duplicate')}
-          onclick={() => {
-            if (!currentSelectedId || !currentFloor) return;
-            const ids = currentSelectedIds.size ? currentSelectedIds : new Set([currentSelectedId]);
-            const newIds = duplicateSelection(ids);
-            if (newIds.length) {
-              selectedElementIds.set(new Set(newIds));
-              selectedElementId.set(newIds[0]);
-            }
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-        </button>
-        {#if el.type === 'door' && el.door}
-          <button
-            class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-            title={$t('canvasActions.flipSwing')}
-            aria-label={$t('canvasActions.flipSwing')}
-            onclick={() => { if (el.door) updateDoor(el.door.id, { swingDirection: el.door.swingDirection === 'left' ? 'right' : 'left' }); }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 16V4m0 0L3 8m4-4l4 4M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>
-          </button>
-        {/if}
-        {#if el.type === 'wall' && currentSelectedId && currentSelectedIds.size === 0}
-          <button
-            class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700"
-            title={$t('canvasActions.splitMidpoint')}
-            aria-label={$t('canvasActions.splitMidpoint')}
-            onclick={() => {
-              if (currentSelectedId) {
-                const newId = trySplitWall(currentSelectedId, 0.5);
-                if (newId) selectedElementId.set(null);
-              }
-            }}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M4 12h4M16 12h4"/></svg>
-          </button>
-        {/if}
-        <div class="w-px h-5 bg-gray-200 mx-0.5"></div>
-        <button
-          class="w-7 h-7 flex items-center justify-center rounded hover:bg-red-50 text-gray-400 hover:text-red-600"
-          title={$t('contextMenu.delete')}
-          aria-label={$t('contextMenu.delete')}
-          onclick={() => {
-            if (currentSelectedIds.size > 0) {
-              beginUndoGroup();
-              for (const id of currentSelectedIds) removeElement(id);
-              endUndoGroup();
-              selectedElementIds.set(new Set());
-              selectedElementId.set(null);
-            } else if (currentSelectedId) {
-              removeElement(currentSelectedId);
-              selectedElementId.set(null);
-            }
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14"/></svg>
-        </button>
-      </div>
-    {/if}
-  {/if}
-  {#if currentTool === 'wall' && wallStart}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-blue-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {$t('canvasHints.wall')}
-    </div>
-  {/if}
-  {#if currentPlacingId && currentTool === 'furniture'}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-purple-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {$t('canvasHints.furniture', { angle: currentPlacingRotation })}
-    </div>
-  {/if}
-  {#if measuring}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-red-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {$t('canvasHints.measure')}
-    </div>
-  {/if}
-  {#if textAnnotationMode}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-emerald-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {$t('canvasHints.text')}
-    </div>
-  {/if}
-  {#if annotating}
-    <div class="absolute top-2 left-1/2 -translate-x-1/2 bg-indigo-600 text-white px-3 py-1 rounded-full text-xs shadow">
-      {$t(annotationStart ? 'canvasHints.annotateEnd' : 'canvasHints.annotateStart')}
-    </div>
-  {/if}
-
-  <!-- Zoom Controls (bottom-left) -->
-  <div style:bottom={`${zoomControlsBottom}px`} class="absolute left-3 max-md:left-20 z-20 flex items-center gap-1 bg-white rounded-lg shadow-lg border border-gray-200 px-1 py-0.5">
-    <button
-      class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-600 hover:text-gray-800 font-bold text-lg"
-      title={$t('canvasZoom.outHint')}
-      aria-label={$t('canvasZoom.out')}
-      onclick={() => {
-        const newZoom = Math.max(minimumZoom, zoom * 0.8);
-        // Zoom towards canvas center
-        const worldCX = (width / 2 - width / 2) / zoom + camX;
-        const worldCY = (height / 2 - height / 2) / zoom + camY;
-        camX = worldCX - (width / 2 - width / 2) / newZoom;
-        camY = worldCY - (height / 2 - height / 2) / newZoom;
-        zoom = newZoom;
-      }}
-    >−</button>
-    <button
-      class="min-w-[3.5rem] h-7 flex items-center justify-center rounded hover:bg-gray-100 text-xs font-medium text-gray-600 hover:text-gray-800 tabular-nums"
-      title={$t('canvasZoom.resetHint')}
-      aria-label={$t('canvasZoom.reset')}
-      onclick={() => { zoom = 1; }}
-    >{zoom < 0.01 ? (zoom * 100).toPrecision(2) : Math.round(zoom * 100)}%</button>
-    <button
-      class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-600 hover:text-gray-800 font-bold text-lg"
-      title={$t('canvasZoom.inHint')}
-      aria-label={$t('canvasZoom.in')}
-      onclick={() => {
-        const newZoom = Math.min(10, zoom * 1.25);
-        zoom = newZoom;
-      }}
-    >+</button>
-    <div class="w-px h-5 bg-gray-200"></div>
-    <button
-      class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 text-sm"
-      title={$t('canvasZoom.fitHint')}
-      aria-label={$t('canvasZoom.fit')}
-      onclick={() => zoomToFit()}
-    >⊞</button>
-    <button
-      class="w-7 h-7 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500 hover:text-gray-700 text-sm disabled:opacity-30 disabled:cursor-not-allowed"
-      title={$t('canvasZoom.selectionHint')}
-      aria-label={$t('canvasZoom.selection')}
-      disabled={fitSelectionIds().size === 0}
-      onclick={() => zoomToFit(true)}
-    >⊡</button>
-  </div>
 
   {#if splitBlocked}
-    <div role="status" class="absolute top-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-md max-w-[90%]">
+    <div role="status" class="absolute top-[148px] left-1/2 -translate-x-1/2 z-30 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-md max-w-[90%]">
       <span>{$t('canvasActions.splitBlocked')}</span>
       <button class="shrink-0 underline" onclick={() => { splitBlocked = false; }}>{$t('editorRecovery.dismiss')}</button>
     </div>

@@ -1,4 +1,5 @@
 import type { Floor, Point, Wall } from '$lib/models/types';
+import { copyConstraints } from '$lib/utils/constraints/cascade';
 import { wallPathProfile } from './wallProfiles';
 
 /** Where a copy kept on the same wall lands: a tenth of the wall further along
@@ -24,12 +25,12 @@ export function duplicatePlanSelection(floor: Floor, selected: ReadonlySet<strin
 
 /** Paste saved geometry into a destination floor without consulting live source objects. */
 export function pastePlanSelection(source: Floor, floor: Floor, selected: ReadonlySet<string>, uid: () => string, step = 1): string[] {
-  const mapping = new Map<string, string>();
+  const mapping = new Map<string, string>(), wallMapping = new Map<string, string>();
   const offset = (p: Point): Point => ({ x: p.x + 30 * step, y: p.y + 30 * step });
   for (const wall of [...source.walls]) {
     if (!selected.has(wall.id)) continue;
     const copy = structuredClone(wall);
-    copy.id = uid(); mapping.set(wall.id, copy.id);
+    copy.id = uid(); mapping.set(wall.id, copy.id); wallMapping.set(wall.id, copy.id);
     copy.start = offset(copy.start); copy.end = offset(copy.end);
     if (copy.curvePoint) copy.curvePoint = offset(copy.curvePoint);
     floor.walls.push(copy);
@@ -68,6 +69,9 @@ export function pastePlanSelection(source: Floor, floor: Floor, selected: Readon
       (items as typeof copy[]).push(copy);
     }
   }
+  // Constraints come along when every wall they refer to was copied.
+  const constraints = copyConstraints(source.constraints ?? [], wallMapping, { x: 30 * step, y: 30 * step }, uid);
+  if (constraints.length) (floor.constraints ??= []).push(...constraints);
   for (const group of [...source.groups ?? []]) {
     if (group.elementIds.length < 2 || !group.elementIds.every(id => mapping.has(id))) continue;
     (floor.groups ??= []).push({ ...structuredClone(group), id: uid(), elementIds: group.elementIds.map(id => mapping.get(id)!) });

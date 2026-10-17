@@ -8,6 +8,7 @@ import { projectPackageBytes, readProjectPackage } from '$lib/services/projectPa
 import { usedPhotoNames, deleteUnusedPhoto } from '$lib/services/itemPhotos';
 import type { CustomModelDef } from '$lib/models/types';
 import { removeCustomModel } from '$lib/services/customModels';
+import { branchAlternative } from '$lib/utils/planAlternatives';
 
 const bytes = readFileSync('tests/fixtures/local-model-textured-box.glb');
 const definition: CustomModelDef = { id: 'fixture-model', name: 'Fixture box', assetName: 'fixture-box.glb',
@@ -75,6 +76,13 @@ it('refuses model removal while furniture uses it, including on another floor', 
   expect(project).toEqual(before);
   const another = structuredClone(project.floors[0]); another.id = 'another-floor'; another.level = 1;
   project.floors.push(another); project.floors[0].furniture = [];
+  expect(() => removeCustomModel(project, definition.id)).toThrow('placed furniture');
+});
+
+it('refuses model removal while another plan alternative uses it', () => {
+  const project = modelProject();
+  branchAlternative(project, { id: 'b', originalId: 'a', now: new Date(), nameFor: letter => `Option ${letter}` });
+  project.floors[0].furniture = [];
   expect(() => removeCustomModel(project, definition.id)).toThrow('placed furniture');
 });
 
