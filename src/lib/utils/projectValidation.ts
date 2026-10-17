@@ -3,6 +3,9 @@ import { validateItemDetails, validateRetainedDetailState } from './itemDetails'
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
 
+/** Highest ceiling height accepted in `floor.roomCeilingHeights`, in cm (matches utils/ceilingHeights.ts). */
+const MAX_CEILING_HEIGHT = 100_000;
+
 /** Wall ids a stored constraint mentions (tolerant of malformed input; validation reports that). */
 function constraintWallIds(item: Record<string, any>): string[] {
   const ids = [item.wallId, item.wallA, item.wallB, item.a?.wallId, item.b?.wallId, item.point?.wallId, item.target?.wallId];
@@ -138,6 +141,17 @@ export function readProject(value: unknown): Project {
       for (const key of ['x', 'y', 'z']) number(item.scale[key], `${path}.scale.${key}`);
       for (const key of ['width', 'depth', 'height']) if (item[key] !== undefined) positive(item[key], `${path}.${key}`);
       if (item.elevation !== undefined) number(item.elevation, `${path}.elevation`, 0);
+      if (item.mount !== undefined) choice(item.mount, ['floor', 'wall', 'ceiling'], `${path}.mount`);
+      if (item.drop !== undefined) number(item.drop, `${path}.drop`, 0);
+      // A wall host is kept only while its wall exists, like a door's; otherwise the item stays where it is, unhosted.
+      if (item.wallId !== undefined || item.wallPosition !== undefined || item.wallSide !== undefined) {
+        if (typeof item.wallId !== 'string' || !walls.has(item.wallId) || item.wallPosition === undefined) {
+          delete item.wallId; delete item.wallPosition; delete item.wallSide;
+        } else {
+          number(item.wallPosition, `${path}.wallPosition`, 0, 1);
+          if (item.wallSide !== undefined) choice(item.wallSide, [1, -1] as any, `${path}.wallSide`);
+        }
+      }
       strings(item, ['color', 'material', 'sourceCategory'], path); booleans(item, ['locked'], path);
     });
     elements('stairs', (item, path) => {
@@ -157,6 +171,24 @@ export function readProject(value: unknown): Project {
       strings(item, ['name', 'floorTexture', 'color', 'roomType'], path); number(item.area, `${path}.area`, 0);
       if (item.labelOffset !== undefined) point(item.labelOffset, `${path}.labelOffset`);
     });
+    if (floor.roomCeilingHeights !== undefined) {
+      const heights = record(floor.roomCeilingHeights, `${path}.roomCeilingHeights`);
+      for (const [id, height] of Object.entries(heights)) {
+        number(height, `${path}.roomCeilingHeights.${id}`, 0, MAX_CEILING_HEIGHT);
+        if (height <= 0) fail(`${path}.roomCeilingHeights.${id}`, 'must be greater than zero');
+      }
+    }
+    // Ceiling heights edited as room metadata (the native app, the details panel, older
+    // files) win over the map: copy them in, and let an explicit null clear the override.
+    for (const room of floor.rooms) {
+      const legacy = room.details?.ceilingHeight;
+      if (typeof legacy === 'number' && legacy > 0 && legacy <= MAX_CEILING_HEIGHT) {
+        if (floor.roomCeilingHeights?.[room.id] !== legacy) floor.roomCeilingHeights = { ...floor.roomCeilingHeights, [room.id]: legacy };
+      } else if (legacy === null && floor.roomCeilingHeights && Object.hasOwn(floor.roomCeilingHeights, room.id)) {
+        delete floor.roomCeilingHeights[room.id];
+        if (Object.keys(floor.roomCeilingHeights).length === 0) delete floor.roomCeilingHeights;
+      }
+    }
     elements('guides', (item, path) => {
       choice(item.orientation, ['horizontal', 'vertical'], `${path}.orientation`); number(item.position, `${path}.position`);
     });

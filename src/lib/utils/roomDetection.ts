@@ -140,7 +140,7 @@ export function detectRooms(walls: Wall[]): Room[] {
 }
 
 /** A detected room and the outline of the face it was traced from. */
-interface RoomFace {
+export interface RoomFace {
   room: Room;
   polygon: Point[];
 }

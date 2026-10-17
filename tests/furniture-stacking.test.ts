@@ -67,3 +67,23 @@ describe('wall-hung catalog items', () => {
     expect(size.max.z - size.min.z).toBeCloseTo(def.depth);
   });
 });
+
+describe('mounts in stacking', () => {
+  const table = item('table', 'dining_table', 100, 100); // 120 × 80 × 75
+  const vase = item('vase', 'potted_plant', 100, 100);
+
+  it('never rests anything on wall or ceiling mounts', () => {
+    const hugeLight = item('light', 'ceiling_light', 100, 100, { width: 400, depth: 400 });
+    expect(surfaceBelow(vase, [table, hugeLight, vase])).toBe(75);
+    const wallShelf = item('shelf', 'dining_table', 100, 100, { mount: 'wall', elevation: 0 });
+    expect(surfaceBelow(vase, [wallShelf, vase])).toBe(0);
+  });
+
+  it('draws floor items, then wall items, then ceiling items', () => {
+    const pendant = item('pendant', 'pendant_light', 100, 100);
+    const outlet = item('outlet', 'sym_outlet', 100, 100, { elevation: 30 });
+    const lifted = item('lifted', 'tv_lowboard', 100, 100, { elevation: 120 });
+    expect(byElevation([pendant, outlet, lifted, table]).map(i => i.id)).toEqual(['table', 'lifted', 'outlet', 'pendant']);
+    expect(byElevation([pendant, table]).map(i => i.id)).toEqual(['table', 'pendant']);
+  });
+});

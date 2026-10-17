@@ -9,6 +9,9 @@ import { catalogOpen, closePopover } from '$lib/stores/chrome';
 import { selectMode } from '$lib/stores/planView';
 import { activeTrade, activeSurface, type Trade } from '$lib/stores/workContext';
 import { contextForTool } from './tradeTools';
+import { getCatalogItem, furnitureTrade } from '$lib/utils/furnitureCatalog';
+import { defSurface } from '$lib/utils/mounting';
+import { switchSurface } from './surface';
 
 /**
  * The tools in the strip. View moves around and taps to look at things without
@@ -32,9 +35,17 @@ export const toolGroup = derived(
  * A tool can be chosen without its trade's bar showing: a shortcut (W, D…), the
  * command palette or the catalog. The bars then follow the tool, so pressing W
  * while working on Electrical switches to Furnishing on the floor and its Wall tool.
- * (Package 3: placing an item from another trade's catalog will refine this.)
+ * An armed catalog item brings its own trade and surface (see placeCatalogItem),
+ * so a ceiling light being placed keeps the plan on Electrical / ceiling.
  */
 toolGroup.subscribe(group => {
+  const armed = group === 'furniture' ? get(placingFurnitureId) : null;
+  const def = armed ? getCatalogItem(armed) : undefined;
+  if (def) {
+    activeTrade.set(furnitureTrade(def));
+    activeSurface.set(defSurface(def));
+    return;
+  }
   const next = contextForTool(group, get(activeTrade), get(activeSurface));
   if (!next) return;
   activeTrade.set(next.trade);
@@ -131,4 +142,26 @@ export function placeStairs() {
 /** Done: back to View or Select with nothing armed. */
 export function finishTool() {
   chooseGroup(homeGroup);
+}
+
+/**
+ * Arm a catalog item for placement from anywhere (catalog sheet, command palette,
+ * build panel). Switches to the item's trade and surface first, with the usual
+ * clean-up (spec §5.1, §5.2: a ceiling light switches to Electrical on the ceiling),
+ * and only then arms it, because those switches go back to Select and clear any
+ * placement. Returns false for an unknown catalog id.
+ */
+export function placeCatalogItem(id: string): boolean {
+  const def = getCatalogItem(id);
+  if (!def) return false;
+  switchTrade(furnitureTrade(def));
+  switchSurface(defSurface(def));
+  placingEntourageId.set(null);
+  panMode.set(false);
+  // Arm before choosing the tool: the tool group follows the armed item's context,
+  // while the bare Furniture tool would pull the plan back to Furnishing / floor.
+  placingFurnitureId.set(id);
+  selectedTool.set('furniture');
+  catalogOpen.set(false);
+  return true;
 }

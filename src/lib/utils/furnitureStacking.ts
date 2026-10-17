@@ -1,7 +1,12 @@
 import type { FurnitureItem, Point } from '$lib/models/types';
 import { getCatalogItem, getFurnitureSize } from './furnitureCatalog';
+import { furnitureMount } from './mounting';
 
-/** Height of the item's bottom above the floor, in centimetres. */
+/**
+ * The stored height of the item's bottom above the floor, in centimetres. Ceiling
+ * mounts store none (this returns 0); use `effectiveElevation` from mounting.ts
+ * wherever the real height of every mount is needed.
+ */
 export function furnitureElevation(item: FurnitureItem): number {
   return typeof item.elevation === 'number' && Number.isFinite(item.elevation) && item.elevation > 0 ? item.elevation : 0;
 }
@@ -19,6 +24,8 @@ export function surfaceBelow(item: FurnitureItem, furniture: FurnitureItem[]): n
   let top = 0;
   for (const other of furniture) {
     if (other.id === item.id || (getCatalogItem(other.catalogId)?.symbol && !other.customModelId)) continue;
+    // Wall and ceiling mounts are not surfaces: a pendant over a table holds nothing up.
+    if (furnitureMount(other) !== 'floor') continue;
     if (!furnitureContains(other, item.position)) continue;
     // Things rest on larger things: a TV on its stand, never the stand on the TV.
     const otherSize = getFurnitureSize(other);
@@ -30,9 +37,16 @@ export function surfaceBelow(item: FurnitureItem, furniture: FurnitureItem[]): n
   return top;
 }
 
-/** Draw order: lower objects first, so stacked items render (and hit-test) on top. Stable. */
+const MOUNT_RANK = { floor: 0, wall: 1, ceiling: 2 } as const;
+
+/**
+ * Draw order: floor items, then wall items, then ceiling items; within each, lower
+ * objects first, so stacked and overhead items render (and hit-test) on top. Stable.
+ */
 export function byElevation(furniture: FurnitureItem[]): FurnitureItem[] {
-  return furniture.some(item => furnitureElevation(item) > 0)
-    ? furniture.map((item, index) => ({ item, index })).sort((a, b) => furnitureElevation(a.item) - furnitureElevation(b.item) || a.index - b.index).map(({ item }) => item)
+  const rank = (item: FurnitureItem) => MOUNT_RANK[furnitureMount(item)];
+  return furniture.some(item => furnitureElevation(item) > 0 || rank(item) > 0)
+    ? furniture.map((item, index) => ({ item, index, rank: rank(item) }))
+      .sort((a, b) => a.rank - b.rank || furnitureElevation(a.item) - furnitureElevation(b.item) || a.index - b.index).map(({ item }) => item)
     : furniture;
 }

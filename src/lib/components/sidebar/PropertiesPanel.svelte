@@ -20,6 +20,7 @@
   import { floorMaterials, wallColors } from '$lib/utils/materials';
   import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
   import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
+  import { effectiveElevation, furnitureDrop, furnitureMount } from '$lib/utils/mounting';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
     import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
@@ -278,7 +279,14 @@
   let furnitureSurfaceBelow = $derived(selectedFurniture && floor ? surfaceBelow(selectedFurniture, floor.furniture) : 0);
   function onFurnitureElevation(e: Event) {
     if (!selectedFurniture) return;
-    dimensionInput(e, furnitureElevation(selectedFurniture), value => updateFurniture(selectedFurniture!.id, { elevation: value }), true);
+    // Floor and wall items (a wall item saved without a height shows its catalog mounting height).
+    dimensionInput(e, effectiveElevation(selectedFurniture, 0), value => updateFurniture(selectedFurniture!.id, { elevation: value }), true);
+  }
+  /** Floor items stand at an elevation, wall items at a mounting height, ceiling items hang a drop below the ceiling. */
+  let furnitureMountKind = $derived(selectedFurniture ? furnitureMount(selectedFurniture) : 'floor');
+  function onFurnitureDrop(e: Event) {
+    if (!selectedFurniture) return;
+    dimensionInput(e, furnitureDrop(selectedFurniture), value => updateFurniture(selectedFurniture!.id, { drop: value }), true);
   }
   function onFurnitureMaterial(e: Event) {
     if (!selectedFurniture) return;
@@ -845,16 +853,28 @@
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm" 
         />
       </label>
+      {#if furnitureMountKind === 'ceiling'}
       <label class="block">
-        <span class="text-xs text-gray-500">{$t('furnitureProperties.elevation')} ({unitLabel()})</span>
+        <span class="text-xs text-gray-500">{$t('furnitureProperties.drop')} ({unitLabel()})</span>
+        <input
+          type="number" data-furniture-drop title={$t('furnitureProperties.dropHint')}
+          value={displayValue(furnitureDrop(selectedFurniture))}
+          oninput={onFurnitureDrop} onblur={onFurnitureDrop} min="0" step="any"
+          class="w-full px-2 py-1 border border-gray-200 rounded text-sm"
+        />
+      </label>
+      {:else}
+      <label class="block">
+        <span class="text-xs text-gray-500">{$t(furnitureMountKind === 'wall' ? 'furnitureProperties.mountingHeight' : 'furnitureProperties.elevation')} ({unitLabel()})</span>
         <input
           type="number" data-furniture-elevation
-          value={displayValue(furnitureElevation(selectedFurniture))}
+          value={displayValue(effectiveElevation(selectedFurniture, 0))}
           oninput={onFurnitureElevation} onblur={onFurnitureElevation} min="0" step="any"
           class="w-full px-2 py-1 border border-gray-200 rounded text-sm"
         />
       </label>
-      {#if Math.abs(furnitureSurfaceBelow - furnitureElevation(selectedFurniture)) > 0.01}
+      {/if}
+      {#if furnitureMountKind === 'floor' && Math.abs(furnitureSurfaceBelow - furnitureElevation(selectedFurniture)) > 0.01}
         <button
           data-furniture-place-on-surface
           onclick={() => { if (selectedFurniture) updateFurniture(selectedFurniture.id, { elevation: furnitureSurfaceBelow }); }}

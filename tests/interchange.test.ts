@@ -372,3 +372,29 @@ describe('interchangeProjectName', () => {
     expect(interchangeProjectName('text', 'fallback')).toBe('fallback');
   });
 });
+
+describe('object heights', () => {
+  it('writes each object centre at its effective elevation, ceiling items under their room ceiling', () => {
+    const project = createDefaultProject('Heights');
+    const floor = project.floors[0];
+    floor.walls = rectangleWalls('h'); // 400 × 300, 250 cm walls
+    const room = resolveRooms(floor)[0];
+    floor.rooms = [room];
+    floor.roomCeilingHeights = { [room.id]: 240 };
+    const at = (id: string, catalogId: string, extra = {}) => ({ id, catalogId, position: { x: 100, y: 100 }, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...extra });
+    floor.furniture = [
+      at('sofa', 'sofa'),
+      at('board', 'tv_lowboard', { elevation: 25 }),
+      at('pendant', 'pendant_light', { drop: 20 }),
+      at('outside', 'ceiling_light', { position: { x: 1000, y: 1000 } }),
+    ];
+    const file = projectToPreparedRoomPlan(project) as any;
+    const y = (id: string) => byId(file.objects, id).transform[13];
+    near(y('sofa'), 0.4);
+    near(y('board'), 0.25 + 0.18);
+    // 240 ceiling − 20 drop − 30 shade = 190 bottom; centre 205.
+    near(y('pendant'), 2.05);
+    // Outside every room: the floor's wall height (250) − 15 cm light; centre 242.5.
+    near(y('outside'), 2.425);
+  });
+});

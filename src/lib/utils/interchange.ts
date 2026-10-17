@@ -10,6 +10,9 @@
  * - Transforms are column-major 4×4 `[c,0,s,0, 0,1,0,0, -s,0,c,0, x,y,z,1]`; the heading is
  *   `atan2(t[2], t[0])`. A wall sits at its midpoint with y = height / 2, heading start → end, so
  *   the importer's direction reproduces start and end. Openings sit on the wall at `position`.
+ * - An object's y is its centre: its bottom above the floor plus half its height. The bottom is the
+ *   stored elevation for floor and wall items, and `ceiling − drop − height` for ceiling items, with
+ *   the ceiling of the room it hangs in (utils/ceilingHeights.ts).
  * - Mirrored furniture negates the local Z column (`scale.y < 0` → t[8], t[10]); the importer's
  *   determinant test turns that back into `scale.y = -1`. A `scale.x < 0` item negates the local X
  *   column instead, which imports as the same pose written as rotation + 180° with `scale.y = -1`.
@@ -22,7 +25,10 @@
  * bifold → single; an `opening` carries no hinge or swing; window types other than sliding →
  * fixed; custom models export as their catalog box; stairs, columns, dimension/text annotations,
  * measurements, guides, entourage, background images, colours, textures and item details are not
- * exported. Floor openings ("Open to floor below") and floor elevations and slab thicknesses have
+ * exported. An object's mount, drop and wall host and the rooms' ceiling heights are not exported
+ * either; only the resulting object centre height is written. The importer ignores it: catalog
+ * ceiling items hang from the ceiling again by their catalog mount, while raised floor and wall
+ * items come back with no elevation. Floor openings ("Open to floor below") and floor elevations and slab thicknesses have
  * no place in the format (a section has no opening flag, a `stories` entry is `{ index, name }`),
  * so on import the room has its slab again and each floor stands at level × 300 cm on a 5 cm slab.
  *
@@ -35,12 +41,14 @@
  * `lat`/`lon`/`headingDeg`/`photoFile`, and `ios.geoOrigin` is dropped. Room anchors are interior
  * points, never the dragged label position, so names stay with their rooms on re-import.
  */
-import type { Door, Project, Window } from '$lib/models/types';
+import type { Door, Point, Project, Window } from '$lib/models/types';
 import { INTERCHANGE_BLOCK_KEYS, getWallEndHeight, getWallStartHeight, validWallHeight } from '$lib/models/types';
 import { getFurnitureSize } from './furnitureCatalog';
 import { exportedFurnitureCategory } from './furnitureCategories';
 import { getRoomPolygon, resolveRooms } from './roomDetection';
 import { roomHoles, roomInteriorPoint } from './roomNesting';
+import { createCeilingResolver } from './ceilingHeights';
+import { effectiveElevation } from './mounting';
 
 export { INTERCHANGE_BLOCK_KEYS };
 export type { InterchangeState } from '$lib/models/types';
@@ -141,13 +149,17 @@ export function projectToPreparedRoomPlan(project: Project, options: { floorIds?
       windows.push({ ...base, category: { window: {} }, story, style: window.type === 'sliding' ? 'sliding' : 'fixed', sillHeight: metres(sill) });
     }
 
+    // Ceiling items hang from the ceiling above them; resolve it only when there are some.
+    let ceilingAt: ((p: Point) => number) | undefined;
+    const ceiling = (p: Point) => (ceilingAt ??= createCeilingResolver(project, floor))(p);
     for (const item of floor.furniture) {
       const size = getFurnitureSize(item), height = positive(metres(size.height));
       const attributes = retained?.attributes?.[item.id];
+      const bottom = metres(effectiveElevation(item, ceiling));
       objects.push({
         identifier: identifier(item.id, story),
         dimensions: [positive(metres(size.width)), height, positive(metres(size.depth))],
-        transform: transformAt(metres(item.position.x), metres(item.position.y), (item.rotation ?? 0) * Math.PI / 180, r8(height / 2), (item.scale?.x ?? 1) < 0, (item.scale?.y ?? 1) < 0),
+        transform: transformAt(metres(item.position.x), metres(item.position.y), (item.rotation ?? 0) * Math.PI / 180, r8(bottom + height / 2), (item.scale?.x ?? 1) < 0, (item.scale?.y ?? 1) < 0),
         category: { [exportedFurnitureCategory(item)]: {} },
         ...(plain(attributes) ? { attributes: structuredClone(attributes) } : {}),
         story,

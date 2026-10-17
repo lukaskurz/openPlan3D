@@ -1208,6 +1208,7 @@ const iconDrawers: Record<string, DrawFn> = {
   table_lamp: drawTableLamp,
   wall_sconce: drawWallSconce,
   pendant_light: drawPendantLight,
+  ceiling_fan: drawSymCeilingFan,
   // Electrical symbols
   sym_outlet: drawSymOutlet,
   sym_switch: drawSymSwitch,
@@ -1217,6 +1218,7 @@ const iconDrawers: Record<string, DrawFn> = {
   sym_ceiling_fan: drawSymCeilingFan,
   sym_junction: drawSymJunction,
   sym_smoke: drawSymSmoke,
+  smoke_detector: drawSymSmoke,
   // Plumbing symbols
   sym_water_supply: drawSymWaterSupply,
   sym_drain: drawSymDrain,

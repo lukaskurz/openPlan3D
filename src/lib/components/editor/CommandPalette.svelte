@@ -6,7 +6,8 @@
   import { tick } from 'svelte';
   import { modalDialog } from '$lib/utils/modalDialog';
   import { furnitureCatalog } from '$lib/utils/furnitureCatalog';
-  import { selectedTool, snapEnabled, placingFurnitureId, undo, redo, currentProject, viewMode } from '$lib/stores/project';
+  import { placeCatalogItem } from '$lib/components/chrome/tools';
+  import { selectedTool, snapEnabled, undo, redo, currentProject, viewMode } from '$lib/stores/project';
   import { exportAsJSON } from '$lib/utils/export';
   import { get } from 'svelte/store';
   import { goto } from '$app/navigation';
@@ -64,10 +65,7 @@
     category: 'furniture' as const,
     categoryLabel: `🪑 ${catalogCategoryLabels[f.category] ? $t(catalogCategoryLabels[f.category]) : f.category}`,
     searchAliases: [f.name, f.category, f.id],
-    action: () => {
-      selectedTool.set('furniture');
-      placingFurnitureId.set(f.id);
-    },
+    action: () => { placeCatalogItem(f.id); },
   })));
 
   const allItems = $derived([...actions, ...tools, ...furnitureItems]);

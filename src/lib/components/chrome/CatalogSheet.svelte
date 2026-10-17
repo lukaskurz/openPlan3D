@@ -12,6 +12,7 @@
   import { projectSettings, formatLength } from '$lib/stores/settings';
   import { pickFile } from './actions';
   import Icon from './Icon.svelte';
+  import { placeCatalogItem } from './tools';
 
   const PEOPLE = '__people';
   let search = $state('');
@@ -52,10 +53,7 @@
   function place(item: FurnitureDef) {
     recentIds = [item.id, ...recentIds.filter(id => id !== item.id)].slice(0, 10);
     save(RECENT_KEY, recentIds);
-    placingEntourageId.set(null);
-    selectedTool.set('furniture');
-    placingFurnitureId.set(item.id);
-    catalogOpen.set(false);
+    placeCatalogItem(item.id);
   }
 
   function toggleFavourite(id: string) {

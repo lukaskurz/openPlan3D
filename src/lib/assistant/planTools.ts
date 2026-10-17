@@ -150,6 +150,13 @@ function getPlan(): ToolOutcome {
   return { text: lines.join('\n') };
 }
 
+/** How a catalog item is fixed, for search results: ceiling and wall mounts, or a raised floor item. */
+function mountHint(item: (typeof furnitureCatalog)[number]): string {
+  if (item.mount === 'ceiling') return item.defaultDrop ? `, hangs from the ceiling ${item.defaultDrop} cm down` : ', mounted on the ceiling';
+  if (item.mount === 'wall') return `, wall-mounted ${item.elevation ?? 0} cm up`;
+  return item.elevation ? `, hangs ${item.elevation} cm up` : '';
+}
+
 function searchCatalog(input: { query?: string; category?: string }): ToolOutcome {
   const words = String(input.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const category = input.category ? String(input.category).toLowerCase() : null;
@@ -157,7 +164,7 @@ function searchCatalog(input: { query?: string; category?: string }): ToolOutcom
     .filter(item => !category || item.category.toLowerCase() === category)
     .filter(item => !words.length || words.some(word => `${item.id} ${item.name} ${item.category}`.toLowerCase().includes(word)));
   if (!hits.length) return { text: 'No matches. Try a broader word or a category.' };
-  return { text: hits.slice(0, 40).map(item => `${item.id}: ${item.name} (${item.category}) ${item.width}×${item.depth}×${item.height}${item.elevation ? `, hangs ${item.elevation} cm up` : ''}`).join('\n') + (hits.length > 40 ? `\n… ${hits.length - 40} more, narrow the search.` : '') };
+  return { text: hits.slice(0, 40).map(item => `${item.id}: ${item.name} (${item.category}) ${item.width}×${item.depth}×${item.height}${mountHint(item)}`).join('\n') + (hits.length > 40 ? `\n… ${hits.length - 40} more, narrow the search.` : '') };
 }
 
 // ── Validation for placed items ───────────────────────────────────────

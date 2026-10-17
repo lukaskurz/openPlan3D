@@ -216,6 +216,12 @@ export function createFurnitureModel(catalogId: string, def: FurnitureDef): THRE
     case 'pendant_light':
       createPendantLight(group, w, d, h, color);
       break;
+    case 'ceiling_fan':
+      createCeilingFan(group, w, d, h, color);
+      break;
+    case 'smoke_detector':
+      createSmokeDetector(group, w, d, h, color);
+      break;
     // Outdoor furniture
     case 'bench_outdoor':
       createBenchOutdoor(group, w, d, h, color);
@@ -1658,11 +1664,48 @@ function createWallSconce(group: THREE.Group, w: number, d: number, h: number, c
   const mat = createMaterial(color, 0.5, 0.2);
   const geo = new THREE.BoxGeometry(w, h, d);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = 180; // Mounted at 180cm
+  // Built in its own box [0, h]; the item's mounting height (catalog elevation 170) lifts it.
+  mesh.position.y = h / 2;
   group.add(mesh);
   const light = new THREE.PointLight(0xfff5e0, 0.3, 200);
-  light.position.y = 180;
+  light.position.y = h / 2;
   group.add(light);
+}
+
+/**
+ * Ceiling fan, built in its own box [0, h] (the mount at the top, blades at the
+ * bottom); placement lifts it to ceiling − drop − h. Placeholder geometry.
+ */
+function createCeilingFan(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const mat = createMaterial(color, 0.5, 0.3);
+  const metal = createMaterial('#9ca3af', 0.3, 0.8);
+  const canopyH = Math.min(4, h * 0.1), motorH = Math.min(12, h * 0.3), bladeT = 1.5;
+  const canopy = new THREE.Mesh(new THREE.CylinderGeometry(7, 7, canopyH, 16), metal);
+  canopy.position.y = h - canopyH / 2;
+  group.add(canopy);
+  const rodH = Math.max(0, h - canopyH - motorH);
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, rodH, 8), metal);
+  rod.position.y = motorH + rodH / 2;
+  group.add(rod);
+  const motor = new THREE.Mesh(new THREE.CylinderGeometry(10, 12, motorH, 20), mat);
+  motor.position.y = motorH / 2;
+  group.add(motor);
+  const r = Math.min(w, d) / 2;
+  for (let i = 0; i < 4; i++) {
+    const blade = new THREE.Mesh(new THREE.BoxGeometry(r - 10, bladeT, 12), mat);
+    const a = (i / 4) * Math.PI * 2;
+    blade.position.set(Math.cos(a) * (10 + (r - 10) / 2), motorH * 0.4, Math.sin(a) * (10 + (r - 10) / 2));
+    blade.rotation.y = -a;
+    group.add(blade);
+  }
+}
+
+/** Ceiling smoke detector, a flat disc in its own box [0, h]. Placeholder geometry. */
+function createSmokeDetector(group: THREE.Group, w: number, d: number, h: number, color: string): void {
+  const r = Math.min(w, d) / 2;
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 0.9, h, 24), createMaterial(color, 0.6, 0.0));
+  body.position.y = h / 2;
+  group.add(body);
 }
 
 function createPendantLight(group: THREE.Group, w: number, d: number, h: number, color: string): void {

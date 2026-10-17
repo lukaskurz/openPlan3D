@@ -1,5 +1,9 @@
 import { writable, get } from 'svelte/store';
 import { currentProject } from './project';
+import type { Trade, Surface } from '$lib/models/types';
+
+/** The type aliases live in models/types.ts so pure utilities need not import this store. */
+export type { Trade, Surface, Mount } from '$lib/models/types';
 
 /**
  * What the person is working on: a trade (which tools and items are editable)
@@ -7,9 +11,6 @@ import { currentProject } from './project';
  * saved in the project; kept per project in sessionStorage so a reload returns
  * to the same place.
  */
-export type Trade = 'furnishing' | 'electrical' | 'plumbing';
-export type Surface = 'floor' | 'ceiling';
-
 export const TRADES: readonly Trade[] = ['furnishing', 'electrical', 'plumbing'];
 
 export const activeTrade = writable<Trade>('furnishing');

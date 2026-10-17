@@ -105,6 +105,13 @@ export interface Window {
   type: 'standard' | 'fixed' | 'casement' | 'sliding' | 'bay';
 }
 
+/** The trade an item or tool belongs to (spec §4.1). */
+export type Trade = 'furnishing' | 'electrical' | 'plumbing';
+/** Which surface of the current storey the plan shows (spec §4.1). */
+export type Surface = 'floor' | 'ceiling';
+/** How a furniture item is fixed (spec §4.2): standing on the floor, hung on a wall, or hung from the ceiling. */
+export type Mount = 'floor' | 'wall' | 'ceiling';
+
 export interface FurnitureItem {
   /** Project-owned model; catalogId remains a portable procedural fallback. */
   customModelId?: string;
@@ -121,8 +128,22 @@ export interface FurnitureItem {
   width?: number;   // cm
   depth?: number;   // cm
   height?: number;  // cm
-  /** Bottom of the object above the floor, in cm (e.g. a TV on a stand). Missing means 0. */
+  /**
+   * Bottom of the object above the floor, in cm (e.g. a TV on a stand). Missing means 0.
+   * Floor items: where the bottom sits. Wall items: the mounting height (outlet 30, switch 105).
+   * Ceiling items never store it; their height follows the room's ceiling (see `drop`).
+   */
   elevation?: number;
+  /** How the item is fixed. Missing means the catalog's mount, else 'floor'. Read it with `furnitureMount()`. */
+  mount?: Mount;
+  /** Ceiling items: distance from the ceiling to the item's top, in cm (a pendant's cord). Missing means the catalog's `defaultDrop`, else 0. */
+  drop?: number;
+  /** Wall items: the hosting wall, like a door's or window's `wallId`. */
+  wallId?: string;
+  /** Wall items: position along the hosting wall, 0 (start) .. 1 (end). */
+  wallPosition?: number;
+  /** Wall items: which side of the hosting wall the face points to (1 = left of start → end, −1 = right). */
+  wallSide?: 1 | -1;
   material?: string; // material name/id
   locked?: boolean;
 }
@@ -275,6 +296,13 @@ export interface Floor {
   entourage?: EntourageItem[];
   /** Parametric dimensions and geometric constraints on this floor's walls. */
   constraints?: Constraint[];
+  /**
+   * Ceiling height overrides in cm, keyed by saved room id (spec §4.4). Rooms are
+   * derived from walls, so a room gets an entry only once it is saved in `rooms`.
+   * Mirrored into the room's `details.ceilingHeight` for the native package; read the
+   * effective value with `effectiveRoomCeiling()` (utils/ceilingHeights.ts).
+   */
+  roomCeilingHeights?: Record<string, number>;
 }
 
 export interface CustomModelDef {

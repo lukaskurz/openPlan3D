@@ -5,6 +5,7 @@ import { getCatalogItem, type FurnitureDef } from './furnitureCatalog';
 import type { FurnitureItem, Project } from '$lib/models/types';
 import { getModelFile } from './furnitureModelFiles';
 import { furnitureElevation } from './furnitureStacking';
+import { effectiveElevation, furnitureMount } from './mounting';
 import { furnitureFinishes } from './furnitureFinishes';
 import { disposeModel, isModelDisposed, loadCatalogModel, releaseWithModel } from './furnitureModelResources';
 
@@ -108,8 +109,13 @@ function createProjectFurniture(item: FurnitureItem, def: FurnitureDef, project?
   return container;
 }
 
-/** Build a saved item even when its original catalog is unavailable. */
-export function createPlacedFurnitureModel(item: FurnitureItem, onLoaded?: (model: THREE.Group) => void, project?: Project): THREE.Group | null {
+/**
+ * Build a saved item even when its original catalog is unavailable. `elevation` is the
+ * bottom above the floor in cm; pass `effectiveElevation(item, ceilingResolver)` so
+ * ceiling items hang from their room's ceiling. Without it, floor and wall items use
+ * their effective elevation and ceiling items their stored one (legacy behaviour).
+ */
+export function createPlacedFurnitureModel(item: FurnitureItem, onLoaded?: (model: THREE.Group) => void, project?: Project, elevation?: number): THREE.Group | null {
   const catalog = getCatalogItem(item.catalogId);
   const custom = project?.customModels?.find(model => model.id === item.customModelId);
   if (catalog?.symbol && !item.customModelId) return null;
@@ -124,7 +130,8 @@ export function createPlacedFurnitureModel(item: FurnitureItem, onLoaded?: (mode
   const model = item.customModelId ? createProjectFurniture(item, definition, project, onLoaded) : createFurnitureModelWithGLB(item.catalogId, definition, onLoaded, {
     color: item.color, material: item.material,
   });
-  model.position.set(item.position.x, 1.5 + furnitureElevation(item), item.position.y);
+  const bottom = elevation ?? (furnitureMount(item) === 'ceiling' ? furnitureElevation(item) : effectiveElevation(item, 0));
+  model.position.set(item.position.x, 1.5 + bottom, item.position.y);
   model.rotation.y = -item.rotation * Math.PI / 180;
   // The plan's Y scale is world Z; height uses the saved Z magnitude.
   model.scale.set(item.scale?.x ?? 1, Math.abs(item.scale?.z ?? 1), item.scale?.y ?? 1);

@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { get } from 'svelte/store';
-import { selectedTool, selectedElementId, selectedElementIds, panMode } from '$lib/stores/project';
+import { selectedTool, selectedElementId, selectedElementIds, panMode, placingFurnitureId } from '$lib/stores/project';
+import { catalogOpen } from '$lib/stores/chrome';
 import { activeTrade, activeSurface, TRADES } from '$lib/stores/workContext';
-import { chooseGroup, switchTrade, toolGroup } from '$lib/components/chrome/tools';
+import { chooseGroup, switchTrade, toolGroup, placeCatalogItem } from '$lib/components/chrome/tools';
 import {
   FIXED_TOOLS, TRADE_TOOLS, TRADE_INFO, tradeTools, homeOfTool, contextForTool, isFixedTool,
 } from '$lib/components/chrome/tradeTools';
@@ -83,5 +84,58 @@ describe('trade follows the tool', () => {
     expect(get(selectedElementId)).toBeNull();
     expect(get(selectedElementIds).size).toBe(0);
     expect(switchTrade('electrical')).toBe(false);
+  });
+});
+
+describe('placing a catalog item', () => {
+  beforeEach(() => {
+    chooseGroup('select');
+    activeTrade.set('furnishing');
+    activeSurface.set('floor');
+  });
+
+  it('switches to the item’s trade and surface first, then arms it', () => {
+    selectedElementId.set('sofa-1');
+    expect(placeCatalogItem('pendant_light')).toBe(true);
+    expect(get(activeTrade)).toBe('electrical');
+    expect(get(activeSurface)).toBe('ceiling');
+    expect(get(placingFurnitureId)).toBe('pendant_light');
+    expect(get(selectedTool)).toBe('furniture');
+    expect(get(toolGroup)).toBe('furniture');
+    expect(get(catalogOpen)).toBe(false);
+    expect(get(selectedElementId)).toBeNull();
+  });
+
+  it('goes back to the floor for wall items and to Furnishing for furniture', () => {
+    placeCatalogItem('sym_smoke');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    placeCatalogItem('sym_outlet');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'floor']);
+    expect(get(placingFurnitureId)).toBe('sym_outlet');
+    placeCatalogItem('sym_drain');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['plumbing', 'floor']);
+    placeCatalogItem('ceiling_projector');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'ceiling']);
+    placeCatalogItem('sofa');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['furnishing', 'floor']);
+    expect(get(placingFurnitureId)).toBe('sofa');
+  });
+
+  it('keeps the selection when nothing needs to switch, and refuses unknown ids', () => {
+    selectedElementId.set('kept');
+    placeCatalogItem('sofa');
+    expect(get(selectedElementId)).toBe('kept');
+    expect(placeCatalogItem('no-such-item')).toBe(false);
+    expect(get(placingFurnitureId)).toBe('sofa');
+  });
+
+  it('an armed item keeps its context when the tool group changes around it', () => {
+    placeCatalogItem('ceiling_light');
+    // e.g. the canvas re-asserting the furniture tool while placing
+    selectedTool.set('furniture');
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
+    chooseGroup('select');
+    expect(get(placingFurnitureId)).toBeNull();
+    expect([get(activeTrade), get(activeSurface)]).toEqual(['electrical', 'ceiling']);
   });
 });

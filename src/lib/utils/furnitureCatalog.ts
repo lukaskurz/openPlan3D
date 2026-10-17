@@ -1,4 +1,4 @@
-import type { FurnitureItem } from '$lib/models/types';
+import type { FurnitureItem, Mount, Trade } from '$lib/models/types';
 
 export interface FurnitureDef {
   id: string;
@@ -12,8 +12,14 @@ export interface FurnitureDef {
   height: number;
   /** If set, this is a 2D-only architectural symbol (not rendered in 3D) */
   symbol?: boolean;
-  /** Height of the bottom above the floor when placed, in cm (wall-hung items) */
+  /** Height of the bottom above the floor when placed, in cm (wall-hung items: the mounting height). Never used for ceiling mounts. */
   elevation?: number;
+  /** Trade the item belongs to; missing means the category's (see `furnitureTrade`). */
+  trade?: Trade;
+  /** How the item is fixed when placed; missing means 'floor'. */
+  mount?: Mount;
+  /** Ceiling mounts: default distance from the ceiling to the item's top, in cm (a pendant's cord). Missing means 0. */
+  defaultDrop?: number;
 }
 
 export const furnitureCatalog: FurnitureDef[] = [
@@ -26,7 +32,7 @@ export const furnitureCatalog: FurnitureDef[] = [
   { id: 'coffee_table', name: 'Coffee Table', category: 'Living Room', icon: '☕', color: '#92400e', width: 120, depth: 60, height: 45 },
   { id: 'tv_stand', name: 'TV Stand', category: 'Living Room', icon: '📺', color: '#475569', width: 150, depth: 45, height: 50 },
   { id: 'tv_lowboard', name: 'Wall-Hung TV Lowboard', category: 'Living Room', icon: '📺', color: '#cbbfb1', width: 200, depth: 40, height: 36, elevation: 25 },
-  { id: 'ceiling_projector', name: 'Ceiling Projector', category: 'Living Room', icon: '📽️', color: '#e7e5e4', width: 19.3, depth: 21.8, height: 35, elevation: 245 },
+  { id: 'ceiling_projector', name: 'Ceiling Projector', category: 'Living Room', icon: '📽️', color: '#e7e5e4', width: 19.3, depth: 21.8, height: 35, mount: 'ceiling', defaultDrop: 0 },
   { id: 'bookshelf', name: 'Bookshelf', category: 'Living Room', icon: '📚', color: '#92400e', width: 80, depth: 30, height: 180 },
   { id: 'slat_divider', name: 'Slat Room Divider', category: 'Living Room', icon: '🪵', color: '#c8a27a', width: 71.6, depth: 8, height: 245 },
   { id: 'shelf_divider', name: 'Shelf Room Divider', category: 'Living Room', icon: '🪵', color: '#c8a27a', width: 71.6, depth: 20, height: 245 },
@@ -75,13 +81,14 @@ export const furnitureCatalog: FurnitureDef[] = [
   { id: 'mirror', name: 'Mirror', category: 'Decor', icon: '🪞', color: '#94a3b8', width: 60, depth: 5, height: 90 },
   { id: 'clock', name: 'Clock', category: 'Decor', icon: '🕐', color: '#1e293b', width: 30, depth: 5, height: 30 },
   // Lighting
-  { id: 'ceiling_light', name: 'Ceiling Light', category: 'Lighting', icon: '💡', color: '#fef08a', width: 40, depth: 40, height: 15 },
-  { id: 'chandelier', name: 'Chandelier', category: 'Lighting', icon: '✨', color: '#fcd34d', width: 60, depth: 60, height: 50 },
-  { id: 'recessed_light', name: 'Recessed Light', category: 'Lighting', icon: '🔆', color: '#fef9c3', width: 15, depth: 15, height: 5 },
-  { id: 'floor_lamp', name: 'Floor Lamp', category: 'Lighting', icon: '🪔', color: '#e5e7eb', width: 40, depth: 40, height: 160 },
-  { id: 'table_lamp', name: 'Table Lamp', category: 'Lighting', icon: '💡', color: '#fde68a', width: 25, depth: 25, height: 45 },
-  { id: 'wall_sconce', name: 'Wall Sconce', category: 'Lighting', icon: '🔅', color: '#fef3c7', width: 15, depth: 10, height: 20 },
-  { id: 'pendant_light', name: 'Pendant Light', category: 'Lighting', icon: '💡', color: '#fbbf24', width: 30, depth: 30, height: 30 },
+  { id: 'ceiling_light', name: 'Ceiling Light', category: 'Lighting', icon: '💡', color: '#fef08a', width: 40, depth: 40, height: 15, mount: 'ceiling' },
+  { id: 'chandelier', name: 'Chandelier', category: 'Lighting', icon: '✨', color: '#fcd34d', width: 60, depth: 60, height: 50, mount: 'ceiling', defaultDrop: 30 },
+  { id: 'recessed_light', name: 'Recessed Light', category: 'Lighting', icon: '🔆', color: '#fef9c3', width: 15, depth: 15, height: 5, mount: 'ceiling' },
+  { id: 'floor_lamp', name: 'Floor Lamp', category: 'Lighting', icon: '🪔', color: '#e5e7eb', width: 40, depth: 40, height: 160, trade: 'furnishing' },
+  { id: 'table_lamp', name: 'Table Lamp', category: 'Lighting', icon: '💡', color: '#fde68a', width: 25, depth: 25, height: 45, trade: 'furnishing' },
+  { id: 'wall_sconce', name: 'Wall Sconce', category: 'Lighting', icon: '🔅', color: '#fef3c7', width: 15, depth: 10, height: 20, mount: 'wall', elevation: 170 },
+  { id: 'pendant_light', name: 'Pendant Light', category: 'Lighting', icon: '💡', color: '#fbbf24', width: 30, depth: 30, height: 30, mount: 'ceiling', defaultDrop: 60 },
+  { id: 'ceiling_fan', name: 'Ceiling Fan', category: 'Lighting', icon: '🌀', color: '#e7e5e4', width: 130, depth: 130, height: 40, mount: 'ceiling', defaultDrop: 0 },
 
   // Outdoor Furniture
   { id: 'patio_table', name: 'Patio Table', category: 'Outdoor Furniture', icon: '🪑', color: '#92400e', width: 120, depth: 120, height: 75 },
@@ -220,7 +227,7 @@ export const furnitureCatalog: FurnitureDef[] = [
   { id: 'lamp_post', name: 'Lamp Post', category: 'Outdoor Lighting', icon: '🔦', color: '#1e293b', width: 30, depth: 30, height: 300 },
   { id: 'lamp_post_double', name: 'Double Lamp Post', category: 'Outdoor Lighting', icon: '🔦', color: '#1e293b', width: 60, depth: 30, height: 300 },
   { id: 'bollard_light', name: 'Bollard Light', category: 'Outdoor Lighting', icon: '💡', color: '#374151', width: 15, depth: 15, height: 80 },
-  { id: 'wall_sconce_outdoor', name: 'Wall Sconce', category: 'Outdoor Lighting', icon: '💡', color: '#374151', width: 20, depth: 15, height: 30 },
+  { id: 'wall_sconce_outdoor', name: 'Wall Sconce', category: 'Outdoor Lighting', icon: '💡', color: '#374151', width: 20, depth: 15, height: 30, trade: 'electrical', mount: 'wall', elevation: 180 },
   { id: 'spot_light_outdoor', name: 'Spot Light', category: 'Outdoor Lighting', icon: '🔆', color: '#1e293b', width: 15, depth: 15, height: 25 },
   { id: 'string_lights', name: 'String Lights', category: 'Outdoor Lighting', icon: '✨', color: '#fbbf24', width: 300, depth: 10, height: 250 },
   { id: 'solar_path_light', name: 'Solar Path Light', category: 'Outdoor Lighting', icon: '☀️', color: '#374151', width: 12, depth: 12, height: 40 },
@@ -239,14 +246,15 @@ export const furnitureCatalog: FurnitureDef[] = [
   { id: 'mailbox', name: 'Mailbox', category: 'Garden Structures', icon: '📫', color: '#1e293b', width: 30, depth: 20, height: 110 },
 
   // Electrical Symbols (2D only)
-  { id: 'sym_outlet', name: 'Power Outlet', category: 'Electrical', icon: '🔌', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true },
-  { id: 'sym_switch', name: 'Light Switch', category: 'Electrical', icon: '🔘', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true },
-  { id: 'sym_ceiling_light', name: 'Ceiling Light', category: 'Electrical', icon: '💡', color: '#eab308', width: 20, depth: 20, height: 0, symbol: true },
-  { id: 'sym_recessed_light', name: 'Recessed Light', category: 'Electrical', icon: '🔆', color: '#eab308', width: 15, depth: 15, height: 0, symbol: true },
-  { id: 'sym_pendant', name: 'Pendant Light', category: 'Electrical', icon: '💡', color: '#eab308', width: 18, depth: 18, height: 0, symbol: true },
-  { id: 'sym_ceiling_fan', name: 'Ceiling Fan', category: 'Electrical', icon: '🌀', color: '#2563eb', width: 25, depth: 25, height: 0, symbol: true },
+  { id: 'sym_outlet', name: 'Power Outlet', category: 'Electrical', icon: '🔌', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true, mount: 'wall', elevation: 30 },
+  { id: 'sym_switch', name: 'Light Switch', category: 'Electrical', icon: '🔘', color: '#2563eb', width: 15, depth: 15, height: 0, symbol: true, mount: 'wall', elevation: 105 },
+  { id: 'sym_ceiling_light', name: 'Ceiling Light', category: 'Electrical', icon: '💡', color: '#eab308', width: 20, depth: 20, height: 0, symbol: true, mount: 'ceiling' },
+  { id: 'sym_recessed_light', name: 'Recessed Light', category: 'Electrical', icon: '🔆', color: '#eab308', width: 15, depth: 15, height: 0, symbol: true, mount: 'ceiling' },
+  { id: 'sym_pendant', name: 'Pendant Light', category: 'Electrical', icon: '💡', color: '#eab308', width: 18, depth: 18, height: 0, symbol: true, mount: 'ceiling' },
+  { id: 'sym_ceiling_fan', name: 'Ceiling Fan', category: 'Electrical', icon: '🌀', color: '#2563eb', width: 25, depth: 25, height: 0, symbol: true, mount: 'ceiling' },
   { id: 'sym_junction', name: 'Junction Box', category: 'Electrical', icon: '⬜', color: '#2563eb', width: 12, depth: 12, height: 0, symbol: true },
-  { id: 'sym_smoke', name: 'Smoke Detector', category: 'Electrical', icon: '🔔', color: '#dc2626', width: 15, depth: 15, height: 0, symbol: true },
+  { id: 'sym_smoke', name: 'Smoke Detector', category: 'Electrical', icon: '🔔', color: '#dc2626', width: 15, depth: 15, height: 0, symbol: true, mount: 'ceiling' },
+  { id: 'smoke_detector', name: 'Smoke Detector', category: 'Electrical', icon: '🔔', color: '#f5f5f4', width: 12, depth: 12, height: 5, mount: 'ceiling', defaultDrop: 0 },
 
   // Plumbing Symbols (2D only)
   { id: 'sym_water_supply', name: 'Water Supply', category: 'Plumbing', icon: '💧', color: '#0ea5e9', width: 15, depth: 15, height: 0, symbol: true },
@@ -278,6 +286,21 @@ export function getFurnitureSize(fi: FurnitureItem): { width: number; depth: num
     depth: (fi.depth ?? cat?.depth ?? 50) * Math.abs(fi.scale?.y ?? 1),
     height: (fi.height ?? cat?.height ?? 50) * Math.abs(fi.scale?.z ?? 1),
   };
+}
+
+/** Trades by catalog category; categories not listed are furnishing (spec §4.3). */
+const CATEGORY_TRADES: Readonly<Record<string, Trade>> = { Electrical: 'electrical', Lighting: 'electrical', Plumbing: 'plumbing' };
+
+/**
+ * The trade a catalog definition or a placed item belongs to: the definition's own
+ * `trade`, else its category's (Electrical and Lighting → electrical, Plumbing →
+ * plumbing), else furnishing. Placed items use their catalog definition; unknown
+ * catalog ids (custom models, imports) are furnishing.
+ */
+export function furnitureTrade(defOrItem: FurnitureDef | Pick<FurnitureItem, 'catalogId'>): Trade {
+  const def = 'catalogId' in defOrItem ? getCatalogItem(defOrItem.catalogId) : defOrItem;
+  if (!def) return 'furnishing';
+  return def.trade ?? CATEGORY_TRADES[def.category] ?? 'furnishing';
 }
 
 export const furnitureCategories = [...new Set(furnitureCatalog.map(f => f.category))];

@@ -1,6 +1,7 @@
 /** Plan geometry shared by the Assistant's tools and checks. Centimetres, y down. */
 import type { FurnitureItem, Point, Wall } from '$lib/models/types';
 import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
+import { furnitureMount } from '$lib/utils/mounting';
 
 export function polygonArea(poly: Point[]): number {
   let sum = 0;
@@ -94,7 +95,7 @@ export function wallQuad(wall: Wall, inset = 0): Point[] {
 /** Items that sit on top of others or overhead never block anything. */
 export function isLayered(item: FurnitureItem): boolean {
   const def = getCatalogItem(item.catalogId);
-  return !!(item.elevation ?? def?.elevation) || /rug|carpet|mat\b|ceiling|pendant|chandelier/i.test(item.catalogId) || !!def?.symbol;
+  return furnitureMount(item) !== 'floor' || !!(item.elevation ?? def?.elevation) || /rug|carpet|mat\b|ceiling|pendant|chandelier/i.test(item.catalogId) || !!def?.symbol;
 }
 
 export function catalogName(item: FurnitureItem): string {

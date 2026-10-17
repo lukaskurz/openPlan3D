@@ -9,6 +9,8 @@ import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validP
 import { getOuterWalls } from '$lib/utils/outerWalls';
 import { nextFloorLevel, floorElevations, validFloorElevation, orderedFloors, DEFAULT_FLOOR_SPACING } from '$lib/utils/floors';
 import { getCatalogItem } from '$lib/utils/furnitureCatalog';
+import { defaultMountingHeight, furnitureMount } from '$lib/utils/mounting';
+import { validCeilingHeight } from '$lib/utils/ceilingHeights';
 import { getWallStartHeight, getWallEndHeight, getWallHeightAt, validWallHeight } from '$lib/models/types';
 import type { DetailTarget, ItemDetails } from '$lib/models/types';
 import { detailItem, itemDetails, validateItemDetails } from '$lib/utils/itemDetails';
@@ -410,11 +412,27 @@ export function addWindow(wallId: string, position: number, windowType: import('
   return id;
 }
 
-export function addFurniture(catalogId: string, position: Point): string {
+/** Where a wall-mounted item hangs: its wall, the position along it (0..1) and the side its face points to. */
+export interface WallHost { wallId: string; wallPosition: number; wallSide: 1 | -1 }
+
+/**
+ * Place a catalog item. Floor and wall items get the catalog's elevation (a wall
+ * item's mounting height); ceiling items store none, since their height follows
+ * the room's ceiling (spec §4.2). A wall item may be given its `host` wall, which
+ * is stored when that wall is on the active floor.
+ */
+export function addFurniture(catalogId: string, position: Point, host?: WallHost): string {
   const id = uid();
   mutate((f) => {
-    const elevation = getCatalogItem(catalogId)?.elevation;
-    f.furniture.push({ id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...(elevation ? { elevation } : {}) });
+    const def = getCatalogItem(catalogId);
+    const elevation = def ? defaultMountingHeight(def) : undefined;
+    const item: FurnitureItem = { id, catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...(elevation ? { elevation } : {}) };
+    if (host && furnitureMount(item) === 'wall' && f.walls.some(wall => wall.id === host.wallId) && Number.isFinite(host.wallPosition)) {
+      item.wallId = host.wallId;
+      item.wallPosition = Math.max(0, Math.min(1, host.wallPosition));
+      item.wallSide = host.wallSide === -1 ? -1 : 1;
+    }
+    f.furniture.push(item);
   }, `Added ${catalogId}`);
   if (typeof window !== 'undefined') {
     import('$lib/stores/onboarding.svelte').then(m => m.triggerTip('first-furniture', position.x + 20, position.y + 20)).catch(() => {});
@@ -699,7 +717,13 @@ export function removeRoom(id: string) {
     for (const wallId of room.walls) {
       if (!retainedWalls.has(wallId)) removeElement(wallId);
     }
-    mutate(floor => { floor.rooms = floor.rooms.filter(room => room.id !== id); }, 'Deleted room');
+    mutate(floor => {
+      floor.rooms = floor.rooms.filter(room => room.id !== id);
+      if (floor.roomCeilingHeights && id in floor.roomCeilingHeights) {
+        delete floor.roomCeilingHeights[id];
+        if (Object.keys(floor.roomCeilingHeights).length === 0) delete floor.roomCeilingHeights;
+      }
+    }, 'Deleted room');
     detectedRoomsStore.update(rooms => rooms.filter(room => room.id !== id));
   } finally {
     endUndoGroup();
@@ -1105,7 +1129,10 @@ export function updateFurniture(id: string, updates: Partial<FurnitureItem>) {
   })) return;
   mutate((f) => {
     const fi = f.furniture.find((fi) => fi.id === id);
-    if (fi) Object.assign(fi, updates);
+    if (!fi) return;
+    Object.assign(fi, updates);
+    // A ceiling item's height follows the ceiling; it never keeps a stored elevation.
+    if (furnitureMount(fi) === 'ceiling') delete fi.elevation;
   }, undefined, coalesceKeyFor('furniture', id, updates));
 }
 
@@ -1159,6 +1186,38 @@ export function updateRoom(id: string, updates: Partial<{ name: string; floorTex
       }
     }
   }, undefined, coalesceKeyFor('room', id, updates));
+}
+
+/**
+ * Set a room's ceiling height in cm, or clear the override with `undefined` (spec §4.4).
+ * A detected room is saved into `floor.rooms` first, since only saved rooms keep their
+ * id. The value goes into `floor.roomCeilingHeights` and is mirrored into the room's
+ * `details.ceilingHeight` for the native package; clearing also clears that mirror
+ * (null, which removes the native value). One undo step; rapid edits coalesce.
+ */
+export function setRoomCeilingHeight(roomId: string, height: number | undefined) {
+  const floor = get(activeFloor);
+  if (!floor || (height !== undefined && !validCeilingHeight(height))) return;
+  const detected = floor.rooms.some(room => room.id === roomId) ? undefined : get(detectedRoomsStore).find(room => room.id === roomId);
+  if (!detected && !floor.rooms.some(room => room.id === roomId)) return;
+  mutate((f) => {
+    let room = f.rooms.find(room => room.id === roomId);
+    if (!room) {
+      if (height === undefined) return;
+      room = structuredClone(detected!);
+      f.rooms.push(room);
+    }
+    if (height === undefined) {
+      if (f.roomCeilingHeights) {
+        delete f.roomCeilingHeights[roomId];
+        if (Object.keys(f.roomCeilingHeights).length === 0) delete f.roomCeilingHeights;
+      }
+      if (room.details?.ceilingHeight != null) room.details = { ...room.details, ceilingHeight: null };
+    } else {
+      f.roomCeilingHeights = { ...f.roomCeilingHeights, [roomId]: height };
+      room.details = { ...room.details, ceilingHeight: height };
+    }
+  }, 'Changed ceiling height', coalesceKeyFor('ceiling', roomId, { height }));
 }
 
 /**

@@ -67,3 +67,18 @@ it('invalidates project replacement, active floor, stacking and label units', ()
   expect(sceneSignature(project, project.floors[0], false, 'imperial')).not.toBe(before);
   project.id = 'replacement'; expect(signature(project)).not.toBe(before);
 });
+
+it('rebuilds the 3D scene when a ceiling height, mount or drop changes', () => {
+  const project = benchmarkProject('small'), floor = project.floors[0];
+  const base = signature(project);
+  floor.roomCeilingHeights = { 'room-1': 250 };
+  const ceiling = signature(project);
+  expect(ceiling).not.toBe(base);
+  floor.furniture.push({ id: 'pendant', catalogId: 'pendant_light', position: { x: 0, y: 0 }, rotation: 0, scale: { x: 1, y: 1, z: 1 } });
+  const placed = signature(project);
+  floor.furniture.at(-1)!.drop = 10;
+  const dropped = signature(project);
+  expect(dropped).not.toBe(placed);
+  floor.furniture.at(-1)!.mount = 'floor';
+  expect(signature(project)).not.toBe(dropped);
+});

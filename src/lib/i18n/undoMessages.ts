@@ -14,6 +14,7 @@ const keys: Extract<TranslationKey, `undoAction.${string}`>[] = [
   'undoAction.wall',
   'undoAction.elevation',
   'undoAction.slab',
+  'undoAction.ceilingHeight',
   'undoAction.deleteElement',
   'undoAction.deleteFurniture',
   'undoAction.deleteRoom',

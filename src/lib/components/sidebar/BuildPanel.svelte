@@ -19,6 +19,7 @@
   import { furnitureCatalog, furnitureCategories } from '$lib/utils/furnitureCatalog';
   import type { FurnitureDef } from '$lib/utils/furnitureCatalog';
   import FurnitureThumbnail from './FurnitureThumbnail.svelte';
+  import { placeCatalogItem } from '$lib/components/chrome/tools';
   import CustomModelPanel from './CustomModelPanel.svelte';
   import { createProjectFromRoomPlan, extractRoomJsonFromZip, importRoomPlanFloors, interchangeStateFromRoomPlan, roomPlanImportOptions, validateRoomPlan, ORTHO_VERSION } from '$lib/utils/roomplanImport';
   import { addRoomPlanFloorsToProject, currentProject, selectImportedElements, constraintPickMode, addGeometricConstraint, selectedElementId, selectedElementIds, showPlanNotice, beginUndoGroup, endUndoGroup, type GeometricConstraintKind } from '$lib/stores/project';
@@ -92,8 +93,7 @@
   }
 
   function onFurnitureClick(item: FurnitureDef) {
-    selectedTool.set('furniture');
-    placingFurnitureId.set(item.id);
+    placeCatalogItem(item.id);
     addToRecent(item.id);
   }
 

@@ -9,7 +9,14 @@ import { getSnapshots, restoreSnapshot } from '$lib/stores/versionHistory';
 import { get } from 'svelte/store';
 import { mockStorage, putRaw, rawRecords, failWrites } from './fixtures/indexeddb';
 
-const legacy = () => JSON.parse(readFileSync('tests/fixtures/legacy-furniture-previews.openplan.json', 'utf8'));
+/** The fixture with its rooms' ceiling heights already in `roomCeilingHeights`, as readProject migrates them (tested in ceiling-heights.test.ts). */
+const legacy = () => {
+  const project = JSON.parse(readFileSync('tests/fixtures/legacy-furniture-previews.openplan.json', 'utf8'));
+  for (const floor of project.floors) for (const room of floor.rooms) {
+    if (typeof room.details?.ceilingHeight === 'number') floor.roomCeilingHeights = { ...floor.roomCeilingHeights, [room.id]: room.details.ceilingHeight };
+  }
+  return project;
+};
 beforeEach(() => { mockStorage(); });
 
 it('refreshes legacy furniture when opening without writing stored project or history bytes', async () => {
