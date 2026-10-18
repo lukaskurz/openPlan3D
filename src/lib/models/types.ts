@@ -146,6 +146,22 @@ export interface FurnitureItem {
   wallSide?: 1 | -1;
   material?: string; // material name/id
   locked?: boolean;
+  /** Light fixtures: photometry overrides for the 3D view. Missing fields use the catalog fixture's (utils/fixtureLights.ts). */
+  light?: FixtureLight;
+}
+
+/** A light fixture's output, as the 3D view renders it. Every field is optional. */
+export interface FixtureLight {
+  /** Luminous flux at full output, lm (≥ 0). */
+  lumens?: number;
+  /** Spots: full beam angle at half intensity, degrees (5–140). */
+  beamAngle?: number;
+  /** Correlated colour temperature, K (1000–10000). */
+  colorTemperature?: number;
+  /** Dimmer, 0 (off) .. 1 (full). Missing means 1. */
+  dim?: number;
+  /** Spots: beam tilt from straight down (or up) towards the item's front, degrees (0–90), e.g. for wall-washing. */
+  tilt?: number;
 }
 
 export interface ElementGroup {

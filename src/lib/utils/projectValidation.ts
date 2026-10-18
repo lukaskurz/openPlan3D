@@ -155,6 +155,11 @@ export function readProject(value: unknown): Project {
         }
       }
       strings(item, ['color', 'material', 'sourceCategory'], path); booleans(item, ['locked'], path);
+      if (item.light !== undefined) {
+        record(item.light, `${path}.light`);
+        const ranges: Record<string, [number, number]> = { lumens: [0, 1_000_000], beamAngle: [1, 180], colorTemperature: [1000, 10000], dim: [0, 1], tilt: [0, 90] };
+        for (const [key, [min, max]] of Object.entries(ranges)) if (item.light[key] !== undefined) number(item.light[key], `${path}.light.${key}`, min, max);
+      }
     });
     elements('stairs', (item, path) => {
       positioned(item, path); positive(item.width, `${path}.width`); positive(item.depth, `${path}.depth`);
