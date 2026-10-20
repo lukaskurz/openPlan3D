@@ -23,7 +23,9 @@ function createMaterial(color: THREE.ColorRepresentation, roughness = 0.7, metal
 function enableShadows(group: THREE.Group): void {
   group.traverse((child) => {
     if (child instanceof THREE.Mesh) {
-      child.castShadow = child.userData.castShadow ?? true;
+      // Glowing bulbs and lenses stay out of the shadow maps: the fixture's light sits at them.
+      const glows = (Array.isArray(child.material) ? child.material : [child.material]).some(m => m.userData.fixtureGlow && !m.userData.fixtureGlowTint);
+      child.castShadow = child.userData.castShadow ?? !glows;
       child.receiveShadow = true;
     }
   });
@@ -1331,10 +1333,7 @@ function createFireplace(group: THREE.Group, w: number, d: number, h: number, co
   shelfMesh.position.set(0, h * 0.96, 0);
   group.add(shelfMesh);
 
-  // Fire glow light
-  const light = new THREE.PointLight(0xff6600, 0.4, 200);
-  light.position.set(0, h * 0.3, d * 0.3);
-  group.add(light);
+  // The fire's glow is a fixture light (utils/fixtureLights.ts), added where the item is placed.
 }
 
 function createTelevision(group: THREE.Group, w: number, d: number, h: number, color: string): void {
@@ -1558,13 +1557,23 @@ function createClock(group: THREE.Group, w: number, d: number, h: number, color:
 //
 // Ceiling fixtures are built in their own box [0, h] with the ceiling side at the top
 // (y = h): placement lifts them to ceiling − drop − h, and a pendant's cord (the drop)
-// is added by the placement, not here. Light sources sit at or just below the fixture.
+// is added by the placement, not here. So are the light sources (utils/fixtureLights.ts),
+// which light the materials tagged `fixtureGlow` to match the fixture's output.
 
 /** Warm glowing glass for bulbs and diffusers. */
 function glowMaterial(intensity = 0.5): THREE.MeshStandardMaterial {
   const mat = createMaterial('#fffde0', 0.1, 0.0);
   mat.emissive = new THREE.Color(0xfff5c0);
   mat.emissiveIntensity = intensity;
+  mat.userData.fixtureGlow = 1;
+  return mat;
+}
+
+/** A lamp shade that glows faintly when lit, tinted by its own colour (translucent fabric or glass). */
+function shadeMaterial(color: string): THREE.MeshStandardMaterial {
+  const mat = createMaterial(color, 0.9, 0.0);
+  mat.userData.fixtureGlow = 0.4;
+  mat.userData.fixtureGlowTint = true;
   return mat;
 }
 
@@ -1572,14 +1581,10 @@ function createCeilingLight(group: THREE.Group, w: number, d: number, h: number,
   const mat = createMaterial(color, 0.3, 0.1);
   const r = Math.min(w, d) / 2;
   const geo = new THREE.CylinderGeometry(r, r * 0.8, h, 24);
-  const mesh = new THREE.Mesh(geo, mat);
+  // Side and top in the fixture's colour, the underside an opal diffuser
+  const mesh = new THREE.Mesh(geo, [mat, mat, glowMaterial()]);
   mesh.position.y = h / 2; // Flush with the ceiling at the top
   group.add(mesh);
-  // Add actual light, just under the diffuser
-  const light = new THREE.PointLight(0xfff5e0, 0.8, 500);
-  light.position.y = -2;
-  light.castShadow = true;
-  group.add(light);
 }
 
 function createChandelier(group: THREE.Group, w: number, d: number, h: number, color: string): void {
@@ -1589,14 +1594,18 @@ function createChandelier(group: THREE.Group, w: number, d: number, h: number, c
   const bodyR = Math.min(w * 0.15, h * 0.2), bodyY = h * 0.55;
   const body = new THREE.Mesh(new THREE.SphereGeometry(bodyR, 12, 12), mat);
   body.position.y = bodyY;
+  // The light sits at the centre, among body, stem and finial: they cast no shadow.
+  body.userData.castShadow = false;
   group.add(body);
   const stemLength = Math.max(0.1, h - bodyY - bodyR * 0.8);
   const stem = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, stemLength, 8), mat);
   stem.position.y = h - stemLength / 2;
+  stem.userData.castShadow = false;
   group.add(stem);
   const finialLength = Math.max(0.1, bodyY - bodyR * 0.8);
   const finial = new THREE.Mesh(new THREE.ConeGeometry(Math.min(2.5, bodyR * 0.5), finialLength, 10).rotateX(Math.PI), mat);
   finial.position.y = finialLength / 2;
+  finial.userData.castShadow = false;
   group.add(finial);
   // Arms with bulbs
   const armMat = createMaterial('#888', 0.3, 0.8);
@@ -1615,11 +1624,6 @@ function createChandelier(group: THREE.Group, w: number, d: number, h: number, c
     bulb.position.set(Math.cos(a) * r, h * 0.4, Math.sin(a) * r);
     group.add(bulb);
   }
-  // Light at the bulbs
-  const light = new THREE.PointLight(0xfff5e0, 1.2, 800);
-  light.position.y = h * 0.4;
-  light.castShadow = true;
-  group.add(light);
 }
 
 function createRecessedLight(group: THREE.Group, w: number, d: number, h: number, color: string): void {
@@ -1633,12 +1637,6 @@ function createRecessedLight(group: THREE.Group, w: number, d: number, h: number
   const lens = new THREE.Mesh(new THREE.CylinderGeometry(r * 0.7, r * 0.7, Math.min(0.4, h * 0.1), 16), glowMaterial(0.6));
   lens.position.y = Math.min(0.2, h * 0.05);
   group.add(lens);
-  // Downlight just below the fixture; the target is relative to the fixture, straight down
-  const light = new THREE.SpotLight(0xfff5e0, 0.6, 400, Math.PI / 4, 0.5);
-  light.position.y = -0.5;
-  light.target.position.set(0, -200, 0);
-  group.add(light);
-  group.add(light.target);
 }
 
 function createFloorLamp(group: THREE.Group, w: number, d: number, h: number, color: string): void {
@@ -1654,14 +1652,11 @@ function createFloorLamp(group: THREE.Group, w: number, d: number, h: number, co
   pole.position.y = h * 0.425 + 5;
   group.add(pole);
   // Shade
-  const shadeMat = createMaterial(color, 0.9, 0.0);
+  const shadeMat = shadeMaterial(color);
   const shadeGeo = new THREE.CylinderGeometry(w * 0.3, w * 0.2, h * 0.15, 16, 1, true);
   const shade = new THREE.Mesh(shadeGeo, shadeMat);
   shade.position.y = h * 0.925;
   group.add(shade);
-  const light = new THREE.PointLight(0xfff5e0, 0.5, 300);
-  light.position.y = h * 0.9;
-  group.add(light);
 }
 
 function createTableLamp(group: THREE.Group, w: number, d: number, h: number, color: string): void {
@@ -1674,26 +1669,22 @@ function createTableLamp(group: THREE.Group, w: number, d: number, h: number, co
   const pole = new THREE.Mesh(poleGeo, baseMat);
   pole.position.y = h * 0.4;
   group.add(pole);
-  const shadeMat = createMaterial(color, 0.9, 0.0);
+  const shadeMat = shadeMaterial(color);
   const shadeGeo = new THREE.CylinderGeometry(w * 0.35, w * 0.45, h * 0.35, 16, 1, true);
   const shade = new THREE.Mesh(shadeGeo, shadeMat);
   shade.position.y = h * 0.825;
   group.add(shade);
-  const light = new THREE.PointLight(0xfff5e0, 0.3, 200);
-  light.position.y = h * 0.8;
-  group.add(light);
 }
 
 function createWallSconce(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const mat = createMaterial(color, 0.5, 0.2);
   const geo = new THREE.BoxGeometry(w, h, d);
-  const mesh = new THREE.Mesh(geo, mat);
+  // Up/down light: the top and bottom faces glow (box faces are +x, −x, +y, −y, +z, −z)
+  const glow = glowMaterial();
+  const mesh = new THREE.Mesh(geo, [mat, mat, glow, glow, mat, mat]);
   // Built in its own box [0, h]; the item's mounting height (catalog elevation 170) lifts it.
   mesh.position.y = h / 2;
   group.add(mesh);
-  const light = new THREE.PointLight(0xfff5e0, 0.3, 200);
-  light.position.y = h / 2;
-  group.add(light);
 }
 
 /**
@@ -1742,11 +1733,6 @@ function createCeilingFan(group: THREE.Group, w: number, d: number, h: number, c
       group.add(mesh);
     }
   }
-
-  // Light just below the bowl
-  const light = new THREE.PointLight(0xfff5e0, 0.6, 400);
-  light.position.y = -1;
-  group.add(light);
 }
 
 /** Ceiling smoke detector in its own box [0, h]: mounting base at the top, a low white body, test button and a small red LED. */
@@ -1784,11 +1770,6 @@ function createPendantLight(group: THREE.Group, w: number, d: number, h: number,
   const bulb = new THREE.Mesh(new THREE.SphereGeometry(Math.min(4, r * 0.25), 10, 10), glowMaterial());
   bulb.position.y = shadeH * 0.35;
   group.add(bulb);
-  // Light near the shade's opening
-  const light = new THREE.PointLight(0xfff5e0, 0.6, 400);
-  light.position.y = shadeH * 0.15;
-  light.castShadow = true;
-  group.add(light);
 }
 
 // ============ Plan symbols in 3D ============
@@ -2257,6 +2238,7 @@ function createFlatSurface(group: THREE.Group, w: number, d: number, h: number, 
 function createLampPost(group: THREE.Group, w: number, d: number, h: number, color: string, isDouble: boolean): void {
   const poleMat = createMaterial(color || '#1e293b', 0.7, 0.3);
   const lightMat = createMaterial('#fbbf24', 0.3, 0.1);
+  lightMat.userData.fixtureGlow = 1;
   // Pole
   const pole = new THREE.Mesh(new THREE.CylinderGeometry(3, 4, h * 0.85, 8), poleMat);
   pole.position.y = h * 0.425;
@@ -2277,6 +2259,7 @@ function createLampPost(group: THREE.Group, w: number, d: number, h: number, col
 function createBollardLight(group: THREE.Group, w: number, d: number, h: number, color: string): void {
   const mat = createMaterial(color || '#374151', 0.7, 0.3);
   const lightMat = createMaterial('#fbbf24', 0.3, 0.1);
+  lightMat.userData.fixtureGlow = 1;
   const post = new THREE.Mesh(new THREE.CylinderGeometry(w / 3, w / 2.5, h * 0.8, 8), mat);
   post.position.y = h * 0.4;
   group.add(post);

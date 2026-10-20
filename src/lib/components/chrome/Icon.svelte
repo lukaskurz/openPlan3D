@@ -128,6 +128,8 @@
     fan: 'M10.83 16.38a6.08 6.08 0 0 1-8.62-7l5.41 1.45a6.08 6.08 0 0 1 7-8.62l-1.45 5.41a6.08 6.08 0 0 1 8.62 7l-5.41-1.45a6.08 6.08 0 0 1-7 8.62zM12 12v.01',
     /** Smoke detector: a round ceiling unit with its sensor. */
     smoke: 'M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM7 12h.01M17 12h.01M12 7h.01M12 17h.01',
+    /** Outdoor items and plants: a deciduous tree. */
+    tree: 'M8 19a4 4 0 0 1-2.24-7.32A3.5 3.5 0 0 1 9 6.03V6a3 3 0 1 1 6 0v.04a3.5 3.5 0 0 1 3.24 5.65A4 4 0 0 1 16 19ZM12 19v3',
     /** Hang: a cord from the ceiling down to an item (a pendant's drop). */
     hang: 'M3 3h18M12 3v8M12 11l-3 3M12 11l3 3M8 18h8M10 21h4',
   } as const;

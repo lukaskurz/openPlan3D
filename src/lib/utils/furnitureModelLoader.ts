@@ -8,6 +8,7 @@ import { furnitureElevation } from './furnitureStacking';
 import { effectiveElevation, furnitureDrop, furnitureMount, type CeilingAt } from './mounting';
 import { furnitureFinishes } from './furnitureFinishes';
 import { disposeModel, isModelDisposed, loadCatalogModel, releaseWithModel } from './furnitureModelResources';
+import { applyFixtureGlow, createFixtureLights } from './fixtureLights';
 
 export interface FurnitureAppearance { color?: string; material?: string; ghost?: boolean }
 
@@ -171,7 +172,8 @@ function createPlacedSymbol(item: FurnitureItem, def: FurnitureDef, bottom: numb
  *
  * Floor and wall items stand on the floor finish (FLOOR_FINISH above the storey
  * level); ceiling items are measured from the ceiling, so their top meets it (or
- * their cord, `drop` cm long, does). Plan symbols get a small stand-in where one
+ * their cord, `drop` cm long, does). Light fixtures carry their light sources (utils/fixtureLights.ts),
+ * none casting a shadow until the viewer picks them. Plan symbols get a small stand-in where one
  * makes sense (outlet/switch faceplates, ceiling discs), else no model.
  */
 export function createPlacedFurnitureModel(item: FurnitureItem, onLoaded?: (model: THREE.Group) => void, project?: Project, elevation?: number): THREE.Group | null {
@@ -191,6 +193,10 @@ export function createPlacedFurnitureModel(item: FurnitureItem, onLoaded?: (mode
   const model = item.customModelId ? createProjectFurniture(item, definition, project, onLoaded) : createFurnitureModelWithGLB(item.catalogId, definition, onLoaded, {
     color: item.color, material: item.material,
   });
+  // A light fixture lights the scene; its lights sit on the container, so a loaded model keeps them.
+  applyFixtureGlow(model, item.catalogId, item.light);
+  const lights = createFixtureLights(item.catalogId, definition, item.light);
+  if (lights) model.add(lights);
   model.position.set(item.position.x, (mount === 'ceiling' ? 0 : FLOOR_FINISH) + bottom, item.position.y);
   model.rotation.y = -item.rotation * Math.PI / 180;
   // The plan's Y scale is world Z; height uses the saved Z magnitude.

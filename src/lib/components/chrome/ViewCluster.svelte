@@ -71,7 +71,7 @@
         </div>
       {/each}
       <div class="op-divider"></div>
-      <button class="op-menu-item" onclick={() => { elementsListOpen.set(true); closePopover(); }}><Icon name="list" size={18} /><span class="flex-1">{$t('chrome.view.elements')}</span><Icon name="chevronRight" size={18} /></button>
+      <button class="op-menu-item" onclick={() => { elementsListOpen.set(true); closePopover(); }}><Icon name="list" size={18} /><span class="flex-1">{$t('elements.title')}</span><Icon name="chevronRight" size={18} /></button>
     </div>
   {/if}
 </div>

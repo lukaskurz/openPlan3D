@@ -2,7 +2,7 @@
   import { t } from '$lib/i18n';
   import { currentProject } from '$lib/stores/project';
   import { saveState, saveError } from '$lib/stores/saveStatus';
-  import { drawerOpen } from '$lib/stores/chrome';
+  import { drawerOpen, elementsListOpen } from '$lib/stores/chrome';
   import VersionsMenu from './VersionsMenu.svelte';
   import Icon from './Icon.svelte';
 
@@ -35,4 +35,9 @@
       <span class="xl:hidden absolute top-1.5 right-1.5 w-2 h-2 rounded-full pointer-events-none" style="background:var(--color-danger)" title={$t('chrome.save.failed')}></span>
     {/if}
   </div>
+  <!-- Everything on the storey, itemised (shortcut L). Phones have no room for it here; the Show menu opens it. -->
+  <button class="op-float op-btn is-square is-big shrink-0" style="width:52px" aria-label={$t('elements.title')} title="{$t('elements.title')} (L)"
+    aria-pressed={$elementsListOpen} onclick={() => elementsListOpen.update(open => !open)} data-elements-button>
+    <Icon name="list" />
+  </button>
 </div>

@@ -1,4 +1,4 @@
-import type { Project, DetailKind } from '$lib/models/types';
+import { FIXTURE_LIGHT_RANGES, type Project, type DetailKind } from '$lib/models/types';
 import { validateItemDetails, validateRetainedDetailState } from './itemDetails';
 import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
@@ -155,6 +155,10 @@ export function readProject(value: unknown): Project {
         }
       }
       strings(item, ['color', 'material', 'sourceCategory'], path); booleans(item, ['locked'], path);
+      if (item.light !== undefined) {
+        record(item.light, `${path}.light`);
+        for (const [key, [min, max]] of Object.entries(FIXTURE_LIGHT_RANGES)) if (item.light[key] !== undefined) number(item.light[key], `${path}.light.${key}`, min, max);
+      }
     });
     elements('stairs', (item, path) => {
       positioned(item, path); positive(item.width, `${path}.width`); positive(item.depth, `${path}.depth`);

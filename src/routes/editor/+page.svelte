@@ -13,7 +13,10 @@
   import { USER_GUIDE_URL } from '$lib/stores/exportNotice';
   import { interchangeProjectName } from '$lib/utils/interchange';
   import { localStore, storageErrorMessage, downloadLibraryBackup } from '$lib/services/datastore';
-  import { autoSave, markClean, saveState } from '$lib/stores/saveStatus';
+  import { autoSave, markClean, saveState, lastSavedAt } from '$lib/stores/saveStatus';
+  import { initCloudSync, pushCloudProjectSoon, syncCloudProject } from '$lib/stores/cloudSync';
+  import CloudSyncPausedNotice from '$lib/components/CloudSyncPausedNotice.svelte';
+  import type { SyncOutcome } from '$lib/services/cloudSync/engine';
   import { createProjectFromRoomPlan, isRoomPlanJson } from '$lib/utils/roomplanImport';
   import FloorPlanCanvas from '$lib/components/editor/FloorPlanCanvas.svelte';
   import CommandPalette from '$lib/components/editor/CommandPalette.svelte';
@@ -113,6 +116,21 @@
     }
   });
 
+  /** A plan another device changed is shown here once synced, unless this editor has unsaved edits:
+   *  those save as usual and the existing conflict choices apply. */
+  async function reloadIfPulled(outcome: SyncOutcome | null, id: string) {
+    if (!outcome?.downloaded || !ready || get(currentProject)?.id !== id || get(saveState) !== 'saved') return;
+    const project = await localStore.load(id);
+    if (project && get(currentProject)?.id === id && get(saveState) === 'saved') { loadProject(project); markClean(); }
+  }
+
+  /** Bring the plan up to date from the cloud before opening it, without letting a slow network hold the editor. */
+  async function syncBeforeOpening(id: string) {
+    const sync = initCloudSync().then(() => syncCloudProject(id));
+    const timedOut = await Promise.race([sync.then(() => false), new Promise<boolean>(resolve => setTimeout(() => resolve(true), 5000))]);
+    if (timedOut) void sync.then(outcome => reloadIfPulled(outcome, id));
+  }
+
   async function initializeEditor() {
     loadError = null;
     try {
@@ -138,6 +156,7 @@
         // A new/imported project may exist only in memory if its first save failed.
         const pending = get(currentProject);
         if (pending?.id === id && get(saveState) !== 'saved') { ready = true; return; }
+        await syncBeforeOpening(id);
         const project = await localStore.load(id);
         if (project) {
           loadProject(project);
@@ -179,13 +198,29 @@
         event.returnValue = '';
       }
     };
+    // Saved plans go to the cloud shortly after each save.
+    const stopCloudPush = lastSavedAt.subscribe((saved) => {
+      const id = get(currentProject)?.id;
+      if (saved && id) pushCloudProjectSoon(id);
+    });
+    let lastCloudCheck = Date.now();
+    const syncOnReturn = () => {
+      const id = get(currentProject)?.id;
+      if (!ready || !id || get(saveState) !== 'saved' || Date.now() - lastCloudCheck < 15_000) return;
+      lastCloudCheck = Date.now();
+      void syncCloudProject(id).then(outcome => reloadIfPulled(outcome, id));
+    };
     const onVisibilityChange = () => {
       if (document.hidden && get(saveState) === 'unsaved') void autoSave();
+      if (!document.hidden) syncOnReturn();
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', syncOnReturn);
     return () => {
       stopSyncProjectUrl();
+      stopCloudPush();
+      window.removeEventListener('focus', syncOnReturn);
       window.removeEventListener('beforeunload', onBeforeUnload);
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
@@ -227,6 +262,10 @@
       {/if}
     {/if}
     <EditorChrome />
+    <CloudSyncPausedNotice onresumed={() => {
+      const id = get(currentProject)?.id;
+      if (id) void syncCloudProject(id).then(outcome => reloadIfPulled(outcome, id));
+    }} />
   </div>
 
   <!-- Shortcuts overlay -->

@@ -523,6 +523,10 @@ also means:
 - To keep your work safe, download a **library backup** regularly (below) or
   **Download JSON** for individual projects, and keep those files somewhere
   you control.
+- To use your plans on several devices, connect **Google Drive** or
+  **iCloud** in the library's **Sync across devices** panel (when the site
+  offers it). Plans are then also kept in your own cloud account and stay in
+  step between your browsers; see [Library sync](cloud-sync.md).
 
 ### Persistent storage
 

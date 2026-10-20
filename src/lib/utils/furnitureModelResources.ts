@@ -82,6 +82,8 @@ export function disposeModel(root: THREE.Object3D) {
     disposed.add(child);
     for (const release of releases.get(child) ?? []) callbacks.add(release);
     releases.delete(child);
+    // Fixture lights own their shadow maps.
+    if (child instanceof THREE.Light) child.dispose();
     const renderable = child as THREE.Mesh;
     if (renderable.geometry) geometries.add(renderable.geometry);
     if (renderable.material) for (const material of Array.isArray(renderable.material) ? renderable.material : [renderable.material]) {

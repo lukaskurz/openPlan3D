@@ -43,6 +43,7 @@
   import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { ownColorCanvasTexture } from '$lib/utils/viewerTextures';
   import { createFloorFurnitureModels, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
+  import { applyFixtureAdaptation, colorTemperatureColor, fixtureAdaptation, indirectIrradiance, limitFixtureShadows, roomSurfaceArea } from '$lib/utils/fixtureLights';
   import { defaultMountingHeight, effectiveElevation } from '$lib/utils/mounting';
   import { createCeilingResolver, effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
   import { buildPipeMeshes, storeySpacing } from '$lib/utils/pipeModels3d';
@@ -128,6 +129,10 @@
   let sunLight: THREE.DirectionalLight;
   let fillLight: THREE.DirectionalLight;
   let rimLight: THREE.DirectionalLight;
+  /** Inter-reflected lamplight the scene lacks, as a warm ambient fill (see updateFixtureLighting). */
+  let fixtureBounce: THREE.AmbientLight;
+  /** Interior surface of the built rooms, m², for the fill. */
+  let fixtureRoomSurface = 0;
 
   // Interior Camera placement
   let cameraPlacementMode = $state(false);
@@ -568,7 +573,8 @@
     morning: { azimuth: 90, elevation: 25, ambient: 0.3, sunColor: 0xffe0a0, sunIntensity: 0.8, hemiSky: '#fdd89b', hemiGround: '#9b8060' },
     noon:    { azimuth: 180, elevation: 80, ambient: 0.45, sunColor: 0xffffff, sunIntensity: 1.2, hemiSky: '#87ceeb', hemiGround: '#8b7355' },
     evening: { azimuth: 270, elevation: 15, ambient: 0.2, sunColor: 0xff8040, sunIntensity: 0.6, hemiSky: '#c84e3c', hemiGround: '#4a3520' },
-    night:   { azimuth: 0, elevation: 5, ambient: 0.08, sunColor: 0x8899cc, sunIntensity: 0.15, hemiSky: '#141432', hemiGround: '#0a0a15' },
+    // Night: little moonlight and sky, so the light fixtures light the rooms (see updateFixtureLighting).
+    night:   { azimuth: 0, elevation: 5, ambient: 0.03, sunColor: 0x8899cc, sunIntensity: 0.15, hemiSky: '#141432', hemiGround: '#0a0a15' },
   };
 
   function updateSunPosition() {
@@ -581,12 +587,27 @@
       dist * Math.sin(elRad),
       dist * Math.cos(elRad) * Math.cos(azRad)
     );
+    updateFixtureLighting();
     markSceneDirty();
   }
 
   function updateAmbientIntensity() {
     if (ambientLight) ambientLight.intensity = ambientIntensity;
+    updateFixtureLighting();
     markSceneDirty();
+  }
+
+  /**
+   * Fixture lights against the daylight: full at night, less by day (fixtureAdaptation),
+   * plus a fill for their light bouncing off the rooms' surfaces.
+   */
+  function updateFixtureLighting() {
+    if (!wallGroup || !sunLight) return;
+    const daylight = ambientLight.intensity + hemiLight.intensity + fillLight.intensity + rimLight.intensity
+      + sunLight.intensity * Math.max(0, Math.sin(sunElevation * Math.PI / 180));
+    const adaptation = fixtureAdaptation(daylight);
+    const lumens = applyFixtureAdaptation(wallGroup, adaptation);
+    fixtureBounce.intensity = indirectIrradiance(lumens, fixtureRoomSurface) * adaptation;
   }
 
   function applyTimePreset(preset: 'morning' | 'noon' | 'evening' | 'night') {
@@ -604,10 +625,11 @@
     if (hemiLight) {
       hemiLight.color.set(p.hemiSky);
       hemiLight.groundColor.set(p.hemiGround);
-      hemiLight.intensity = preset === 'night' ? 0.1 : 0.4;
+      hemiLight.intensity = preset === 'night' ? 0.04 : 0.4;
     }
-    if (fillLight) fillLight.intensity = preset === 'night' ? 0.05 : 0.4;
-    if (rimLight) rimLight.intensity = preset === 'night' ? 0.05 : 0.25;
+    if (fillLight) fillLight.intensity = preset === 'night' ? 0.02 : 0.4;
+    if (rimLight) rimLight.intensity = preset === 'night' ? 0.02 : 0.25;
+    updateFixtureLighting();
     // The main view redraws for the new lights; an open interior preview redraws only when asked.
     if (cameraPlaced) cameraPreviewDirty = true;
   }
@@ -898,6 +920,9 @@
     rimLight.position.set(-200, 600, 1000);
     scene.add(rimLight);
 
+    fixtureBounce = new THREE.AmbientLight(colorTemperatureColor(2700).color, 0);
+    scene.add(fixtureBounce);
+
     wallGroup = new THREE.Group();
     scene.add(wallGroup);
     return true;
@@ -1122,6 +1147,7 @@
     clearGroup(wallGroup);
     cameraHelper = null;
     wallMeshMap.clear();
+    fixtureRoomSurface = 0;
 
     const defaultInteriorMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     const defaultExteriorMat = new THREE.MeshStandardMaterial({ color: 0xd4cfc9, roughness: 0.85 });
@@ -1512,6 +1538,7 @@
       // is drawn even under sloped or mixed walls.
       const ceilingHeight = roomCeilingOverride(floor, room.id) !== undefined || roomCeilingHeight(room.walls, floor.walls) !== undefined
         ? effectiveRoomCeiling(project ?? { floors: [floor] }, floor, room) : undefined;
+      fixtureRoomSurface += roomSurfaceArea(poly, ceilingHeight ?? effectiveRoomCeiling(project ?? { floors: [floor] }, floor, room));
       if (ceilingHeight !== undefined) {
         const ceilMat = new THREE.MeshStandardMaterial({
           color: 0xf5f5f0,
@@ -1682,6 +1709,9 @@
       floorPlane.constant = 0;
       buildWalls(currentFloor);
     }
+    // The brightest fixtures cast shadows (walls stop their light); all follow the daylight.
+    limitFixtureShadows(wallGroup);
+    updateFixtureLighting();
     // Fit the orbit camera only for a new project, floor or stacking choice, so edits, Undo/Redo,
     // unit changes and arriving textures keep the user's view. Walkthrough restores its pose below.
     const context = framingContext(project, currentFloor, showAllFloors);

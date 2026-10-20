@@ -25,7 +25,7 @@
  * bifold → single; an `opening` carries no hinge or swing; window types other than sliding →
  * fixed; custom models export as their catalog box; stairs, columns, dimension/text annotations,
  * measurements, guides, entourage, background images, colours, textures and item details are not
- * exported. An object's mount, drop and wall host and the rooms' ceiling heights are not exported
+ * exported. An object's mount, drop, wall host and light settings and the rooms' ceiling heights are not exported
  * either; only the resulting object centre height is written. The importer ignores it: catalog
  * ceiling items hang from the ceiling again by their catalog mount, while raised floor and wall
  * items come back with no elevation. Switch links (which switch controls which lights) are

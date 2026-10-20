@@ -27,6 +27,8 @@ export interface PlanViewApi {
   hasClipboard(): boolean;
   /** Move the view by a number of screen pixels. */
   panBy(dx: number, dy: number): void;
+  /** Pan (never zoom) so the selection is in the part of the plan no panel covers. */
+  revealSelection(): void;
 }
 
 export const planViewApi = writable<PlanViewApi | null>(null);
@@ -83,6 +85,9 @@ export const previewHighlight = writable<ReadonlySet<string>>(new Set());
 
 /** Width in pixels of a panel docked over the right edge of the plan (the Assistant). Fitting keeps clear of it. */
 export const planInsetRight = writable(0);
+
+/** Width in pixels of a panel docked over the left edge of the plan (the Elements list). Fitting keeps clear of it. */
+export const planInsetLeft = writable(0);
 
 /** Height in pixels, from the window's bottom edge, of a sheet docked over the bottom of the plan
  * (the inspector in narrow layouts). The plan pans the selection into view above it. */

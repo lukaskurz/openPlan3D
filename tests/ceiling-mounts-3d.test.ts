@@ -98,8 +98,10 @@ describe('ceiling fixtures are built in their own box [0, h]', () => {
     const def = getCatalogItem('ceiling_fan')!;
     const fan = createFurnitureModel('ceiling_fan', def);
     expect(box(fan).getSize(new THREE.Vector3()).x).toBeGreaterThan(def.width * 0.9);
+    // The light comes with the placement (utils/fixtureLights.ts), below the fan's own box
+    const placed = createPlacedFurnitureModel(item('ceiling_fan'), undefined, undefined, 200)!;
     const lights: THREE.Light[] = [];
-    fan.traverse(child => { if (child instanceof THREE.Light) lights.push(child); });
+    placed.traverse(child => { if (child instanceof THREE.Light) lights.push(child); });
     expect(lights).toHaveLength(1);
     expect(lights[0].position.y).toBeLessThanOrEqual(0);
   });

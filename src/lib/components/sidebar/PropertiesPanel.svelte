@@ -21,8 +21,9 @@
   import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
   import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
   import { effectiveElevation, furnitureDrop, furnitureMount } from '$lib/utils/mounting';
+  import { fixtureLightDefaults, fixtureLightRange, setFixtureLightField } from '$lib/utils/fixtureLights';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
-    import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation } from '$lib/models/types';
+    import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation, FixtureLight } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
 
   let floor = $state<Floor | null>(null);
@@ -301,6 +302,37 @@
     const { x, y, z } = selectedFurniture.scale;
     updateFurniture(selectedFurniture.id, { color: undefined, width: undefined, depth: undefined, height: undefined, material: undefined,
       scale: { x: Math.sign(x) || 1, y: Math.sign(y) || 1, z: Math.sign(z) || 1 } });
+  }
+
+  // Light fixtures: per-item photometry. Empty fields show the fixture's default and fall back to it.
+  type LightField = { key: keyof FixtureLight; label: TranslationKey; hint?: TranslationKey; scale: number; step: number; spotOnly?: boolean };
+  const lightFields: LightField[] = [
+    { key: 'lumens', label: 'furnitureProperties.lightLumens', scale: 1, step: 10 },
+    { key: 'dim', label: 'furnitureProperties.lightDim', scale: 100, step: 1 },
+    { key: 'colorTemperature', label: 'furnitureProperties.lightColorTemperature', scale: 1, step: 100 },
+    { key: 'beamAngle', label: 'furnitureProperties.lightBeamAngle', scale: 1, step: 1, spotOnly: true },
+    { key: 'tilt', label: 'furnitureProperties.lightTilt', hint: 'furnitureProperties.lightTiltHint', scale: 1, step: 1, spotOnly: true },
+  ];
+  let fixtureDefaults = $derived(selectedFurniture ? fixtureLightDefaults(selectedFurniture.catalogId) : null);
+  const lightDisplay = (value: number | undefined, field: LightField) => value === undefined ? '' : String(Math.round(value * field.scale * 100) / 100);
+  /** Typing saves values already in range; a change clamps to the range, and an emptied field clears back to the default. */
+  function onFixtureLight(e: Event, field: LightField) {
+    if (!selectedFurniture) return;
+    const input = e.target as HTMLInputElement;
+    const current = selectedFurniture.light?.[field.key];
+    const empty = !input.value.trim() && !input.validity.badInput;
+    const value = input.valueAsNumber / field.scale;
+    if (!empty && !Number.isFinite(value)) {
+      if (e.type === 'change') input.value = lightDisplay(current, field);
+      return;
+    }
+    if (e.type === 'input') {
+      const [min, max] = fixtureLightRange(field.key);
+      if (empty || value < min || value > max) return;
+    }
+    const light = setFixtureLightField(selectedFurniture.light, field.key, empty ? undefined : value);
+    if (light?.[field.key] !== current) updateFurniture(selectedFurniture.id, { light });
+    if (e.type === 'change') input.value = lightDisplay(light?.[field.key], field);
   }
 
   // Door distance handlers
@@ -937,6 +969,34 @@
         >↕ {$t('furnitureProperties.flipV')}</button>
       </div>
       
+      {#if fixtureDefaults}
+        <div data-fixture-light class="pt-3 border-t border-gray-200 space-y-3">
+          <h4 class="text-xs font-semibold text-gray-700">{$t('furnitureProperties.light')}</h4>
+          {#each lightFields.filter(field => !field.spotOnly || fixtureDefaults?.beamAngle !== undefined) as field (field.key)}
+            {@const [min, max] = fixtureLightRange(field.key)}
+            <label class="block">
+              <span class="text-xs text-gray-500">{$t(field.label)}</span>
+              <input
+                type="number" data-fixture-light-field={field.key} title={field.hint ? $t(field.hint) : undefined}
+                value={lightDisplay(selectedFurniture.light?.[field.key], field)}
+                placeholder={lightDisplay(fixtureDefaults[field.key], field)}
+                oninput={e => onFixtureLight(e, field)} onchange={e => onFixtureLight(e, field)}
+                min={min * field.scale} max={max * field.scale} step={field.step}
+                class="w-full px-2 py-1 border border-gray-200 rounded text-sm"
+              />
+            </label>
+          {/each}
+          <p class="text-xs text-gray-500">{$t('furnitureProperties.lightHelp')}</p>
+          {#if selectedFurniture.light}
+            <button
+              data-fixture-light-reset
+              onclick={() => { if (selectedFurniture) updateFurniture(selectedFurniture.id, { light: undefined }); }}
+              class="w-full px-2 py-1.5 border border-gray-200 rounded text-sm hover:bg-gray-50 transition-colors"
+            >{$t('furnitureProperties.lightReset')}</button>
+          {/if}
+        </div>
+      {/if}
+
       <!-- Reset button -->
       <button
         onclick={resetFurnitureDefaults}

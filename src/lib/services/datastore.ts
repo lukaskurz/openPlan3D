@@ -1,5 +1,6 @@
 import { readProject } from '$lib/utils/projectValidation';
 import type { Project } from '$lib/models/types';
+import { PROJECT_FORMAT, isNewerFormat } from '$lib/models/projectFormat';
 import { withDatabase, transaction, request, records, readRecord, libraryBackup, notifyLibraryChange } from './localDatabase';
 import { requestPersistentStorage } from './storagePersistence';
 export { PROJECTS_STORAGE_KEY, LIBRARY_CHANGE_KEY } from './localDatabase';
@@ -26,11 +27,21 @@ export class ProjectConflictError extends Error {
   }
 }
 
+/** A newer build wrote this plan; saving it here could drop or misread what that build added. Like a
+ *  conflict, the editor offers to save a copy instead (models/projectFormat). */
+export class NewerProjectFormatError extends ProjectConflictError {
+  constructor() {
+    super();
+    this.message = 'This plan was saved by a newer version of openPlan3D. Reload the page to update it, or save your changes as a copy.';
+    this.name = 'NewerProjectFormatError';
+  }
+}
+
 /** Keep in-document saves ordered; IndexedDB transactions also protect browsers without Web Locks.
  *  The lock callback never rejects: Firefox reports a lock callback that rejects at once (indexedDB.open with
  *  site data blocked) as an uncaught error even though the request's promise is handled, so the outcome is
  *  carried out of the lock and rethrown here. */
-async function mutateLibrary<T>(change: () => Promise<T>): Promise<T> {
+export async function mutateLibrary<T>(change: () => Promise<T>): Promise<T> {
   if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && navigator.locks?.request) {
     const outcome = await navigator.locks.request('openplan3d-project-library', async () => {
       try { return { ok: true as const, value: await change() }; }
@@ -79,6 +90,9 @@ export function createLocalStore(): DataStore {
     async assertCurrent(id) { check(id, await readRecord('projects', id)); },
 
     async save(project) {
+      if (isNewerFormat(project)) throw new NewerProjectFormatError();
+      // Every save records the format of the build that wrote it, on the saved object too, so it matches what loads back.
+      project.formatVersion = PROJECT_FORMAT;
       const id = project.id, raw = JSON.stringify(project), generation = generations.get(id);
       await mutateLibrary(async () => {
         await withDatabase(db => transaction(db, ['projects'], 'readwrite', async tx => {
@@ -100,6 +114,8 @@ export function createLocalStore(): DataStore {
       const copy = readProject(project);
       copy.name = `${copy.name || 'Untitled Project'} (${suffix})`;
       copy.createdAt = copy.updatedAt = new Date();
+      // The copy is this build's own, so it can keep being edited here even if a newer build wrote the original.
+      copy.formatVersion = PROJECT_FORMAT;
       return mutateLibrary(async () => {
         await withDatabase(db => transaction(db, ['projects'], 'readwrite', async tx => {
           const projects = tx.objectStore('projects');
