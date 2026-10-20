@@ -30,27 +30,6 @@ env:
     value: "true"
     availability:
       - RUNTIME
-  # In-app Assistant (docs/assistant-chat.md). The key and the allowlist are
-  # secrets: the repository is public, so invited emails never go in this file.
-  # firebase apphosting:secrets:set anthropic-api-key
-  # firebase apphosting:secrets:set assistant-allowed-emails   (comma-separated)
-  - variable: ANTHROPIC_API_KEY
-    secret: anthropic-api-key
-    availability:
-      - RUNTIME
-  - variable: ASSISTANT_ALLOWED_EMAILS
-    secret: assistant-allowed-emails
-    availability:
-      - RUNTIME
-  # Each invited person's spending limit in US dollars, per UTC day and month.
-  - variable: ASSISTANT_DAILY_USD
-    value: "5"
-    availability:
-      - RUNTIME
-  - variable: ASSISTANT_MONTHLY_USD
-    value: "50"
-    availability:
-      - RUNTIME
   - variable: NODE_ENV
     value: production
     availability:

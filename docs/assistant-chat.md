@@ -107,59 +107,37 @@ blocked doors, and the prompt asks the model to fix them before it answers.
 
 ## Setup
 
-Local development: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
-(a Claude Console key, billed pay-as-you-go). Restart `npm run dev`. Without
-`ASSISTANT_ALLOWED_EMAILS` the local assistant stays open, as before sign-in
-existed.
+Static hosting (Cloudflare Pages, `BUILD_TARGET=static`): there is no server,
+so the Assistant runs only with each person's own Anthropic API key. On
+opening, the panel asks the server whether it can run the Assistant
+(`GET /api/assistant/chat` answers `{ available }`); on a static site that
+request fails, and instead of the input the panel shows a short note and an
+**Add API key** button. For a family, create one key per person in the
+Anthropic Console, each in its own workspace with a monthly spend limit, so
+Anthropic enforces the budget and a key can be revoked on its own.
 
-Firebase App Hosting: the key and the list of invited people are secrets
-(the repository is public, so emails never go in `apphosting.yaml`, which
-only references them). Create both before deploying; a rollout fails while a
-referenced secret is missing:
+Local development: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
+(a Claude Console key, billed pay-as-you-go). Restart `npm run dev`.
+
+Firebase App Hosting (Node build): store the key as a secret and reference it
+in `apphosting.yaml`:
 
 ```bash
 firebase apphosting:secrets:set anthropic-api-key
-firebase apphosting:secrets:set assistant-allowed-emails
 ```
 
-The second is a comma-separated list of Google account emails. Google must
-be enabled as a sign-in provider in Firebase Authentication for project
-`openplan3d`, with the app's domain on its authorized domains.
+```yaml
+  - variable: ANTHROPIC_API_KEY
+    secret: anthropic-api-key
+    availability:
+      - RUNTIME
+```
 
-Without a key, or in production without the allowlist, the endpoint returns
-503 and the panel says the assistant isn't available on this server.
-`ASSISTANT_CHAT_UPSTREAM` overrides the API base URL (tests and local fakes).
-
-## Sign-in and budgets
-
-October 20, 2026. Once the app is shared, the server's key serves only
-invited people ([`assistantAuth.ts`](../src/lib/server/assistantAuth.ts),
-[`assistantBudget.ts`](../src/lib/server/assistantBudget.ts),
-[`account.ts`](../src/lib/assistant/account.ts)).
-
-- **Sign-in.** The panel signs in with Google through Firebase Auth and sends
-  the Firebase ID token with every request. The server checks it with
-  Google's published keys (node:crypto, no Admin SDK): project, issuer,
-  expiry and a verified email, which must be on `ASSISTANT_ALLOWED_EMAILS`.
-  No token is 401 (`code: "sign-in"`), an email not on the list 403
-  (`code: "not-allowed"`). People with their own API key need neither.
-- **Budgets.** Each person may spend `ASSISTANT_DAILY_USD` (default $5) per
-  UTC day and `ASSISTANT_MONTHLY_USD` (default $50) per calendar month. Each
-  call is priced from the token counts in its stream (cache reads and writes
-  included, a stopped reply too) and charged when the stream ends, so one
-  call can overrun a little. A person over budget gets 429
-  (`code: "budget"`) with `Retry-After` until the reset. Spend is kept in
-  one zero-byte object per person in `HANDOFF_BUCKET`
-  (`_system/assistant-budget-<sha256 of the email>`, compare-and-swap on its
-  metadata, so every instance sees it); without a bucket, in memory. If the
-  ledger can't be read, requests are refused rather than left unbounded.
-- **`GET /api/assistant/me`** tells the panel which case applies: not
-  available, open (local development), sign in, not invited, or allowed with
-  today's and this month's spend. The panel shows a sign-in button, a
-  not-invited note with Sign out, or the budget line under the input; Sign
-  out is in the chats menu.
-- **Progress notes.** While a long turn runs, the activity line shows the
-  model's latest progress note instead of "Thinking…".
+Without a key the endpoint returns 503 and, as on a static site, the panel
+asks for the person's own key. `ASSISTANT_CHAT_UPSTREAM` overrides the API
+base URL (tests and local fakes). A server with a key serves anyone who can
+reach it, limited only per client address (below), so don't deploy one with a
+key on a public URL.
 
 ## Development with your Claude subscription
 
@@ -188,9 +166,8 @@ browser side is exactly the same as in production. The server is
 
 ## Limits and cost
 
-Per signed-in person (or per client address, the first `X-Forwarded-For`
-entry, where sign-in isn't required): 120 model calls per 10 minutes and 600
-per day, on top of the dollar budgets above; 300 calls per minute for the whole server, and the
+Per client address (first `X-Forwarded-For` entry): 120 model calls per 10
+minutes and 600 per day; 300 calls per minute for the whole server, and the
 counters are kept in memory for each instance. A message usually takes 2–8
 model calls; drawing a whole flat takes about 20. Requests are capped at
 12 MB (room for photos, a PDF and the drawing tools' pictures), and the browser keeps only the newest plan readout in
@@ -202,5 +179,5 @@ room $0.03, rearranging a room $0.04, and drawing and furnishing a whole flat
 $0.13. Opus 5.5 costs twice as much per token ($4 / $20 per million input /
 output tokens) and `xhigh` thinks more, so expect several times those
 figures until the harness is re-run. Each call logs `{"event":"assistant_chat", model, input, output,
-cacheRead, cacheWrite, usd}` (token counts and cost only, never content), so real costs can be read
+cacheRead, cacheWrite}` (token counts only, never content), so real costs can be read
 from the server logs.

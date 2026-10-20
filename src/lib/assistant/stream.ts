@@ -29,13 +29,8 @@ export interface TurnResult {
 export const ASSISTANT_ENDPOINT = '/api/assistant/chat';
 export const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 
-/** Why openPlan3D's server turned a request away: nobody signed in, not invited, or over budget. */
-export type AccessCode = 'sign-in' | 'not-allowed' | 'budget';
-
-const ACCESS_CODES = new Set<string>(['sign-in', 'not-allowed', 'budget']);
-
 export class AssistantRequestError extends Error {
-  constructor(public status: number, message: string, public ownKey = false, public code?: AccessCode) { super(message); }
+  constructor(public status: number, message: string, public ownKey = false) { super(message); }
 }
 
 interface Partial { block: ContentBlock; json: string }
@@ -102,8 +97,6 @@ export async function streamTurn(
   messages: ApiMessage[],
   options: {
     signal?: AbortSignal; onText?: (text: string) => void; onThinking?: (text: string) => void; fetchImpl?: typeof fetch; conversation?: string; apiKey?: string;
-    /** Firebase ID token of the signed-in person; only ever sent to openPlan3D's server. */
-    idToken?: string;
   } = {},
 ): Promise<TurnResult> {
   const doFetch = options.fetchImpl ?? fetch;
@@ -123,20 +116,17 @@ export async function streamTurn(
     })
     : await doFetch(ASSISTANT_ENDPOINT, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(options.idToken ? { Authorization: `Bearer ${options.idToken}` } : {}) },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ messages, conversation: options.conversation }),
       signal: options.signal,
     });
   if (!response.ok || !response.body) {
     let message = '';
-    let code: AccessCode | undefined;
     try {
-      const data = await response.json();
-      const error = data?.error;
+      const error = (await response.json())?.error;
       message = String(typeof error === 'object' && error ? error.message ?? '' : error ?? '');
-      if (!options.apiKey && ACCESS_CODES.has(data?.code)) code = data.code;
     } catch { /* non-JSON error */ }
-    throw new AssistantRequestError(response.status, message || `The assistant is unavailable (HTTP ${response.status}).`, !!options.apiKey, code);
+    throw new AssistantRequestError(response.status, message || `The assistant is unavailable (HTTP ${response.status}).`, !!options.apiKey);
   }
   const blocks = new Map<number, Partial>();
   const result: TurnResult = { content: [], stopReason: null };

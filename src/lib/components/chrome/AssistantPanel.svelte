@@ -10,8 +10,7 @@
   import { sketching, sketchAttachment, startSketch, clearSketch } from '$lib/assistant/sketch';
   import { richText } from '$lib/assistant/richText';
   import { prepareImage, preparePdf, PDF_MAX_BYTES } from '$lib/assistant/images';
-  import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
-  import { account, refreshAccount, signIn, signOut } from '$lib/assistant/account';
+  import { assistantApiKey, assistantServer, checkAssistantServer, plausibleKey } from '$lib/assistant/apiKey';
   import Icon from './Icon.svelte';
   import AssistantToolCard from './AssistantToolCard.svelte';
 
@@ -64,25 +63,8 @@
     if (!$sketching && hidForSketch) { hidForSketch = false; assistantOpen.set(true); }
   });
 
-  // Through openPlan3D's server, the server decides: sign in first, an account that isn't invited, or chat within a budget.
-  // The person's own key needs none of this.
-  let access = $derived($assistantApiKey ? null : $account.access);
-  let gate = $derived(access?.available && (access.access === 'sign-in' || access.access === 'not-allowed') ? access : null);
-  let budget = $derived(access?.available && access.access === 'allowed' ? access.budget : null);
-  let signedInEmail = $derived((access?.available && 'email' in access ? access.email : '') || $account.email || '');
-
-  function usd(value: number) {
-    const whole = Number.isInteger(value);
-    return new Intl.NumberFormat($locale === 'pt' ? 'pt-BR' : 'en', { style: 'currency', currency: 'USD', minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 }).format(value);
-  }
-
-  // Each finished message spends some of the budget: ask again so the line stays current.
-  let wasBusy = false;
-  $effect(() => {
-    const busy = $assistant.busy;
-    if (wasBusy && !busy) void refreshAccount();
-    wasBusy = busy;
-  });
+  // Static hosting has no server to run the Assistant, so it needs the person's own key first.
+  let needsKey = $derived(!$assistantApiKey && $assistantServer === false);
 
   let rooms = $derived($detectedRoomsStore.length);
   let alternative = $derived(($currentProject?.alternatives ?? []).find(alt => alt.id === $currentProject?.activeAlternativeId)?.name);
@@ -147,7 +129,7 @@
   $effect(() => {
     if (visible) {
       elementsListOpen.set(false);
-      void refreshAccount();
+      void checkAssistantServer();
       tick().then(() => { if (window.matchMedia('(pointer: fine)').matches) input?.focus(); });
     }
   });
@@ -202,9 +184,6 @@
     keyDraft = '';
   }
 
-  /** Errors whose message comes from the server's access check, already worded for people. */
-  const ACCESS_ERRORS = new Set(['signIn', 'notAllowed', 'budget']);
-
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); assistantOpen.set(false); }
@@ -241,15 +220,6 @@
               <button class="op-btn is-square shrink-0" aria-label={$t('chrome.assistant.history.delete')} title={$t('chrome.assistant.history.delete')} disabled={$assistant.busy && chat.id === $activeChatId} onclick={() => deleteConversation(chat.id)}><Icon name="trash" size={16} /></button>
             </div>
           {/each}
-          {#if $account.email}
-            <div class="op-divider"></div>
-            <button class="op-menu-item" onclick={() => { historyOpen = false; void signOut(); }} data-sign-out>
-              <span class="flex-1 min-w-0 flex flex-col items-start text-left">
-                <span>{$t('chrome.assistant.account.signOut')}</span>
-                <span class="w-full truncate text-xs" style="color:var(--color-text-muted)">{$t('chrome.assistant.account.signedInAs', { email: $account.email })}</span>
-              </span>
-            </button>
-          {/if}
         </div>
       {/if}
     </div>
@@ -322,11 +292,10 @@
         <AssistantToolCard toolId={item.toolId} />
       {:else if item.kind === 'error'}
         <div class="flex flex-col items-start gap-2 p-3 rounded-lg text-sm" style="background:var(--color-danger-subtle);color:var(--color-danger-text)" role="alert">
-          <span>{(ACCESS_ERRORS.has(item.error) && item.message) || $t(`chrome.assistant.error.${item.error}`)}</span>
+          <span>{$t(`chrome.assistant.error.${item.error}`)}</span>
           <div class="flex gap-2 flex-wrap">
             {#if item.retry}<button class="op-btn is-outline" onclick={retry}>{$t('chrome.assistant.retry')}</button>{/if}
-            {#if item.error === 'signIn' && !$account.email}<button class="op-btn is-outline" disabled={$account.signingIn} onclick={() => void signIn()}>{$t('chrome.assistant.account.signIn')}</button>{/if}
-            {#if item.error === 'unavailable' || item.error === 'badKey' || item.error === 'notAllowed' || item.error === 'budget'}<button class="op-btn is-outline" onclick={openKey}>{$t(item.error === 'badKey' ? 'chrome.assistant.key.open' : 'chrome.assistant.useOwnKey')}</button>{/if}
+            {#if item.error === 'unavailable' || item.error === 'badKey'}<button class="op-btn is-outline" onclick={openKey}>{$t(item.error === 'badKey' ? 'chrome.assistant.key.open' : 'chrome.assistant.useOwnKey')}</button>{/if}
           </div>
         </div>
       {/if}
@@ -343,19 +312,11 @@
     {/if}
   </div>
 
-  {#if gate && !$assistant.busy}
-    <div class="flex flex-col gap-2.5 p-4 shrink-0" style="border-top:1px solid var(--color-border-subtle)" data-assistant-gate={gate.access}>
-      <p class="text-sm leading-snug" style="color:var(--color-text-muted)">
-        {gate.access === 'sign-in' ? $t('chrome.assistant.account.signInHelp') : $t('chrome.assistant.account.notAllowed', { email: signedInEmail })}
-      </p>
-      {#if $account.signInFailed}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.account.signInFailed')}</span>{/if}
+  {#if needsKey && !$assistant.busy}
+    <div class="flex flex-col gap-2.5 p-4 shrink-0" style="border-top:1px solid var(--color-border-subtle)" data-assistant-needs-key>
+      <p class="text-sm leading-snug" style="color:var(--color-text-muted)">{$t('chrome.assistant.key.needed')}</p>
       <div class="flex gap-2 flex-wrap">
-        {#if gate.access === 'sign-in'}
-          <button class="op-btn is-primary" disabled={$account.signingIn} onclick={() => void signIn()} data-sign-in>{$t('chrome.assistant.account.signIn')}</button>
-        {:else}
-          <button class="op-btn is-outline" onclick={() => void signOut()}>{$t('chrome.assistant.account.signOut')}</button>
-        {/if}
-        <button class="op-btn is-outline" aria-expanded={keyOpen} onclick={() => keyOpen ? keyOpen = false : openKey()}>{$t('chrome.assistant.useOwnKey')}</button>
+        <button class="op-btn is-primary" aria-expanded={keyOpen} onclick={() => keyOpen ? keyOpen = false : openKey()}>{$t('chrome.assistant.key.add')}</button>
       </div>
     </div>
   {:else}
@@ -404,11 +365,6 @@
           <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
         {/if}
       </div>
-      {#if budget}
-        <div class="px-1 text-xs truncate" style="color:{budget.day.spentUsd >= budget.day.limitUsd || budget.month.spentUsd >= budget.month.limitUsd ? 'var(--color-danger-text)' : 'var(--color-text-muted)'}" title={$t('chrome.assistant.account.signedInAs', { email: signedInEmail })} data-assistant-budget>
-          {$t('chrome.assistant.account.budget', { day: usd(budget.day.spentUsd), dayLimit: usd(budget.day.limitUsd), month: usd(budget.month.spentUsd), monthLimit: usd(budget.month.limitUsd) })}
-        </div>
-      {/if}
     </div>
   {/if}
 </aside>

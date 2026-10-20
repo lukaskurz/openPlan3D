@@ -1,7 +1,5 @@
 import { ASSISTANT_BETAS, ASSISTANT_TOOL_NAMES } from '$lib/assistant/definitions';
 import { buildMessagesRequest } from '$lib/assistant/request';
-import type { Access } from './assistantAuth';
-import { budgetBlock, budgetStatus, chargeBudget, costMicros, type AssistantBudget, type Usage } from './assistantBudget';
 
 /**
  * The Assistant's model calls. The browser runs the plan tools and sends the
@@ -29,11 +27,8 @@ export interface ChatEnv {
 }
 
 export class ChatError extends Error {
-  /** `code` tells the browser what to offer: `sign-in`, `not-allowed` or `budget`. */
-  constructor(public status: number, message: string, public retryAfter?: number, public code?: 'sign-in' | 'not-allowed' | 'budget') { super(message); }
+  constructor(public status: number, message: string, public retryAfter?: number) { super(message); }
 }
-
-const NOT_SET_UP = 'The assistant isn’t set up on this server.';
 
 // ── Limits ────────────────────────────────────────────────────────────
 // A message usually takes 2–8 model calls, a whole flat up to ~20.
@@ -142,13 +137,11 @@ export const upstreamRequest = (messages: Message[]) => buildMessagesRequest(mes
 
 // ── Usage log ─────────────────────────────────────────────────────────
 
-const CHARGE_WAIT_MS = 4000;
-
-/** Pass the stream through untouched, logging token use and cost once it ends (never content), then charging it. */
-function usageLogger(requested: string, charge?: (micros: number) => Promise<unknown>): TransformStream<Uint8Array, Uint8Array> {
+/** Pass the stream through untouched, logging token use once it ends (never content). */
+function usageLogger(requested: string): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   let buffer = '';
-  const usage: Usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   let model = requested;
   const scan = (text: string) => {
     for (const line of text.split('\n')) {
@@ -165,19 +158,6 @@ function usageLogger(requested: string, charge?: (micros: number) => Promise<unk
       } catch { /* partial or non-JSON line */ }
     }
   };
-  let finished = false;
-  // Also runs when the person stops mid-reply: the tokens so far are billed all the same.
-  const finish = async () => {
-    if (finished) return;
-    finished = true;
-    scan(buffer);
-    const micros = costMicros(model, usage);
-    console.log(JSON.stringify({ event: 'assistant_chat', model, ...usage, usd: micros / 1e6 }));
-    if (!charge) return;
-    // A storage hiccup must never break the reply; wait a little so the write isn't cut off, then let it finish alone.
-    const charged = charge(micros).catch(() => console.error(JSON.stringify({ event: 'assistant_budget_charge_failed' })));
-    await Promise.race([charged, new Promise(resolve => setTimeout(resolve, CHARGE_WAIT_MS))]);
-  };
   return new TransformStream({
     transform(chunk, controller) {
       controller.enqueue(chunk);
@@ -185,10 +165,11 @@ function usageLogger(requested: string, charge?: (micros: number) => Promise<unk
       const cut = buffer.lastIndexOf('\n');
       if (cut >= 0) { scan(buffer.slice(0, cut)); buffer = buffer.slice(cut + 1); }
     },
-    flush: finish,
-    // Transformer.cancel (Node 21.5+) is missing from TypeScript's DOM types.
-    cancel: finish,
-  } as Transformer<Uint8Array, Uint8Array>);
+    flush() {
+      scan(buffer);
+      console.log(JSON.stringify({ event: 'assistant_chat', model, ...usage }));
+    },
+  });
 }
 
 // ── Handler ───────────────────────────────────────────────────────────
@@ -201,50 +182,15 @@ async function readBody(request: Request): Promise<unknown> {
   try { return JSON.parse(text); } catch { return invalid(); }
 }
 
-export interface ChatOptions {
-  env: ChatEnv;
-  /** Client address; limits are kept per signed-in email when there is one. */
-  client: string;
-  fetchImpl?: typeof fetch;
-  now?: number;
-  /** Who is calling (`resolveAccess`); the route always passes it. Without it the endpoint is open, as under `vite dev`. */
-  access?: (request: Request) => Promise<Access>;
-  /** Dollar budgets for signed-in people; the route always passes it. */
-  budget?: AssistantBudget;
-}
-
-/** Turn the caller's access into who they are for limits and budget, or the refusal to send. */
-function admitted(access: Access): { email?: string } {
-  if (access.access === 'open') return {};
-  if (access.access === 'allowed') return { email: access.email };
-  if (access.access === 'sign-in') throw new ChatError(401, 'Sign in to use the assistant.', undefined, 'sign-in');
-  if (access.access === 'not-allowed') throw new ChatError(403, 'This assistant is only for invited people. Ask the owner to add your email, or use your own API key.', undefined, 'not-allowed');
-  throw new ChatError(503, NOT_SET_UP);
-}
-
 export async function handleAssistantChat(
   request: Request,
-  { env, client, fetchImpl = fetch, now = Date.now(), access, budget }: ChatOptions,
+  { env, client, fetchImpl = fetch, now = Date.now() }: { env: ChatEnv; client: string; fetchImpl?: typeof fetch; now?: number },
 ): Promise<Response> {
   const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
   try {
-    if (!env.ANTHROPIC_API_KEY) throw new ChatError(503, NOT_SET_UP);
-    // Before reading the body, so strangers can't make the server parse 12 MB.
-    const { email } = access ? admitted(await access(request)) : {};
+    if (!env.ANTHROPIC_API_KEY) throw new ChatError(503, 'The assistant isn’t set up on this server.');
     const messages = parseConversation(await readBody(request));
-    takeQuota(email ? `email:${email}` : client, now);
-    const charged = email && budget ? budget : undefined;
-    if (charged) {
-      let status;
-      try { status = await budgetStatus(charged, email!, now); }
-      catch (error) {
-        // Fail closed: without the ledger nobody's spending can be bounded.
-        console.error(JSON.stringify({ event: 'assistant_budget_unavailable', message: String((error as Error)?.message ?? error) }));
-        throw new ChatError(503, 'The assistant is unavailable right now.');
-      }
-      const blocked = budgetBlock(status, now);
-      if (blocked) throw new ChatError(429, blocked.message, blocked.retryAfter, 'budget');
-    }
+    takeQuota(client, now);
     const upstreamBody = upstreamRequest(messages);
     const base = (env.ASSISTANT_CHAT_UPSTREAM || 'https://api.anthropic.com').replace(/\/$/, '');
     const upstream = await fetchImpl(`${base}/v1/messages`, {
@@ -262,8 +208,7 @@ export async function handleAssistantChat(
       if (status === 400 && detail === 'invalid_request_error') throw new ChatError(400, 'The assistant couldn’t read this conversation. Start a new chat.');
       throw new ChatError(503, 'The assistant is unavailable right now.');
     }
-    const charge = charged ? (micros: number) => chargeBudget(charged.store, email!, micros, now) : undefined;
-    return new Response(upstream.body.pipeThrough(usageLogger(upstreamBody.model, charge)), {
+    return new Response(upstream.body.pipeThrough(usageLogger(upstreamBody.model)), {
       status: 200,
       headers: { ...headers, 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Accel-Buffering': 'no' },
     });
@@ -271,50 +216,9 @@ export async function handleAssistantChat(
     const known = error instanceof ChatError;
     if (!known && (error as Error)?.name !== 'AbortError') console.error(JSON.stringify({ event: 'assistant_chat_failed', message: String((error as Error)?.message ?? error) }));
     if (known && error.retryAfter) headers['Retry-After'] = String(error.retryAfter);
-    return new Response(JSON.stringify({ error: known ? error.message : 'The assistant is unavailable right now.', ...(known && error.code ? { code: error.code } : {}) }), {
+    return new Response(JSON.stringify({ error: known ? error.message : 'The assistant is unavailable right now.' }), {
       status: known ? error.status : 503,
       headers: { ...headers, 'Content-Type': 'application/json' },
     });
-  }
-}
-
-// ── Who am I ──────────────────────────────────────────────────────────
-
-const cents = (micros: number) => Math.round(micros / 10_000) / 100;
-
-export type AssistantMe =
-  | { available: false }
-  | { available: true; access: 'open' | 'sign-in' }
-  | { available: true; access: 'not-allowed'; email: string }
-  | { available: true; access: 'allowed'; email: string; budget?: { day: { spentUsd: number; limitUsd: number }; month: { spentUsd: number; limitUsd: number } } };
-
-/** What the panel should show: `GET /api/assistant/me`, always 200. `budget` is left out only when the ledger can't be read. */
-export async function describeAssistantAccess(
-  request: Request,
-  { env, access, budget, now = Date.now() }: { env: ChatEnv; access: (request: Request) => Promise<Access>; budget?: AssistantBudget; now?: number },
-): Promise<AssistantMe> {
-  if (!env.ANTHROPIC_API_KEY) return { available: false };
-  let who: Access;
-  try { who = await access(request); }
-  catch (error) {
-    console.error(JSON.stringify({ event: 'assistant_access_unavailable', message: String((error as Error)?.message ?? error) }));
-    return { available: false };
-  }
-  if (who.access === 'unavailable') return { available: false };
-  if (who.access === 'open' || who.access === 'sign-in') return { available: true, access: who.access };
-  if (who.access === 'not-allowed') return { available: true, access: 'not-allowed', email: who.email };
-  if (!budget) return { available: true, access: 'allowed', email: who.email };
-  try {
-    const status = await budgetStatus(budget, who.email, now);
-    return {
-      available: true, access: 'allowed', email: who.email,
-      budget: {
-        day: { spentUsd: cents(status.day.spent), limitUsd: cents(status.day.limit) },
-        month: { spentUsd: cents(status.month.spent), limitUsd: cents(status.month.limit) },
-      },
-    };
-  } catch (error) {
-    console.error(JSON.stringify({ event: 'assistant_budget_unavailable', message: String((error as Error)?.message ?? error) }));
-    return { available: true, access: 'allowed', email: who.email };
   }
 }

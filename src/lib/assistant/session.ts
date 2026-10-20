@@ -12,15 +12,13 @@ import { ASSISTANT_CONFIG, READ_ONLY_TOOLS } from './definitions';
 import { forgetDrawings, isDrawingTool, rememberDrawing, runDrawingTool } from './drawings';
 import { runPlanTool } from './planTools';
 import { assistantApiKey } from './apiKey';
-import { idToken } from './account';
 import { streamTurn, AssistantRequestError, type ApiMessage, type ContentBlock, type ImageSource, type ToolResultPart } from './stream';
 
 export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing';
 
 export interface ChangeCounts { rooms: number; walls: number; openings: number; furniture: number; floors: number; changed: number; removed: number }
 
-/** `signIn`, `notAllowed` and `budget` come from the server's access check and show its message as is. */
-export type ErrorKind = 'unavailable' | 'busy' | 'network' | 'failed' | 'tooLong' | 'badKey' | 'signIn' | 'notAllowed' | 'budget';
+export type ErrorKind = 'unavailable' | 'busy' | 'network' | 'failed' | 'tooLong' | 'badKey';
 
 export type ChatItem =
   | { kind: 'user'; id: number; text: string; images?: string[]; files?: string[] }
@@ -388,10 +386,6 @@ function recordChanges(name: string, outcome: { changed?: string[]; removed?: st
 function errorItem(error: unknown): ChatItem {
   const id = nextId++;
   if (error instanceof AssistantRequestError) {
-    // The server's access check explains itself; its message is shown as is.
-    if (error.code === 'sign-in') return { kind: 'error', id, error: 'signIn', message: error.message, retry: false };
-    if (error.code === 'not-allowed') return { kind: 'error', id, error: 'notAllowed', message: error.message, retry: false };
-    if (error.code === 'budget') return { kind: 'error', id, error: 'budget', message: error.message, retry: false };
     if (error.ownKey && (error.status === 401 || error.status === 403)) return { kind: 'error', id, error: 'badKey', message: error.message, retry: false };
     if (error.status === 503 || error.status === 404) return { kind: 'error', id, error: error.ownKey ? 'busy' : 'unavailable', message: error.message, retry: error.ownKey };
     if (error.status === 429 || error.status === 529) return { kind: 'error', id, error: 'busy', message: error.message, retry: true };
@@ -455,14 +449,10 @@ async function runLoop() {
     for (let round = 0; ; round++) {
       if (round >= ASSISTANT_CONFIG.maxRounds) throw new AssistantRequestError(500, 'The assistant took too many steps and stopped.');
       let text = '';
-      const apiKey = get(assistantApiKey) || undefined;
-      // A fresh token each round: a long message can outlast one.
-      const token = apiKey ? undefined : await idToken();
       const turn = await streamTurn(api, {
         signal,
         conversation: conversationId,
-        apiKey,
-        idToken: token,
+        apiKey: get(assistantApiKey) || undefined,
         onText: delta => { text += delta; update(state => { state.activity = null; state.note = null; }); showReply(text, true); },
         onThinking: thinking => {
           const note = progressNote(thinking);

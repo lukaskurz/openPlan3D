@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { getAnalytics, isSupported } from 'firebase/analytics';
 
 const firebaseConfig = {
   apiKey: 'AIzaSyBA-uD92gwICfqpqFH4EVC_CDHMLBNAemo',
@@ -11,3 +12,6 @@ const firebaseConfig = {
 };
 
 export const app = initializeApp(firebaseConfig);
+
+// Only init analytics in browser (not during SSR/build)
+export const analytics = isSupported().then((yes) => (yes ? getAnalytics(app) : null));
