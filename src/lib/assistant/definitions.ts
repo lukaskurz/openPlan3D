@@ -56,6 +56,7 @@ How to work:
   4. Check: look at every part of the plan with view_plan; your walls are drawn over the drawing, so move any wall that doesn't sit on the drawn one. get_plan lists each room's area inside the walls. Compare it with the areas printed on the drawing and fix anything more than about 3% off before you answer. get_plan also names rooms with no door or opening: every room except shafts must be reachable, so add the missing door, or an opening where the drawing shows a passage without a door.
   If sizes are missing, estimate from typical door widths (about 80–90 cm) and say what you assumed. Leave out furniture drawn on the plan unless the person asks for it. For photos of a room or of furniture, use them to answer or to pick similar catalog items.
 - If the person asks for a tool or check they can reuse, make one with make_tool. Two kinds exist: walkway (marks gaps between furniture, or furniture and walls, narrower than a minimum in cm) and room_size (marks rooms smaller than a minimum in m²). Use check_plan to answer questions about walkways or room sizes, and show_tool to switch on a tool made earlier.
+- After bigger changes (furnishing or rearranging a room, a lighting or electrical layout, a flat drawn from a description or drawing, anything across several rooms), call review_proposal once before you answer, with what to check especially: a second designer checks the proposal with fresh eyes. If you don't, it runs when you finish and you get its findings. Fix the problems it finds that hold up (it can be wrong; you decide), then answer. Skip it for questions and small edits.
 - Help only with this plan, home design, layout and furnishing. Politely decline anything unrelated.
 - Reply in the person's language. Keep replies short: 1–4 sentences, plain text, no headings or tables. Use the person's units. Don't show ids or coordinates unless asked.`;
 
@@ -168,8 +169,17 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
     description: 'Switch on a tool made earlier (ids are listed by get_plan), optionally with a new minimum.',
     input_schema: { type: 'object', properties: { id: { type: 'string' }, minimum: num }, required: ['id'] },
   },
+  {
+    name: 'review_proposal',
+    description: 'Have a second designer review your current proposal before you answer. It reads and looks at the plan as proposed, runs checks, and replies with concrete problems (with ids and fixes) or says it found none. Use it once per request, after bigger changes.',
+    input_schema: { type: 'object', properties: {
+      request: { type: 'string', description: 'What the person asked for, in your words.' },
+      summary: { type: 'string', description: 'What you changed and why, including choices you made.' },
+      focus: { type: 'string', description: 'Anything to check especially.' },
+    }, required: ['summary'] },
+  },
 ];
 
 export const ASSISTANT_TOOL_NAMES = new Set(ASSISTANT_TOOLS.map(tool => tool.name));
 /** Tools that only read; anything else starts a proposal. */
-export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan']);
+export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan', 'review_proposal']);

@@ -1,6 +1,7 @@
 /** One model call, read as a server-sent event stream: through /api/assistant/chat, or straight to Anthropic with the person's own key. */
 import { ASSISTANT_BETAS } from './definitions';
 import { buildMessagesRequest } from './request';
+import type { AssistantAgent } from './reviewer';
 
 export interface ImageSource { type: 'base64'; media_type: 'image/jpeg' | 'image/png' | 'image/webp' | 'image/gif'; data: string }
 
@@ -88,7 +89,7 @@ export function applyStreamEvent(event: any, blocks: Map<number, Partial>, resul
 
 export async function streamTurn(
   messages: ApiMessage[],
-  options: { signal?: AbortSignal; onText?: (text: string) => void; fetchImpl?: typeof fetch; conversation?: string; apiKey?: string } = {},
+  options: { signal?: AbortSignal; onText?: (text: string) => void; fetchImpl?: typeof fetch; conversation?: string; apiKey?: string; agent?: AssistantAgent } = {},
 ): Promise<TurnResult> {
   const doFetch = options.fetchImpl ?? fetch;
   // With the person's own key, go straight to Anthropic; otherwise through openPlan3D's server.
@@ -102,13 +103,13 @@ export async function streamTurn(
         'anthropic-dangerous-direct-browser-access': 'true',
         'anthropic-beta': ASSISTANT_BETAS,
       },
-      body: JSON.stringify(buildMessagesRequest(messages as never)),
+      body: JSON.stringify(buildMessagesRequest(messages as never, options.agent)),
       signal: options.signal,
     })
     : await doFetch(ASSISTANT_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages, conversation: options.conversation }),
+      body: JSON.stringify({ messages, conversation: options.conversation, ...(options.agent ? { agent: options.agent } : {}) }),
       signal: options.signal,
     });
   if (!response.ok || !response.body) {

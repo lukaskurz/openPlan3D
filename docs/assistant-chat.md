@@ -30,10 +30,32 @@ server picks the model from the conversation (`assistantMode` in
 
 Tools: `get_plan`, `search_catalog`, `add_room`, `add_walls`, `add_openings`,
 `place_furniture`, `update_elements`, `delete_elements`, `switch_floor`,
-`add_floor`, `check_plan`, `make_tool`, `show_tool`. Placement tools reply
+`add_floor`, `check_plan`, `make_tool`, `show_tool`, `review_proposal`. Placement tools reply
 with warnings for overlaps, items outside rooms, items through walls and
 blocked doors, and the prompt asks the model to fix them before it answers.
 
+- **Reviewer.** October 20, 2026. After a bigger change the proposal is
+  checked by a second agent before the person sees it
+  ([`reviewer.ts`](../src/lib/assistant/reviewer.ts)). The Assistant can ask
+  for it with `review_proposal` (with what to check especially); if it
+  finishes without asking and the proposal adds, changes or removes at least
+  4 elements, the browser runs the review anyway. The reviewer runs on Opus
+  5.5 at high effort with its own prompt and only the read-only tools that
+  leave the view alone (`get_plan`, `search_catalog`, `check_plan`,
+  `view_drawing`, `view_plan`, and later read-only tools automatically). It
+  gets what the person asked, the Assistant's summary and the ids in the
+  proposal, and replies with at most 8 problems, each with the ids and a
+  fix, or "No problems found.". Its reply goes back to the Assistant (as the
+  tool's result, or as a bracketed note after an automatic review), which
+  fixes what holds up and answers again; that answer replaces the first one
+  in the panel. "No problems found." after an automatic review ends the turn
+  without another call. At most 2 reviews per message; a failed review is
+  reported to the Assistant instead of failing the message. The browser
+  sends reviewer calls with `agent: "reviewer"`; the server builds them from
+  its own reviewer prompt and tools and refuses any other agent or a
+  reviewer conversation that uses an editing tool. Logs mark them
+  `"agent":"reviewer"`. In a 4 × 5 m bedroom test the review took about 30 s
+  and caught walkways under 60 cm next to the wardrobe.
 - **Floors.** `get_plan` describes the floor on screen and lists the others;
   `switch_floor` changes the floor the person sees, `add_floor` adds one (empty,
   outer walls or all walls). A new floor is part of the proposal.
@@ -143,6 +165,9 @@ browser side is exactly the same as in production. The server is
 - Usage counts against your plan's limits. Each finished message logs
   `{"event":"assistant_chat_dev", turns, apiEquivalentUsd}`, which is what the
   same message would cost through the API.
+- A review runs in its own `claude -p` process (the reviewer's prompt, model
+  and tools; the bridge gets `BRIDGE_AGENT=reviewer`), which ends once the
+  reviewer has answered.
 - Stop ends the conversation's process; the next message starts a new one with
   the earlier messages as context. Idle processes end after 30 minutes and
   all of them exit with the dev server.

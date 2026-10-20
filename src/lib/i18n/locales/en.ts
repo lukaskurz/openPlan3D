@@ -2001,6 +2001,7 @@ export const en = {
   "chrome.assistant.activity.checking": "Checking the plan…",
   "chrome.assistant.activity.building": "Building the tool…",
   "chrome.assistant.activity.drawing": "Studying the drawing…",
+  "chrome.assistant.activity.reviewing": "Reviewing the proposal…",
   "chrome.assistant.history.title": "Chats",
   "chrome.assistant.history.empty": "No earlier chats yet.",
   "chrome.assistant.history.untitled": "Untitled chat",

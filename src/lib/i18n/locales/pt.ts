@@ -2001,6 +2001,7 @@ export const pt = {
   "chrome.assistant.activity.checking": "A verificar a planta…",
   "chrome.assistant.activity.building": "A criar a ferramenta…",
   "chrome.assistant.activity.drawing": "A estudar o desenho…",
+  "chrome.assistant.activity.reviewing": "Revendo a proposta…",
   "chrome.assistant.history.title": "Conversas",
   "chrome.assistant.history.empty": "Ainda não há conversas anteriores.",
   "chrome.assistant.history.untitled": "Conversa sem título",

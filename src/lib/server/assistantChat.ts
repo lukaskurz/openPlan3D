@@ -1,5 +1,6 @@
 import { ASSISTANT_BETAS, ASSISTANT_TOOL_NAMES } from '$lib/assistant/definitions';
 import { buildMessagesRequest } from '$lib/assistant/request';
+import { ASSISTANT_AGENTS, REVIEWER_TOOL_NAMES, type AssistantAgent } from '$lib/assistant/reviewer';
 
 /**
  * The Assistant's model calls. The browser runs the plan tools and sends the
@@ -72,7 +73,7 @@ function checkImage(b: Block): Block {
   return { type: 'image', source: { type: 'base64', media_type: source.media_type, data: source.data } };
 }
 
-function checkBlock(block: unknown, role: Message['role']): Block {
+function checkBlock(block: unknown, role: Message['role'], toolNames: Set<string>): Block {
   if (!block || typeof block !== 'object') invalid();
   const b = block as Block;
   if (b.type === 'text') {
@@ -95,7 +96,7 @@ function checkBlock(block: unknown, role: Message['role']): Block {
     return { type: 'redacted_thinking', data: b.data };
   }
   if (b.type === 'tool_use' && role === 'assistant') {
-    if (typeof b.id !== 'string' || typeof b.name !== 'string' || !ASSISTANT_TOOL_NAMES.has(b.name)) invalid();
+    if (typeof b.id !== 'string' || typeof b.name !== 'string' || !toolNames.has(b.name)) invalid();
     if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) invalid();
     return { type: 'tool_use', id: b.id, name: b.name, input: b.input };
   }
@@ -116,14 +117,23 @@ function checkBlock(block: unknown, role: Message['role']): Block {
   return invalid();
 }
 
-export function parseConversation(body: unknown): Message[] {
+/** Which agent a conversation is for: the Assistant (no agent) or the reviewer. */
+export function parseAgent(body: unknown): AssistantAgent | undefined {
+  const agent = (body as { agent?: unknown })?.agent;
+  if (agent === undefined || agent === null) return undefined;
+  if (typeof agent !== 'string' || !ASSISTANT_AGENTS.has(agent as AssistantAgent)) invalid();
+  return agent as AssistantAgent;
+}
+
+export function parseConversation(body: unknown, agent?: AssistantAgent): Message[] {
+  const toolNames = agent === 'reviewer' ? REVIEWER_TOOL_NAMES : ASSISTANT_TOOL_NAMES;
   const messages = (body as { messages?: unknown })?.messages;
   if (!Array.isArray(messages) || !messages.length || messages.length > MAX_MESSAGES) invalid();
   const parsed = messages.map((message): Message => {
     const role = (message as Message)?.role;
     const content = (message as Message)?.content;
     if ((role !== 'user' && role !== 'assistant') || !Array.isArray(content) || !content.length || content.length > 64) invalid();
-    const blocks = content.map(block => checkBlock(block, role));
+    const blocks = content.map(block => checkBlock(block, role, toolNames));
     if (blocks.filter(block => block.type === 'image').length > IMAGES_PER_MESSAGE) invalid();
     if (blocks.filter(block => block.type === 'document').length > PDFS_PER_MESSAGE) invalid();
     return { role, content: blocks };
@@ -133,12 +143,12 @@ export function parseConversation(body: unknown): Message[] {
 }
 
 /** Cache the fixed prompt and tools, and the conversation up to its newest block. */
-export const upstreamRequest = (messages: Message[]) => buildMessagesRequest(messages);
+export const upstreamRequest = (messages: Message[], agent?: AssistantAgent) => buildMessagesRequest(messages, agent);
 
 // ── Usage log ─────────────────────────────────────────────────────────
 
 /** Pass the stream through untouched, logging token use once it ends (never content). */
-function usageLogger(requested: string): TransformStream<Uint8Array, Uint8Array> {
+function usageLogger(requested: string, agent?: AssistantAgent): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder();
   let buffer = '';
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -167,7 +177,7 @@ function usageLogger(requested: string): TransformStream<Uint8Array, Uint8Array>
     },
     flush() {
       scan(buffer);
-      console.log(JSON.stringify({ event: 'assistant_chat', model, ...usage }));
+      console.log(JSON.stringify({ event: 'assistant_chat', model, ...(agent ? { agent } : {}), ...usage }));
     },
   });
 }
@@ -189,9 +199,11 @@ export async function handleAssistantChat(
   const headers: Record<string, string> = { 'Cache-Control': 'no-store' };
   try {
     if (!env.ANTHROPIC_API_KEY) throw new ChatError(503, 'The assistant isn’t set up on this server.');
-    const messages = parseConversation(await readBody(request));
+    const body = await readBody(request);
+    const agent = parseAgent(body);
+    const messages = parseConversation(body, agent);
     takeQuota(client, now);
-    const upstreamBody = upstreamRequest(messages);
+    const upstreamBody = upstreamRequest(messages, agent);
     const base = (env.ASSISTANT_CHAT_UPSTREAM || 'https://api.anthropic.com').replace(/\/$/, '');
     const upstream = await fetchImpl(`${base}/v1/messages`, {
       method: 'POST',
@@ -208,7 +220,7 @@ export async function handleAssistantChat(
       if (status === 400 && detail === 'invalid_request_error') throw new ChatError(400, 'The assistant couldn’t read this conversation. Start a new chat.');
       throw new ChatError(503, 'The assistant is unavailable right now.');
     }
-    return new Response(upstream.body.pipeThrough(usageLogger(upstreamBody.model)), {
+    return new Response(upstream.body.pipeThrough(usageLogger(upstreamBody.model, agent)), {
       status: 200,
       headers: { ...headers, 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Accel-Buffering': 'no' },
     });
