@@ -44,7 +44,7 @@
   import { snapStatus } from '$lib/utils/snapStep';
   import { angleSnapWithin, resizeFurnitureFromHandle, snap as _snap, type CanvasState } from '$lib/utils/canvasInteraction';
   import { checkResult, type CheckResult } from '$lib/assistant/checks';
-  import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, planInsetBottom, type SelectMode, type SnapOptions } from '$lib/stores/planView';
+  import { planViewApi, planDisplay, selectionAnchor, canvasRect, wallDraft, selectMode, canvasHint, snapOptions, previewHighlight, planInsetRight, planInsetLeft, planInsetBottom, type SelectMode, type SnapOptions } from '$lib/stores/planView';
   import { drawWall as _drawWall, drawDoorOnWall as _drawDoorOnWall, drawWindowOnWall as _drawWindowOnWall, drawDoorDistanceDimensions as _drawDoorDistanceDimensions, drawWindowDistanceDimensions as _drawWindowDistanceDimensions, drawFurnitureItem, drawStair as _drawStair, drawColumn as _drawColumn, drawGuides as _drawGuides, drawPersistedMeasurements as _drawPersistedMeasurements, drawTextAnnotations as _drawTextAnnotations, drawAnnotation as _drawAnnotation, drawAnnotations as _drawAnnotations, drawRooms as _drawRooms, drawWallJoints as _drawWallJoints, drawSnapPoints as _drawSnapPoints, drawMinimap as _drawMinimap, drawEntourageItems as _drawEntourageItems, drawEntourageGhost as _drawEntourageGhost, drawFloorBelowGhost as _drawFloorBelowGhost, entourageAspect, drawSectionMarkers, drawSectionStart } from '$lib/utils/canvasRenderer';
   import { getEntourageDef } from '$lib/utils/entourageCatalog';
   import { translatedOpeningPosition } from '$lib/utils/openingTranslation';
@@ -368,6 +368,8 @@
   onDestroy(checkResult.subscribe((result) => { checkFindings = result; markDirty(); }));
   let insetRight = 0;
   onDestroy(planInsetRight.subscribe((px) => { insetRight = px; }));
+  let insetLeft = 0;
+  onDestroy(planInsetLeft.subscribe((px) => { insetLeft = px; }));
   let insetBottom = 0;
   onDestroy(planInsetBottom.subscribe((px) => { insetBottom = px; if (px > 0) revealSelectionAboveSheet(); }));
   let currentSelectMode: SelectMode = 'tap';
@@ -2513,6 +2515,7 @@
       paste: pasteClipboard,
       hasClipboard: () => !!clipboard?.ids.length,
       panBy: (dx, dy) => { camX -= dx / zoom; camY -= dy / zoom; markDirty(); },
+      revealSelection,
     });
 
     // Touch input — registered manually so the handlers are non-passive
@@ -2647,6 +2650,45 @@
     revealFrame = requestAnimationFrame(step);
   }
 
+  /**
+   * Pan (never zoom) so the selection lies in the part of the plan the chrome leaves clear: between
+   * the top and bottom bars, right of the Elements panel and the floor rail, left of a panel docked on
+   * the right (Assistant, inspector) and above a bottom sheet. An axis that is already clear stays put.
+   */
+  function revealSelection() {
+    if (!canvas || !currentFloor) return;
+    const ids = fitSelectionIds();
+    const b = ids.size ? boundsForFloor(currentFloor, zoom, ids) : null;
+    if (!b) return;
+    const rect = canvas.getBoundingClientRect();
+    const covering = (selector: string) => [...document.querySelectorAll<HTMLElement>(selector)]
+      .map(el => el.getBoundingClientRect()).filter(r => r.width > 0 && r.height > 0);
+    let left = 16, right = width - 16;
+    for (const r of covering('[data-elements-panel], [data-floor-rail]')) if (r.left - rect.left < width / 2) left = Math.max(left, r.right - rect.left + 16);
+    for (const r of covering('.op-assistant, [data-inspector]')) if (r.left - rect.left > width / 2) right = Math.min(right, r.left - rect.left - 16);
+    const band = chromeBand();
+    const top = band.top, bottom = insetBottom > 0 ? Math.min(band.bottom, window.innerHeight - insetBottom - rect.top - 16) : band.bottom;
+    if (right - left < 40 || bottom - top < 40) return;
+    const a = worldToScreen(b.minX, b.minY), c = worldToScreen(b.maxX, b.maxY);
+    // Centre it on an axis where it is out of view, or pin its start to the band when it is larger than the band.
+    const shift = (lo: number, hi: number, min: number, max: number) => {
+      if (lo >= min && hi <= max) return 0;
+      return (lo + hi) / 2 - (hi - lo > max - min ? min + (hi - lo) / 2 : (min + max) / 2);
+    };
+    const dx = shift(Math.min(a.x, c.x), Math.max(a.x, c.x), left, right), dy = shift(Math.min(a.y, c.y), Math.max(a.y, c.y), top, bottom);
+    if (!dx && !dy) return;
+    const fromX = camX, fromY = camY, toX = camX + dx / zoom, toY = camY + dy / zoom, start = performance.now();
+    cancelAnimationFrame(revealFrame);
+    const step = (now: number) => {
+      const k = Math.min(1, (now - start) / 220), eased = 1 - (1 - k) ** 3;
+      camX = fromX + (toX - fromX) * eased;
+      camY = fromY + (toY - fromY) * eased;
+      markDirty();
+      if (k < 1) revealFrame = requestAnimationFrame(step);
+    };
+    revealFrame = requestAnimationFrame(step);
+  }
+
   function visibleCanvasHeight() {
     const canvasRect = canvas.getBoundingClientRect();
     const sheet = document.querySelector<HTMLElement>('[data-plan-properties]');
@@ -2734,7 +2776,7 @@
     // A bottom sheet hides the lower plan: stop above it (with the usual margin when nothing was measured).
     const sheetBottom = visibleHeight < height ? visibleHeight - (band.measured ? 12 : height - band.bottom) : height;
     const bandTop = band.top, bandBottom = Math.max(bandTop + 1, Math.min(sheetBottom, band.bottom));
-    const availableWidth = Math.max(1, width - chromeX - insetRight), availableHeight = Math.max(1, bandBottom - bandTop);
+    const availableWidth = Math.max(1, width - chromeX - insetRight - insetLeft), availableHeight = Math.max(1, bandBottom - bandTop);
     const initialZoom = Math.min(availableWidth / (maxX - minX + padding * 2),
       availableHeight / (maxY - minY + padding * 2), 3);
     // Minimum screen fonts make text bounds scale-dependent. Find the largest
@@ -2754,7 +2796,7 @@
     zoom = lower || initialZoom;
     ({ minX, minY, maxX, maxY } = fittedBounds);
     minimumZoom = Math.min(0.1, zoom / 4);
-    camX = (minX + maxX) / 2 + insetRight / (2 * zoom);
+    camX = (minX + maxX) / 2 + (insetRight - insetLeft) / (2 * zoom);
     // Centre the content in the clear band (the renderer's origin is the full canvas's centre).
     camY = (minY + maxY) / 2 - ((bandTop + bandBottom) / 2 - height / 2) / zoom;
     markDirty();

@@ -13,7 +13,6 @@
   import SettingsDialog from '$lib/components/toolbar/SettingsDialog.svelte';
   import VersionHistoryPanel from '$lib/components/toolbar/VersionHistoryPanel.svelte';
   import AreaSummaryPanel from '$lib/components/sidebar/AreaSummaryPanel.svelte';
-  import LayersPanel from '$lib/components/sidebar/LayersPanel.svelte';
   import PrintLayout from '$lib/components/editor/PrintLayout.svelte';
   import AssistantShareDialog from '$lib/components/AssistantShareDialog.svelte';
   import ImportError from '$lib/components/ImportError.svelte';
@@ -37,6 +36,7 @@
   import AssistantPanel from './AssistantPanel.svelte';
   import SketchLayer from './SketchLayer.svelte';
   import CheckBar from './CheckBar.svelte';
+  import ElementsPanel from './ElementsPanel.svelte';
   import { discardProposal } from '$lib/assistant/session';
   import { toolGroup, chooseGroup, startingGroup } from './tools';
   import Icon from './Icon.svelte';
@@ -51,7 +51,7 @@
     && ($toolGroup === 'select' || $toolGroup === 'view') && !$catalogOpen && !$popover && !$assistantOpen);
   let historyOpen = $derived($popover === 'history');
 
-  // Panels outside the chrome (Assistant, elements list) stop above the bottom bar, which is taller in portrait.
+  // Panels outside the chrome (Assistant, Elements) stop above the bottom bar, which is taller in portrait.
   let bottomHeight = $state(0);
   $effect(() => {
     const root = document.documentElement;
@@ -131,7 +131,7 @@
 
 <svelte:window onkeydowncapture={onKeydown} />
 
-<div class="op-chrome {$assistantOpen && plan ? 'has-assistant' : ''} {stacked ? 'is-stacked' : ''}" data-editor-chrome>
+<div class="op-chrome {$assistantOpen && plan ? 'has-assistant' : ''} {$elementsListOpen ? 'has-elements' : ''} {stacked ? 'is-stacked' : ''}" data-editor-chrome>
   {#if emptyPlan}<StartCard />{/if}
 
   <div class="op-top" bind:this={topRow}>
@@ -182,15 +182,7 @@
 <CatalogSheet />
 <MenuDrawer {onerror} />
 
-{#if $elementsListOpen}
-  <aside class="op-float op-enter op-elements-panel fixed z-[25] right-[var(--chrome-inset)] bottom-[84px] w-[320px] max-w-[calc(100vw-1rem)] flex flex-col overflow-hidden" aria-label={$t('chrome.view.elements')}>
-    <div class="flex items-center gap-3 pl-4 pr-2 py-2 shrink-0" style="border-bottom:1px solid var(--color-border-subtle)">
-      <div class="flex-1 text-base font-semibold" style="color:var(--color-text-strong)">{$t('chrome.view.elements')}</div>
-      <button class="op-btn is-square" aria-label={$t('chrome.close')} onclick={() => elementsListOpen.set(false)}><Icon name="close" /></button>
-    </div>
-    <div class="op-elements flex-1 min-h-0"><LayersPanel /></div>
-  </aside>
-{/if}
+{#if $elementsListOpen}<ElementsPanel />{/if}
 
 {#if $dialog === 'export'}<ExportDialog {onerror} />{/if}
 <SettingsDialog bind:open={settingsOpen} />

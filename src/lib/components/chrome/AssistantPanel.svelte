@@ -125,7 +125,8 @@
 
   $effect(() => {
     if (visible) {
-      elementsListOpen.set(false);
+      // Side by side on wide screens: Elements on the left, the Assistant on the right.
+      if (window.innerWidth <= 1000) elementsListOpen.set(false);
       tick().then(() => { if (window.matchMedia('(pointer: fine)').matches) input?.focus(); });
     }
   });
