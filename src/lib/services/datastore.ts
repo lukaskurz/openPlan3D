@@ -30,7 +30,7 @@ export class ProjectConflictError extends Error {
  *  The lock callback never rejects: Firefox reports a lock callback that rejects at once (indexedDB.open with
  *  site data blocked) as an uncaught error even though the request's promise is handled, so the outcome is
  *  carried out of the lock and rethrown here. */
-async function mutateLibrary<T>(change: () => Promise<T>): Promise<T> {
+export async function mutateLibrary<T>(change: () => Promise<T>): Promise<T> {
   if (typeof window !== 'undefined' && typeof navigator !== 'undefined' && navigator.locks?.request) {
     const outcome = await navigator.locks.request('openplan3d-project-library', async () => {
       try { return { ok: true as const, value: await change() }; }

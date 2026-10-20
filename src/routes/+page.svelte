@@ -13,6 +13,8 @@
   import LibraryRestoreDialog from '$lib/components/LibraryRestoreDialog.svelte';
   import ProjectPackageDialog from '$lib/components/ProjectPackageDialog.svelte';
   import LibraryStorageNote from '$lib/components/LibraryStorageNote.svelte';
+  import CloudSyncPanel from '$lib/components/CloudSyncPanel.svelte';
+  import { availableProviders, cloudSync, syncCloudLibrary } from '$lib/stores/cloudSync';
   import ProjectActionsMenu from '$lib/components/ProjectActionsMenu.svelte';
   import { houseTemplates } from '$lib/utils/houseTemplates';
 
@@ -58,12 +60,28 @@
     } finally { loading = false; }
   }
 
+  /** Library edits reach the cloud right away; a sync that changed the library lists it again. */
+  async function syncAfterChange() {
+    const outcome = await syncCloudLibrary();
+    if (outcome && (outcome.downloaded || outcome.deleted || outcome.conflicts.length)) await withLibraryError(refreshProjects);
+  }
+
+  /** A first visit on a new device often wants the plans from another one: show the sync panel. */
+  async function openCloudSync() {
+    showWelcome = false;
+    await tick();
+    const panel = document.querySelector<HTMLElement>('[aria-labelledby="cloud-sync-title"]');
+    panel?.scrollIntoView({ block: 'nearest' });
+    panel?.querySelector<HTMLElement>('button')?.focus();
+  }
+
   /** `file` is a library backup the welcome's Import a Plan was given. */
   function openRestore(file?: File) { showWelcome = false; restoreFile = file ?? null; restoreOpen = true; }
   function openPackage() { showWelcome = false; packageOpen = true; }
   async function afterRestore() {
     await refreshProjects();
     libraryError = null;
+    void syncAfterChange();
   }
 
   onMount(() => {
@@ -104,6 +122,7 @@
     });
     // Refresh errors must not turn a completed copy into a retryable mutation.
     if (!libraryError) await withLibraryError(refreshProjects);
+    if (copyId) void syncAfterChange();
     duplicating = false; duplicatedId = copyId;
     await tick();
     if (document.activeElement === document.body && previous?.isConnected) previous.focus();
@@ -140,6 +159,7 @@
     // Close only after the transaction commits, then refresh separately so a
     // failed list read cannot repeat a successful rename or delete.
     await withLibraryError(refreshProjects);
+    void syncAfterChange();
     await tick();
     if (action.type === 'delete' && document.activeElement === document.body) newProjectButton?.focus();
   }
@@ -160,7 +180,7 @@
 </script>
 
 {#if showWelcome}
-  <WelcomeScreen onRestoreLibrary={openRestore} onImportPackage={openPackage} onDismiss={() => { showWelcome = false; void withLibraryError(refreshProjects); }} />
+  <WelcomeScreen onRestoreLibrary={openRestore} onImportPackage={openPackage} onSyncDevices={availableProviders().length ? openCloudSync : undefined} onDismiss={() => { showWelcome = false; void withLibraryError(refreshProjects); }} />
 {/if}
 
 {#if restoreOpen}<LibraryRestoreDialog file={restoreFile} onclose={() => restoreOpen = false} onrestored={afterRestore} />{/if}
@@ -209,6 +229,7 @@
         <a class="font-semibold text-blue-600 underline" href={USER_GUIDE_URL} target="_blank" rel="noopener">{$t('help.userGuide')}</a>
       </div>
     </div>
+    <CloudSyncPanel onsynced={() => void withLibraryError(refreshProjects)} when={(date) => formatDate(date.toISOString(), $locale)} />
     <LibraryStorageNote active={projects.length > 0 && !libraryError} />
     {#if libraryError}
       <div role="alert" bind:this={libraryAlert} class="mb-6 rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-900">
@@ -283,7 +304,8 @@
         <h2 id="library-action-title" class="text-lg font-semibold">{actionDialog.type === 'rename' ? $t('library.renameTitle') : $t('library.deleteTitle')}</h2>
         <p id="library-action-description" class="mt-2 break-words text-sm text-gray-500">
           {#if actionDialog.type === 'rename'}{$t('library.renameHelp', { name: actionDialog.name })}
-          {:else}{$t('library.deleteHelp', { name: actionDialog.name })}{/if}
+          {:else}{$t('library.deleteHelp', { name: actionDialog.name })}
+            {#if $cloudSync.state === 'ready' || $cloudSync.state === 'syncing'}{$t('cloud.deleteNote', { provider: $t($cloudSync.provider === 'google' ? 'cloud.google' : 'cloud.icloud') })}{/if}{/if}
         </p>
         {#if actionDialog.type === 'rename'}
           <label for="library-project-name" class="mt-4 block text-sm font-medium">{$t('library.name')}</label>

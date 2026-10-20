@@ -16,7 +16,8 @@
   onDestroy(() => openingLifetime.abort());
 
   /** `onRestoreLibrary` receives the file when Import a Plan was given a library backup. */
-  let { onDismiss, onRestoreLibrary, onImportPackage }: { onDismiss: () => void; onRestoreLibrary?: (file?: File) => void; onImportPackage?: () => void } = $props();
+  /** `onSyncDevices` is offered when the site can sync the library with Google Drive or iCloud. */
+  let { onDismiss, onRestoreLibrary, onImportPackage, onSyncDevices }: { onDismiss: () => void; onRestoreLibrary?: (file?: File) => void; onImportPackage?: () => void; onSyncDevices?: () => void } = $props();
 
   let importError = $state<string | null>(null);
   let showTour = $state(false);
@@ -214,6 +215,9 @@
       {/if}
       {#if onImportPackage}
         <button onclick={onImportPackage} class="mt-3 block w-full text-sm font-semibold text-blue-600 underline">{$t('welcome.package')}</button>
+      {/if}
+      {#if onSyncDevices}
+        <button onclick={() => { try { localStorage.setItem('hasSeenWelcome', 'true'); } catch {} onSyncDevices?.(); }} class="mt-3 block w-full text-sm font-semibold text-blue-600 underline">{$t('welcome.cloud')}</button>
       {/if}
     </div>
   {/if}
