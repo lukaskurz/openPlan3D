@@ -1,4 +1,5 @@
 import { readProject } from '$lib/utils/projectValidation';
+import { isNewerFormat } from '$lib/models/projectFormat';
 import { contentHash, readLocalEntries, replaceLocalProject, replaceLocalThumbnail, writeSyncRecord, type LocalEntry, type SyncRecord } from './localLibrary';
 import { CloudAuthError, RemoteChangedError, type CloudProvider, type RemoteProject } from './types';
 
@@ -67,7 +68,12 @@ async function syncEntry(provider: CloudProvider, id: string, local: LocalEntry,
 
 /** Remote bytes become a local plan only when they are a valid project with this ID. */
 function validRemote(id: string, raw: string) {
-  const project = readProject(JSON.parse(raw));
+  let project;
+  try { project = readProject(JSON.parse(raw)); }
+  catch (error) {
+    if (isNewerFormat(raw)) throw new Error('This plan was saved by a newer version of openPlan3D. Reload the page to update it.');
+    throw error;
+  }
   if (project.id !== id) throw new Error('The cloud copy of this plan has a different project ID.');
   return project;
 }
@@ -88,8 +94,8 @@ async function reconcile(provider: CloudProvider, id: string, local: LocalEntry,
     outcome.uploaded++;
   };
 
-  const pull = async (source: RemoteProject, expected: string | null) => {
-    const next = await provider.read(source);
+  const pull = async (source: RemoteProject, expected: string | null, remoteRaw?: string) => {
+    const next = remoteRaw ?? await provider.read(source);
     validRemote(id, next);
     const preview = source.thumbnailVersion ? await provider.readThumbnail(source) : null;
     const synced: SyncRecord = { version: source.version, hash: contentHash(next), thumbnailVersion: source.thumbnailVersion,
@@ -138,18 +144,21 @@ async function reconcile(provider: CloudProvider, id: string, local: LocalEntry,
       thumbnailHash: record?.thumbnailHash ?? null });
     return;
   }
-  // Keep both: the cloud version becomes a separate local plan (uploaded as its own plan), then this
-  // device's version replaces it under the original ID.
-  const copy = validRemote(id, remoteRaw);
+  // Keep both. Usually the cloud version becomes a separate plan and this device's version keeps the ID.
+  // When a newer build wrote the cloud version, it keeps the ID and this device's edits become the copy,
+  // so an older build never overwrites data it may not understand (models/projectFormat).
+  const cloudWins = isNewerFormat(remoteRaw) && !isNewerFormat(raw);
+  const cloudProject = validRemote(id, remoteRaw);
+  const copy = cloudWins ? readProject(JSON.parse(raw)) : cloudProject;
   copy.id = newId();
   copy.name = `${copy.name || 'Untitled Project'} (Conflicted copy)`;
   const copyRaw = JSON.stringify(copy);
-  const preview = remote.thumbnailVersion ? await provider.readThumbnail(remote).catch(() => null) : null;
+  const preview = cloudWins ? thumbnail : remote.thumbnailVersion ? await provider.readThumbnail(remote).catch(() => null) : null;
   if (await replaceLocalProject(account, copy.id, null, { raw: copyRaw, thumbnail: preview }, null)) {
     outcome.conflicts.push(copy.name);
     await reconcile(provider, copy.id, { raw: copyRaw, thumbnail: preview, record: null }, null, outcome);
   }
-  await push(remote);
+  if (cloudWins) await pull(remote, raw, remoteRaw); else await push(remote);
 }
 
 async function syncThumbnail(provider: CloudProvider, id: string, raw: string, thumbnail: string | null, remote: RemoteProject, record: SyncRecord) {

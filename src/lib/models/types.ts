@@ -411,6 +411,8 @@ export interface PlanAlternative {
 }
 
 export interface Project {
+  /** Plan format of the build that last saved it (models/projectFormat); missing on older files. */
+  formatVersion?: number;
   customModels?: CustomModelDef[];
   attachmentNames?: Record<string, string>;
   projectPackage?: ProjectPackageState;

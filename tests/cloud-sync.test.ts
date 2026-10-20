@@ -1,7 +1,8 @@
 import { mockStorage, putRaw, rawRecords } from './fixtures/indexeddb';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { IDBFactory } from 'fake-indexeddb';
-import { createLocalStore } from '$lib/services/datastore';
+import { createLocalStore, NewerProjectFormatError, ProjectConflictError } from '$lib/services/datastore';
+import { PROJECT_FORMAT } from '$lib/models/projectFormat';
 import { createDefaultProject } from '$lib/stores/project';
 import { syncLibrary, syncProject } from '$lib/services/cloudSync/engine';
 import { RemoteChangedError, type CloudProvider, type RemoteProject } from '$lib/services/cloudSync/types';
@@ -243,5 +244,79 @@ describe('library cloud sync', () => {
     expect(outcome.failed).toEqual([]);
     expect(outcome.conflicts).toEqual(['Elsewhere (Conflicted copy)']);
     expect(JSON.parse(cloud.files.get(plan.id)!.raw).name).toBe('Renamed');
+  });
+});
+
+describe('plans saved by a newer app version', () => {
+  const newer = (project: Project) => { project.formatVersion = PROJECT_FORMAT + 1; };
+
+  it('stamps every save with the format of the build that wrote it', async () => {
+    const store = device().use(), plan = createDefaultProject('Plan');
+    await store.save(plan);
+    expect(JSON.parse((await rawRecords())[plan.id]).formatVersion).toBe(PROJECT_FORMAT);
+  });
+
+  it('downloads a newer plan but refuses to save over it, while a copy stays editable', async () => {
+    const cloud = memoryCloud(), mac = device(), ipad = device();
+    const plan = createDefaultProject('Plan');
+    await mac.use().save(plan);
+    await syncLibrary(cloud.provider);
+    const ipadStore = ipad.use();
+    await syncLibrary(cloud.provider);
+
+    cloud.edit(plan.id, project => { newer(project); project.name = 'Edited by a newer build'; });
+    expect(await syncLibrary(cloud.provider)).toMatchObject({ downloaded: 1 });
+    const opened = (await ipadStore.load(plan.id))!;
+    expect(opened.name).toBe('Edited by a newer build');
+    opened.name = 'Older build edit';
+    const error = await ipadStore.save(opened).catch(e => e);
+    expect(error).toBeInstanceOf(NewerProjectFormatError);
+    expect(error).toBeInstanceOf(ProjectConflictError);
+
+    const copy = await ipadStore.saveCopy(opened);
+    expect(copy.formatVersion).toBe(PROJECT_FORMAT);
+    await ipadStore.save(copy);
+    expect(JSON.parse(cloud.files.get(plan.id)!.raw).name).toBe('Edited by a newer build');
+  });
+
+  it('keeps the newer cloud version under the plan when both sides changed', async () => {
+    const cloud = memoryCloud(), mac = device(), ipad = device();
+    const plan = createDefaultProject('Flat');
+    await mac.use().save(plan);
+    await syncLibrary(cloud.provider);
+    const ipadStore = ipad.use();
+    await syncLibrary(cloud.provider);
+
+    cloud.edit(plan.id, project => { newer(project); project.name = 'Flat (newer build)'; });
+    const offline = (await ipadStore.load(plan.id))!;
+    offline.name = 'Flat (older build)';
+    await ipadStore.save(offline);
+
+    const outcome = await syncLibrary(cloud.provider);
+    expect(outcome.conflicts).toEqual(['Flat (older build) (Conflicted copy)']);
+    expect(JSON.parse(cloud.files.get(plan.id)!.raw).name).toBe('Flat (newer build)');
+    expect(await names()).toEqual(['Flat (newer build)', 'Flat (older build) (Conflicted copy)']);
+    expect(cloud.files.size).toBe(2);
+  });
+
+  it('leaves a newer plan it cannot read alone, without copying it on every sync', async () => {
+    const cloud = memoryCloud(), mac = device(), ipad = device();
+    const plan = createDefaultProject('Plan');
+    await mac.use().save(plan);
+    await syncLibrary(cloud.provider);
+    const ipadStore = ipad.use();
+    await syncLibrary(cloud.provider);
+
+    cloud.edit(plan.id, project => { newer(project); (project as unknown as { floors: string }).floors = 'a shape this build does not know'; });
+    const local = (await ipadStore.load(plan.id))!;
+    local.name = 'Local edit';
+    await ipadStore.save(local);
+    for (let i = 0; i < 2; i++) {
+      const outcome = await syncLibrary(cloud.provider);
+      expect(outcome.failed.map(f => (f.error as Error).message)).toEqual(['This plan was saved by a newer version of openPlan3D. Reload the page to update it.']);
+      expect(outcome).toMatchObject({ uploaded: 0, downloaded: 0, conflicts: [] });
+    }
+    expect(await names()).toEqual(['Local edit']);
+    expect(JSON.parse(cloud.files.get(plan.id)!.raw).floors).toBe('a shape this build does not know');
   });
 });

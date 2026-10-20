@@ -43,6 +43,21 @@ connects to one account at a time.
   in the library and in the cloud. Connecting a different account never
   deletes local plans: sync records are kept per account.
 
+### Plans saved by a newer app version
+
+Library sync can connect builds of different ages: a local development build,
+the live site, a tab left open on another device. Each saved plan records the
+plan format of the build that wrote it (`formatVersion`, see
+[CONTRIBUTING.md](../CONTRIBUTING.md#changing-the-saved-plan-format)). A build
+that meets a plan from a newer format:
+
+- still downloads and shows it, but refuses to save it. The editor offers
+  **Save copy** or a JSON download instead.
+- never uploads over it. If both sides changed, the newer cloud version keeps
+  the plan and this device's edits become the "(Conflicted copy)".
+- skips a newer plan it cannot read, with the message "saved by a newer
+  version of openPlan3D". Reloading the page picks up the newer build.
+
 ### Where the files are
 
 - **Google Drive:** a folder named **openPlan3D** in My Drive, with one

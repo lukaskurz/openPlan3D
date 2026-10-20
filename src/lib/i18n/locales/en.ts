@@ -220,7 +220,7 @@ export const en = {
   "cloud.syncNow": "Sync now",
   "cloud.disconnect": "Disconnect",
   "cloud.cancel": "Cancel",
-  "cloud.conflicts": "Some plans changed on two devices since they last synced. Both versions were kept; the other device's version is now: {names}.",
+  "cloud.conflicts": "Some plans changed on two devices since they last synced. Both versions were kept; one of them is now saved as: {names}.",
   "cloud.dismiss": "Dismiss",
   "cloud.deleteNote": "It is also deleted from {provider} and your other devices.",
   "restore.title": "Restore library backup",

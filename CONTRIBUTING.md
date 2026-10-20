@@ -64,6 +64,16 @@ unit/type/build, browser and benchmark checks in
 [ci.yml](.github/workflows/ci.yml); do not treat a focused local pass as that full
 result. Linux WebKit coverage does not replace Safari or physical iPhone/iPad QA.
 
+## Changing the saved plan format
+
+Every saved plan records `formatVersion`, the `PROJECT_FORMAT` of the build that
+saved it ([projectFormat.ts](src/lib/models/projectFormat.ts)). Bump
+`PROJECT_FORMAT` in the same change whenever you add or change plan data that an
+older build would drop, misread or overwrite wrongly. Older builds, such as a
+stale deployment or a tab left open on another device, then refuse to save such
+plans and never let library sync overwrite them. Purely additive optional fields
+that older builds pass through untouched do not need a bump.
+
 ## Pull requests
 
 Explain the concrete problem and resulting behavior. Include a small before/after

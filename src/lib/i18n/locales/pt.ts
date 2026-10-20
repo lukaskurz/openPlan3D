@@ -220,7 +220,7 @@ export const pt = {
   "cloud.syncNow": "Sincronizar agora",
   "cloud.disconnect": "Desconectar",
   "cloud.cancel": "Cancelar",
-  "cloud.conflicts": "Alguns projetos mudaram em dois dispositivos desde a última sincronização. As duas versões foram mantidas; a versão do outro dispositivo agora é: {names}.",
+  "cloud.conflicts": "Alguns projetos mudaram em dois dispositivos desde a última sincronização. As duas versões foram mantidas; uma delas agora está salva como: {names}.",
   "cloud.dismiss": "Dispensar",
   "cloud.deleteNote": "Ele também é excluído do {provider} e dos seus outros dispositivos.",
   "restore.title": "Restaurar backup da biblioteca",
