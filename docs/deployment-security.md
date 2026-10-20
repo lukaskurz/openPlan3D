@@ -16,9 +16,9 @@ itself is described in [cloud-sync.md](cloud-sync.md).
   hidden.
 - There is no backend. Browsers talk to Google Drive and iCloud directly with
   the visitor's own sign-in, so no server holds user data or tokens to steal.
-- One problem needs action: the live site sends usage analytics to the
-  **upstream project's** Firebase / Google Analytics account. See
-  [action 1](#actions).
+- The audit found the live site sending usage analytics to the **upstream
+  project's** Firebase / Google Analytics account. Analytics now only run when a
+  deployment sets `PUBLIC_ENABLE_ANALYTICS=true`, and this one does not.
 
 ## How it fits together
 
@@ -64,7 +64,7 @@ comes from the provider checking where requests come from.
 | CloudKit production token `openfloorplan-web-production` (`894d71e8…`) | Cloudflare variable `PUBLIC_CLOUDKIT_API_TOKEN` | Public by design | Apple accepts it only from `https://openfloorplan.lukaskurz.com` (verified: other origins get `AUTHENTICATION_FAILED`) | Another site cannot use it |
 | CloudKit development token `openfloorplan-dev` (`8abe3ba0…`) | Local `.env` only (git-ignored) | Not published | Development environment only, which has separate data; allows any origin so `http://localhost:5173` works | Could let a phishing page reach development data of someone who signs in there; only you do |
 | CloudKit development token `openfloorplan-web` (`e1713d84…`) | Nowhere; superseded | — | Development only, domain-limited | Unused; delete it ([action 4](#actions)) |
-| Firebase web config of the **upstream** project (`AIzaSyBA-…`, project `openplan3d`) | Committed in [src/lib/firebase.ts](../src/lib/firebase.ts) by upstream | Public by design (Firebase web keys are identifiers) | Upstream's Firebase rules ([storage.rules](../storage.rules) deny writes) | Not yours to rotate. It is why analytics flow to upstream ([action 1](#actions)) |
+| Firebase web config of the **upstream** project (`AIzaSyBA-…`, project `openplan3d`) | Committed in [src/lib/firebase.ts](../src/lib/firebase.ts) by upstream | Public by design (Firebase web keys are identifiers) | Upstream's Firebase rules ([storage.rules](../storage.rules) deny writes) | Not yours to rotate. Unused here: analytics are off unless `PUBLIC_ENABLE_ANALYTICS=true` |
 | Server secrets of the Node build (`ANTHROPIC_API_KEY`, `HANDOFF_*`, `ASSISTANT_SHARES_*`) | Not set anywhere for this deployment | Must stay secret | Only read through `$env/dynamic/private` in server code, which the static build does not ship | Not present, so nothing to leak |
 | Visitor's Google access token | Visitor's browser, `localStorage` key `openplan3d-google-token`, about 1 hour | Per-visitor secret | `drive.file` reaches only files this app created; never sent to any server of ours | Someone who runs script on the page (XSS) could read or change that visitor's openPlan3D files for up to an hour |
 | Visitor's iCloud session | Visitor's browser, stored by CloudKit JS | Per-visitor secret | Limited to this container; never sent to any server of ours | Same XSS caveat, for that visitor's openPlan3D records |
@@ -118,9 +118,11 @@ key file or service-account JSON has ever been committed.
 
 **Live site.** `_app/env.js` holds exactly the four `PUBLIC_*` values.
 `/editor` and other deep links are served. The page contacts
-`accounts.google.com` and `www.googleapis.com` (sign-in and Drive) and,
-unexpectedly, `firebase.googleapis.com`, `www.googletagmanager.com` and
-`region1.google-analytics.com` (upstream analytics, [action 1](#actions)).
+`accounts.google.com` and `www.googleapis.com` (sign-in and Drive) and, at
+the time, also `firebase.googleapis.com`, `www.googletagmanager.com` and
+`region1.google-analytics.com`: upstream analytics, loaded unless a deployment
+opted out. Analytics are now opt-in (`PUBLIC_ENABLE_ANALYTICS=true`), so the
+site no longer contacts them.
 
 **One thing to know.** During setup the Google Cloud console showed the new
 client's secret once in the browser, and it appeared in this session's
@@ -131,12 +133,11 @@ use it. Disabling it ([action 3](#actions)) makes that moot.
 
 In order of importance:
 
-1. **Stop sending analytics to upstream.** In Cloudflare Pages → `openfloorplan`
-   → Settings → Variables, add `PUBLIC_ENABLE_ANALYTICS=false`, then retry the
-   latest deployment. To keep analytics, point
-   [src/lib/firebase.ts](../src/lib/firebase.ts) at a Firebase project of your
-   own first, and mention it in a privacy notice.
-2. **Deploy the version guard.** Push commit `acd6923` to `main`. It stops a
+1. **Analytics (done).** They are off unless a deployment sets
+   `PUBLIC_ENABLE_ANALYTICS=true`. To add analytics of your own, point
+   [src/lib/firebase.ts](../src/lib/firebase.ts) at your own Firebase project
+   first, and mention it in a privacy notice.
+2. **Version guard (done).** Deployed with the analytics change. It stops a
    stale tab or an older deployment from overwriting plans saved by newer code
    (see [cloud-sync.md](cloud-sync.md#plans-saved-by-a-newer-app-version)).
 3. **Disable the unused Google client secret.** In Google Cloud → Google Auth

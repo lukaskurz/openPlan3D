@@ -9,7 +9,7 @@ release of the photo reconstruction pipeline.
 
 ```sh
 npm ci
-PUBLIC_ENABLE_ANALYTICS=false npm run dev -- --host 127.0.0.1
+npm run dev -- --host 127.0.0.1
 ```
 
 Open `/render-lab` and choose a self-contained GLB. Files are decoded in browser
