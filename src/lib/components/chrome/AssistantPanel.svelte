@@ -11,6 +11,7 @@
   import { richText } from '$lib/assistant/richText';
   import { prepareImage, preparePdf, PDF_MAX_BYTES } from '$lib/assistant/images';
   import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
+  import { account, refreshAccount, signIn, signOut } from '$lib/assistant/account';
   import Icon from './Icon.svelte';
   import AssistantToolCard from './AssistantToolCard.svelte';
 
@@ -61,6 +62,26 @@
   }
   $effect(() => {
     if (!$sketching && hidForSketch) { hidForSketch = false; assistantOpen.set(true); }
+  });
+
+  // Through openPlan3D's server, the server decides: sign in first, an account that isn't invited, or chat within a budget.
+  // The person's own key needs none of this.
+  let access = $derived($assistantApiKey ? null : $account.access);
+  let gate = $derived(access?.available && (access.access === 'sign-in' || access.access === 'not-allowed') ? access : null);
+  let budget = $derived(access?.available && access.access === 'allowed' ? access.budget : null);
+  let signedInEmail = $derived((access?.available && 'email' in access ? access.email : '') || $account.email || '');
+
+  function usd(value: number) {
+    const whole = Number.isInteger(value);
+    return new Intl.NumberFormat($locale === 'pt' ? 'pt-BR' : 'en', { style: 'currency', currency: 'USD', minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 }).format(value);
+  }
+
+  // Each finished message spends some of the budget: ask again so the line stays current.
+  let wasBusy = false;
+  $effect(() => {
+    const busy = $assistant.busy;
+    if (wasBusy && !busy) void refreshAccount();
+    wasBusy = busy;
   });
 
   let rooms = $derived($detectedRoomsStore.length);
@@ -126,6 +147,7 @@
   $effect(() => {
     if (visible) {
       elementsListOpen.set(false);
+      void refreshAccount();
       tick().then(() => { if (window.matchMedia('(pointer: fine)').matches) input?.focus(); });
     }
   });
@@ -180,6 +202,9 @@
     keyDraft = '';
   }
 
+  /** Errors whose message comes from the server's access check, already worded for people. */
+  const ACCESS_ERRORS = new Set(['signIn', 'notAllowed', 'budget']);
+
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); }
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); assistantOpen.set(false); }
@@ -216,6 +241,15 @@
               <button class="op-btn is-square shrink-0" aria-label={$t('chrome.assistant.history.delete')} title={$t('chrome.assistant.history.delete')} disabled={$assistant.busy && chat.id === $activeChatId} onclick={() => deleteConversation(chat.id)}><Icon name="trash" size={16} /></button>
             </div>
           {/each}
+          {#if $account.email}
+            <div class="op-divider"></div>
+            <button class="op-menu-item" onclick={() => { historyOpen = false; void signOut(); }} data-sign-out>
+              <span class="flex-1 min-w-0 flex flex-col items-start text-left">
+                <span>{$t('chrome.assistant.account.signOut')}</span>
+                <span class="w-full truncate text-xs" style="color:var(--color-text-muted)">{$t('chrome.assistant.account.signedInAs', { email: $account.email })}</span>
+              </span>
+            </button>
+          {/if}
         </div>
       {/if}
     </div>
@@ -288,66 +322,93 @@
         <AssistantToolCard toolId={item.toolId} />
       {:else if item.kind === 'error'}
         <div class="flex flex-col items-start gap-2 p-3 rounded-lg text-sm" style="background:var(--color-danger-subtle);color:var(--color-danger-text)" role="alert">
-          <span>{$t(`chrome.assistant.error.${item.error}`)}</span>
+          <span>{(ACCESS_ERRORS.has(item.error) && item.message) || $t(`chrome.assistant.error.${item.error}`)}</span>
           <div class="flex gap-2 flex-wrap">
             {#if item.retry}<button class="op-btn is-outline" onclick={retry}>{$t('chrome.assistant.retry')}</button>{/if}
-            {#if item.error === 'unavailable' || item.error === 'badKey'}<button class="op-btn is-outline" onclick={openKey}>{$t(item.error === 'badKey' ? 'chrome.assistant.key.open' : 'chrome.assistant.useOwnKey')}</button>{/if}
+            {#if item.error === 'signIn' && !$account.email}<button class="op-btn is-outline" disabled={$account.signingIn} onclick={() => void signIn()}>{$t('chrome.assistant.account.signIn')}</button>{/if}
+            {#if item.error === 'unavailable' || item.error === 'badKey' || item.error === 'notAllowed' || item.error === 'budget'}<button class="op-btn is-outline" onclick={openKey}>{$t(item.error === 'badKey' ? 'chrome.assistant.key.open' : 'chrome.assistant.useOwnKey')}</button>{/if}
           </div>
         </div>
       {/if}
     {/each}
     {#if $assistant.activity}
       <div class="flex items-center gap-2 text-sm" style="color:var(--color-text-muted)" data-chat-activity>
-        <span class="op-typing" aria-hidden="true"><i></i><i></i><i></i></span>
-        {$t(`chrome.assistant.activity.${$assistant.activity}`)}
+        <span class="op-typing shrink-0" aria-hidden="true"><i></i><i></i><i></i></span>
+        {#if $assistant.note}
+          <span class="min-w-0 line-clamp-2" data-chat-note>{$assistant.note}</span>
+        {:else}
+          {$t(`chrome.assistant.activity.${$assistant.activity}`)}
+        {/if}
       </div>
     {/if}
   </div>
 
-  <div class="flex flex-col gap-2.5 p-3 shrink-0" style="border-top:1px solid var(--color-border-subtle)">
-    {#if !$assistant.busy}
-      <div class="op-chips flex flex-wrap gap-2">
-        {#each suggestions as key}
-          <button class="op-chip" onclick={() => submit($t(key))}>{$t(key)}</button>
-        {/each}
+  {#if gate && !$assistant.busy}
+    <div class="flex flex-col gap-2.5 p-4 shrink-0" style="border-top:1px solid var(--color-border-subtle)" data-assistant-gate={gate.access}>
+      <p class="text-sm leading-snug" style="color:var(--color-text-muted)">
+        {gate.access === 'sign-in' ? $t('chrome.assistant.account.signInHelp') : $t('chrome.assistant.account.notAllowed', { email: signedInEmail })}
+      </p>
+      {#if $account.signInFailed}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.account.signInFailed')}</span>{/if}
+      <div class="flex gap-2 flex-wrap">
+        {#if gate.access === 'sign-in'}
+          <button class="op-btn is-primary" disabled={$account.signingIn} onclick={() => void signIn()} data-sign-in>{$t('chrome.assistant.account.signIn')}</button>
+        {:else}
+          <button class="op-btn is-outline" onclick={() => void signOut()}>{$t('chrome.assistant.account.signOut')}</button>
+        {/if}
+        <button class="op-btn is-outline" aria-expanded={keyOpen} onclick={() => keyOpen ? keyOpen = false : openKey()}>{$t('chrome.assistant.useOwnKey')}</button>
       </div>
-    {/if}
-    {#if outgoing.length || photoError}
-      <div class="flex gap-2 items-center flex-wrap" data-attachments>
-        {#each outgoing as attachment, i}
-          <div class="relative">
-            {#if attachment.thumb}
-              <img src={attachment.thumb} alt="" class="w-14 h-14 object-cover rounded-lg" style="border:1px solid var(--color-border)" />
-            {:else}
-              <div class="h-14 max-w-[9rem] px-2.5 rounded-lg flex flex-col justify-center text-xs" style="border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text)" data-pdf-chip><span class="font-semibold">PDF</span><span class="truncate">{attachment.name}</span></div>
-            {/if}
-            <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t(attachment.sketch ? 'chrome.assistant.sketch.remove' : 'chrome.assistant.removePhoto')} onclick={() => attachment.sketch ? clearSketch() : attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
-          </div>
-        {/each}
-        {#if photoError}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.photoFailed')}</span>{/if}
+    </div>
+  {:else}
+    <div class="flex flex-col gap-2.5 p-3 shrink-0" style="border-top:1px solid var(--color-border-subtle)">
+      {#if !$assistant.busy}
+        <div class="op-chips flex flex-wrap gap-2">
+          {#each suggestions as key}
+            <button class="op-chip" onclick={() => submit($t(key))}>{$t(key)}</button>
+          {/each}
+        </div>
+      {/if}
+      {#if outgoing.length || photoError}
+        <div class="flex gap-2 items-center flex-wrap" data-attachments>
+          {#each outgoing as attachment, i}
+            <div class="relative">
+              {#if attachment.thumb}
+                <img src={attachment.thumb} alt="" class="w-14 h-14 object-cover rounded-lg" style="border:1px solid var(--color-border)" />
+              {:else}
+                <div class="h-14 max-w-[9rem] px-2.5 rounded-lg flex flex-col justify-center text-xs" style="border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text)" data-pdf-chip><span class="font-semibold">PDF</span><span class="truncate">{attachment.name}</span></div>
+              {/if}
+              <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t(attachment.sketch ? 'chrome.assistant.sketch.remove' : 'chrome.assistant.removePhoto')} onclick={() => attachment.sketch ? clearSketch() : attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
+            </div>
+          {/each}
+          {#if photoError}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.photoFailed')}</span>{/if}
+        </div>
+      {/if}
+      <div class="flex items-end gap-2">
+        <input bind:this={fileInput} type="file" accept="image/*,application/pdf" multiple class="hidden" onchange={(e) => { const el = e.currentTarget; void addPhotos([...(el.files ?? [])]); el.value = ''; }} />
+        <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || outgoing.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
+        <button class="op-attach" aria-label={$t('chrome.assistant.sketch.start')} title={$t('chrome.assistant.sketch.start')} aria-pressed={$sketching} disabled={$assistant.busy || (outgoing.length >= 3 && !$sketchAttachment)} onclick={toggleSketch} data-sketch-button><Icon name="pencil" size={19} /></button>
+        <textarea
+          bind:this={input}
+          bind:value={draft}
+          oninput={resize}
+          onkeydown={onKeydown}
+          onpaste={onPaste}
+          rows="1"
+          maxlength="4000"
+          class="op-chat-input flex-1 min-w-0"
+          placeholder={$t('chrome.assistant.placeholder')}
+          aria-label={$t('chrome.assistant.placeholder')}
+        ></textarea>
+        {#if $assistant.busy}
+          <button class="op-send" aria-label={$t('chrome.assistant.stop')} title={$t('chrome.assistant.stop')} onclick={stop}><Icon name="stop" size={18} /></button>
+        {:else}
+          <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
+        {/if}
       </div>
-    {/if}
-    <div class="flex items-end gap-2">
-      <input bind:this={fileInput} type="file" accept="image/*,application/pdf" multiple class="hidden" onchange={(e) => { const el = e.currentTarget; void addPhotos([...(el.files ?? [])]); el.value = ''; }} />
-      <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || outgoing.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
-      <button class="op-attach" aria-label={$t('chrome.assistant.sketch.start')} title={$t('chrome.assistant.sketch.start')} aria-pressed={$sketching} disabled={$assistant.busy || (outgoing.length >= 3 && !$sketchAttachment)} onclick={toggleSketch} data-sketch-button><Icon name="pencil" size={19} /></button>
-      <textarea
-        bind:this={input}
-        bind:value={draft}
-        oninput={resize}
-        onkeydown={onKeydown}
-        onpaste={onPaste}
-        rows="1"
-        maxlength="4000"
-        class="op-chat-input flex-1 min-w-0"
-        placeholder={$t('chrome.assistant.placeholder')}
-        aria-label={$t('chrome.assistant.placeholder')}
-      ></textarea>
-      {#if $assistant.busy}
-        <button class="op-send" aria-label={$t('chrome.assistant.stop')} title={$t('chrome.assistant.stop')} onclick={stop}><Icon name="stop" size={18} /></button>
-      {:else}
-        <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
+      {#if budget}
+        <div class="px-1 text-xs truncate" style="color:{budget.day.spentUsd >= budget.day.limitUsd || budget.month.spentUsd >= budget.month.limitUsd ? 'var(--color-danger-text)' : 'var(--color-text-muted)'}" title={$t('chrome.assistant.account.signedInAs', { email: signedInEmail })} data-assistant-budget>
+          {$t('chrome.assistant.account.budget', { day: usd(budget.day.spentUsd), dayLimit: usd(budget.day.limitUsd), month: usd(budget.month.spentUsd), monthLimit: usd(budget.month.limitUsd) })}
+        </div>
       {/if}
     </div>
-  </div>
+  {/if}
 </aside>

@@ -6,36 +6,21 @@
  */
 
 /**
- * Two modes. Chat (questions, edits, furnishing) runs on Sonnet. A message that
- * comes with a photo or PDF is usually a plan to rebuild, which takes careful
- * reading and many coordinates, so that turn runs on Opus at high effort.
+ * One model for every turn: Opus at extra-high effort, with room for long
+ * turns. Switching models mid-conversation lost the prompt cache and the
+ * earlier reasoning, so questions, edits and rebuilt drawings all run here.
  */
-export type AssistantMode = 'chat' | 'build';
-
-export const ASSISTANT_MODELS: Record<AssistantMode, { model: string; maxTokens: number; effort?: 'high'; maxRounds: number }> = {
-  chat: { model: 'claude-sonnet-5-5', maxTokens: 16000, maxRounds: 16 },
-  build: { model: 'claude-opus-5-5', maxTokens: 32000, effort: 'high', maxRounds: 30 },
-};
-/** The chat model, for logs and docs. */
-export const ASSISTANT_MODEL = ASSISTANT_MODELS.chat.model;
+export const ASSISTANT_CONFIG = { model: 'claude-opus-5-5', maxTokens: 64000, effort: 'xhigh', maxRounds: 60 } as const;
+/** The model, for logs and docs. */
+export const ASSISTANT_MODEL = ASSISTANT_CONFIG.model;
 
 /**
  * Beta features every request uses: thinking blocks are kept across tool
- * rounds (and dropped instead of failing when older turns were trimmed), and a
- * declined request is retried on Anthropic's recommended fallback model.
+ * rounds (and dropped instead of failing when older turns were trimmed), a
+ * declined request is retried on Anthropic's recommended fallback model, and
+ * the model's progress notes between tool calls come back as thinking text.
  */
-export const ASSISTANT_BETAS = 'thinking-binding-controls-2026-08-01,server-side-fallback-2026-07-01';
-
-type ModeBlock = { type?: unknown };
-/** The mode for the turn in progress: build when the person's message that started it has a photo or PDF. */
-export function assistantMode(messages: { role: string; content: ModeBlock[] }[]): AssistantMode {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i];
-    if (message.role !== 'user' || message.content.every(block => block.type === 'tool_result')) continue;
-    return message.content.some(block => block.type === 'image' || block.type === 'document') ? 'build' : 'chat';
-  }
-  return 'chat';
-}
+export const ASSISTANT_BETAS = 'thinking-binding-controls-2026-08-01,server-side-fallback-2026-07-01,thinking-display-updates-2026-08-18';
 
 export const ASSISTANT_SYSTEM_PROMPT = `You are the design assistant inside openPlan3D, a floor plan editor. The person is looking at their plan while chatting with you in a narrow side panel.
 
@@ -57,7 +42,7 @@ How to work:
   If sizes are missing, estimate from typical door widths (about 80–90 cm) and say what you assumed. Leave out furniture drawn on the plan unless the person asks for it. For photos of a room or of furniture, use them to answer or to pick similar catalog items.
 - If the person asks for a tool or check they can reuse, make one with make_tool. Two kinds exist: walkway (marks gaps between furniture, or furniture and walls, narrower than a minimum in cm) and room_size (marks rooms smaller than a minimum in m²). Use check_plan to answer questions about walkways or room sizes, and show_tool to switch on a tool made earlier.
 - Help only with this plan, home design, layout and furnishing. Politely decline anything unrelated.
-- Reply in the person's language. Keep replies short: 1–4 sentences, plain text, no headings or tables. Use the person's units. Don't show ids or coordinates unless asked.`;
+- Reply in the person's language and units. After an edit, say in a sentence or two what you changed and anything you assumed. For design questions and advice, answer as fully as the question needs: give your reasoning, compare the options and recommend one. The panel shows paragraphs, bullet and numbered lists and **bold**, nothing else (no headings, tables or code). Don't show ids or coordinates unless asked.`;
 
 type JsonSchema = Record<string, unknown>;
 export interface AssistantToolDef { name: string; description: string; input_schema: JsonSchema }

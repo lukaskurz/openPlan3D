@@ -2,12 +2,15 @@
 
 October 2, 2026. The ✦ Assistant button next to the tool strip opens a chat
 docked on the right of the plan (Round 2 of the iPad redesign). The assistant
-reads the plan, answers questions and edits it with Claude Sonnet 5.5
-(`claude-sonnet-5-5`). A message that comes with a photo or PDF (usually a
-plan to rebuild) runs that turn on Claude Opus 5.5 (`claude-opus-5-5`) at high
-effort, with more room per call (32k tokens) and per message (30 calls). The
-server picks the model from the conversation (`assistantMode` in
-`definitions.ts`), so the browser can't choose one.
+reads the plan, answers questions and edits it.
+
+October 20, 2026: every turn runs on Claude Opus 5.5 (`claude-opus-5-5`) at
+`xhigh` effort, with 64k tokens per call and up to 60 calls per message
+(`ASSISTANT_CONFIG` in `definitions.ts`). Before, questions and edits ran on
+Sonnet 5.5 and only messages with a photo or PDF switched to Opus; each switch
+lost the prompt cache and the earlier reasoning. Replies to design questions
+may now be as long as the question needs; edits are still confirmed in a
+sentence or two.
 
 ## How a message is handled
 
@@ -40,8 +43,10 @@ blocked doors, and the prompt asks the model to fix them before it answers.
 - **Curved walls.** Walls take a quadratic control point (`curves` in
   `add_walls`, `curve`/`straighten` in `update_elements`); openings on curved
   walls are measured along the curve.
-- **Thinking.** Both models think adaptively. Thinking blocks are kept in the
-  conversation and sent back unchanged, so reasoning carries across tool
+- **Thinking.** The model thinks adaptively. Requests set `display: "updates"`
+  (beta `thinking-display-updates-2026-08-18`), so the short progress notes it
+  writes between tool calls arrive as thinking text and show in the panel while
+  a long turn runs. Thinking blocks are kept in the conversation and sent back unchanged, so reasoning carries across tool
   rounds. Trimming older turns invalidates their blocks, so requests set
   `prefix_mismatch_behavior: "drop_block"` (beta
   `thinking-binding-controls-2026-08-01`) and those blocks are dropped
@@ -92,8 +97,7 @@ blocked doors, and the prompt asks the model to fix them before it answers.
   view moves. The sketch goes with the next message as a picture of that part
   of the plan as it is on screen, strokes in red and numbered, plus a text
   block listing each stroke's points in plan cm (simplified, and marked when a
-  stroke circles an area), so "put a desk here" has a here. Like photos, it runs
-  that turn on the build model. On narrow screens the panel steps aside while
+  stroke circles an area), so "put a desk here" has a here. On narrow screens the panel steps aside while
   drawing.
 - **Own API key.** The key button in the panel stores an Anthropic key in this
   browser (`o3d_anthropic_key`). With a key, the browser calls the Messages
@@ -104,32 +108,65 @@ blocked doors, and the prompt asks the model to fix them before it answers.
 ## Setup
 
 Local development: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
-(a Claude Console key, billed pay-as-you-go). Restart `npm run dev`.
+(a Claude Console key, billed pay-as-you-go). Restart `npm run dev`. Without
+`ASSISTANT_ALLOWED_EMAILS` the local assistant stays open, as before sign-in
+existed.
 
-Firebase App Hosting: store the key as a secret and reference it in
-`apphosting.yaml`:
+Firebase App Hosting: the key and the list of invited people are secrets
+(the repository is public, so emails never go in `apphosting.yaml`, which
+only references them). Create both before deploying; a rollout fails while a
+referenced secret is missing:
 
 ```bash
 firebase apphosting:secrets:set anthropic-api-key
+firebase apphosting:secrets:set assistant-allowed-emails
 ```
 
-```yaml
-  - variable: ANTHROPIC_API_KEY
-    secret: anthropic-api-key
-    availability:
-      - RUNTIME
-```
+The second is a comma-separated list of Google account emails. Google must
+be enabled as a sign-in provider in Firebase Authentication for project
+`openplan3d`, with the app's domain on its authorized domains.
 
-Without a key the endpoint returns 503 and the panel says the assistant isn't
-available on this server. `ASSISTANT_CHAT_UPSTREAM` overrides the API base URL
-(tests and local fakes).
+Without a key, or in production without the allowlist, the endpoint returns
+503 and the panel says the assistant isn't available on this server.
+`ASSISTANT_CHAT_UPSTREAM` overrides the API base URL (tests and local fakes).
+
+## Sign-in and budgets
+
+October 20, 2026. Once the app is shared, the server's key serves only
+invited people ([`assistantAuth.ts`](../src/lib/server/assistantAuth.ts),
+[`assistantBudget.ts`](../src/lib/server/assistantBudget.ts),
+[`account.ts`](../src/lib/assistant/account.ts)).
+
+- **Sign-in.** The panel signs in with Google through Firebase Auth and sends
+  the Firebase ID token with every request. The server checks it with
+  Google's published keys (node:crypto, no Admin SDK): project, issuer,
+  expiry and a verified email, which must be on `ASSISTANT_ALLOWED_EMAILS`.
+  No token is 401 (`code: "sign-in"`), an email not on the list 403
+  (`code: "not-allowed"`). People with their own API key need neither.
+- **Budgets.** Each person may spend `ASSISTANT_DAILY_USD` (default $5) per
+  UTC day and `ASSISTANT_MONTHLY_USD` (default $50) per calendar month. Each
+  call is priced from the token counts in its stream (cache reads and writes
+  included, a stopped reply too) and charged when the stream ends, so one
+  call can overrun a little. A person over budget gets 429
+  (`code: "budget"`) with `Retry-After` until the reset. Spend is kept in
+  one zero-byte object per person in `HANDOFF_BUCKET`
+  (`_system/assistant-budget-<sha256 of the email>`, compare-and-swap on its
+  metadata, so every instance sees it); without a bucket, in memory. If the
+  ledger can't be read, requests are refused rather than left unbounded.
+- **`GET /api/assistant/me`** tells the panel which case applies: not
+  available, open (local development), sign in, not invited, or allowed with
+  today's and this month's spend. The panel shows a sign-in button, a
+  not-invited note with Sign out, or the budget line under the input; Sign
+  out is in the chats menu.
+- **Progress notes.** While a long turn runs, the activity line shows the
+  model's latest progress note instead of "Thinking…".
 
 ## Development with your Claude subscription
 
 Set `ASSISTANT_DEV_CLAUDE=1` in `.env` and restart `npm run dev`. The chat
 then runs on your own Claude plan through Claude Code instead of an API key:
 each conversation gets one `claude -p --input-format stream-json` process
-(Sonnet 5.5, or Opus 5.5 at high effort once a photo or PDF is attached; the same system prompt, no built-in tools and none of your own
+(Opus 5.5 at `xhigh` effort, the same system prompt, no built-in tools and none of your own
 MCP servers or settings). Its plan tools come from
 [`tooling/assistant-dev-bridge.mjs`](../tooling/assistant-dev-bridge.mjs),
 which hands every call to the browser and waits for the result, so the
@@ -151,16 +188,19 @@ browser side is exactly the same as in production. The server is
 
 ## Limits and cost
 
-Per client address (first `X-Forwarded-For` entry): 120 model calls per 10
-minutes and 600 per day; 300 calls per minute for the whole server, and the
+Per signed-in person (or per client address, the first `X-Forwarded-For`
+entry, where sign-in isn't required): 120 model calls per 10 minutes and 600
+per day, on top of the dollar budgets above; 300 calls per minute for the whole server, and the
 counters are kept in memory for each instance. A message usually takes 2–8
 model calls; drawing a whole flat takes about 20. Requests are capped at
 12 MB (room for photos, a PDF and the drawing tools' pictures), and the browser keeps only the newest plan readout in
 the history.
 
 Measured with Sonnet 5.5 at list prices (September 2026 harness, 75 m²
-apartment): a question costs about $0.02, a small edit $0.02, furnishing a
+apartment): a question cost about $0.02, a small edit $0.02, furnishing a
 room $0.03, rearranging a room $0.04, and drawing and furnishing a whole flat
-$0.13. Each call logs `{"event":"assistant_chat", input, output, cacheRead,
-cacheWrite}` (token counts only, never content), so real costs can be read
+$0.13. Opus 5.5 costs twice as much per token ($4 / $20 per million input /
+output tokens) and `xhigh` thinks more, so expect several times those
+figures until the harness is re-run. Each call logs `{"event":"assistant_chat", model, input, output,
+cacheRead, cacheWrite, usd}` (token counts and cost only, never content), so real costs can be read
 from the server logs.

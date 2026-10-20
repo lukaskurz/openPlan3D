@@ -8,17 +8,19 @@
 import { get, writable } from 'svelte/store';
 import { currentProject, previewActive, beginPreview, commitPreview, discardPreview } from '$lib/stores/project';
 import { previewHighlight } from '$lib/stores/planView';
-import { ASSISTANT_MODELS, READ_ONLY_TOOLS, assistantMode } from './definitions';
+import { ASSISTANT_CONFIG, READ_ONLY_TOOLS } from './definitions';
 import { forgetDrawings, isDrawingTool, rememberDrawing, runDrawingTool } from './drawings';
 import { runPlanTool } from './planTools';
 import { assistantApiKey } from './apiKey';
+import { idToken } from './account';
 import { streamTurn, AssistantRequestError, type ApiMessage, type ContentBlock, type ImageSource, type ToolResultPart } from './stream';
 
 export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing';
 
 export interface ChangeCounts { rooms: number; walls: number; openings: number; furniture: number; floors: number; changed: number; removed: number }
 
-export type ErrorKind = 'unavailable' | 'busy' | 'network' | 'failed' | 'tooLong' | 'badKey';
+/** `signIn`, `notAllowed` and `budget` come from the server's access check and show its message as is. */
+export type ErrorKind = 'unavailable' | 'busy' | 'network' | 'failed' | 'tooLong' | 'badKey' | 'signIn' | 'notAllowed' | 'budget';
 
 export type ChatItem =
   | { kind: 'user'; id: number; text: string; images?: string[]; files?: string[] }
@@ -31,6 +33,8 @@ export interface AssistantState {
   items: ChatItem[];
   busy: boolean;
   activity: ActivityKind | null;
+  /** The model's latest progress note while it works; shown with the activity, never saved. */
+  note: string | null;
 }
 
 /** A photo or PDF ready to send: what the model sees and a small preview for the chat (PDFs have a file name instead of a thumbnail). */
@@ -44,7 +48,31 @@ export interface Attachment {
   sketch?: boolean;
 }
 
-export const assistant = writable<AssistantState>({ items: [], busy: false, activity: null });
+export const assistant = writable<AssistantState>({ items: [], busy: false, activity: null, note: null });
+
+const NOTE_LENGTH = 120;
+
+/**
+ * A progress note short enough for the activity line: the last line of the
+ * thinking so far, cut to the whole sentences at its end that fit, or to the
+ * start of its last sentence when that alone is too long.
+ */
+export function progressNote(thinking: string): string | null {
+  const line = thinking.split(/\n+/).map(part => part.replace(/\*\*|^[#>*\-\s]+/g, '').trim()).filter(Boolean).at(-1);
+  if (!line) return null;
+  if (line.length <= NOTE_LENGTH) return line;
+  const sentences = line.split(/(?<=[.!?…])\s+/);
+  let note = '';
+  for (let i = sentences.length - 1; i >= 0; i--) {
+    const longer = note ? `${sentences[i]} ${note}` : sentences[i];
+    if (longer.length > NOTE_LENGTH) break;
+    note = longer;
+  }
+  if (note) return note;
+  const last = sentences[sentences.length - 1];
+  const cut = last.slice(0, NOTE_LENGTH - 1);
+  return `${cut.slice(0, cut.lastIndexOf(' ') > 40 ? cut.lastIndexOf(' ') : cut.length).trimEnd()}…`;
+}
 
 const ACTIVITY: Record<string, ActivityKind> = {
   get_plan: 'reading', search_catalog: 'catalog', add_room: 'rooms', add_walls: 'walls', add_openings: 'openings',
@@ -212,7 +240,7 @@ function restore(project: string, chat: string) {
     activeChatId.set(chat);
     outcomeNote = unapplied ? 'The page was reloaded before the person applied your last changes, so they were discarded.' : data.outcomeNote;
     nextId = Math.max(0, ...items.map(item => item.id)) + 1;
-    assistant.set({ items, busy: false, activity: null });
+    assistant.set({ items, busy: false, activity: null, note: null });
   } catch { /* unreadable: start fresh */ }
 }
 
@@ -240,7 +268,7 @@ function resetConversation() {
   outcomeNote = null;
   proposal = null;
   previewHighlight.set(new Set());
-  assistant.set({ items: [], busy: false, activity: null });
+  assistant.set({ items: [], busy: false, activity: null, note: null });
 }
 
 /** Start a new chat; the current one stays in the history. Any proposal still on the plan is discarded first. */
@@ -360,6 +388,10 @@ function recordChanges(name: string, outcome: { changed?: string[]; removed?: st
 function errorItem(error: unknown): ChatItem {
   const id = nextId++;
   if (error instanceof AssistantRequestError) {
+    // The server's access check explains itself; its message is shown as is.
+    if (error.code === 'sign-in') return { kind: 'error', id, error: 'signIn', message: error.message, retry: false };
+    if (error.code === 'not-allowed') return { kind: 'error', id, error: 'notAllowed', message: error.message, retry: false };
+    if (error.code === 'budget') return { kind: 'error', id, error: 'budget', message: error.message, retry: false };
     if (error.ownKey && (error.status === 401 || error.status === 403)) return { kind: 'error', id, error: 'badKey', message: error.message, retry: false };
     if (error.status === 503 || error.status === 404) return { kind: 'error', id, error: error.ownKey ? 'busy' : 'unavailable', message: error.message, retry: error.ownKey };
     if (error.status === 429 || error.status === 529) return { kind: 'error', id, error: 'busy', message: error.message, retry: true };
@@ -389,6 +421,7 @@ export async function send(text: string, images: Attachment[] = []) {
     state.items.push({ kind: 'user', id: nextId++, text, ...(images.some(file => file.thumb) ? { images: images.filter(file => file.thumb).map(file => file.thumb) } : {}), ...(images.some(file => !file.thumb) ? { files: images.filter(file => !file.thumb).map(file => file.name ?? 'PDF') } : {}) });
     state.busy = true;
     state.activity = 'thinking';
+    state.note = null;
   });
   await runLoop();
 }
@@ -418,16 +451,23 @@ async function runLoop() {
       update(state => { state.items.push({ kind: 'assistant', id: replyId, text, streaming }); });
     } else patchItem(replyId, { text, streaming });
   };
-  const maxRounds = ASSISTANT_MODELS[assistantMode(api)].maxRounds;
   try {
     for (let round = 0; ; round++) {
-      if (round >= maxRounds) throw new AssistantRequestError(500, 'The assistant took too many steps and stopped.');
+      if (round >= ASSISTANT_CONFIG.maxRounds) throw new AssistantRequestError(500, 'The assistant took too many steps and stopped.');
       let text = '';
+      const apiKey = get(assistantApiKey) || undefined;
+      // A fresh token each round: a long message can outlast one.
+      const token = apiKey ? undefined : await idToken();
       const turn = await streamTurn(api, {
         signal,
         conversation: conversationId,
-        apiKey: get(assistantApiKey) || undefined,
-        onText: delta => { text += delta; update(state => { state.activity = null; }); showReply(text, true); },
+        apiKey,
+        idToken: token,
+        onText: delta => { text += delta; update(state => { state.activity = null; state.note = null; }); showReply(text, true); },
+        onThinking: thinking => {
+          const note = progressNote(thinking);
+          if (note && note !== get(assistant).note) update(state => { state.note = note; });
+        },
       });
       if (turn.stopReason === 'refusal') throw new AssistantRequestError(422, 'The assistant declined this request. Try rephrasing it.');
       api.push({ role: 'assistant', content: turn.content });
@@ -438,7 +478,7 @@ async function runLoop() {
       }
       const results: ContentBlock[] = [];
       for (const use of uses) {
-        update(state => { state.activity = ACTIVITY[use.name] ?? 'thinking'; });
+        update(state => { state.activity = ACTIVITY[use.name] ?? 'thinking'; state.note = null; });
         if (!READ_ONLY_TOOLS.has(use.name)) {
           beginPreview();
           proposal ??= { counts: emptyCounts(), changed: new Set(), removed: new Set(), itemId: null };
@@ -491,7 +531,7 @@ async function runLoop() {
         previewHighlight.set(new Set());
       }
     }
-    update(state => { state.busy = false; state.activity = null; });
+    update(state => { state.busy = false; state.activity = null; state.note = null; });
     persist();
   }
 }
