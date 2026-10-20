@@ -13,6 +13,7 @@
   import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
   import Icon from './Icon.svelte';
   import AssistantToolCard from './AssistantToolCard.svelte';
+  import AssistantBrief from './AssistantBrief.svelte';
 
   let { visible }: { visible: boolean } = $props();
 
@@ -235,6 +236,8 @@
       </div>
     </form>
   {/if}
+
+  <AssistantBrief />
 
   <div bind:this={scroller} class="op-scroll op-assistant-thread flex-1 min-h-0 flex flex-col gap-3.5 p-4" aria-live="polite">
     {#if !$assistant.items.length}

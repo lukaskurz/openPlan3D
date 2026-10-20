@@ -1436,6 +1436,17 @@ export function updateProjectDescription(description: string) {
   currentProject.set({ ...p });
 }
 
+/** The Assistant's project brief; empty text removes it. Inside an Assistant preview it joins the proposal. */
+export function updateProjectBrief(text: string) {
+  const p = get(currentProject);
+  if (!p || (p.brief ?? '') === text) return;
+  snapshot('Changed project brief', 'project-brief');
+  if (text) p.brief = text;
+  else delete p.brief;
+  p.updatedAt = new Date();
+  currentProject.set({ ...p });
+}
+
 export function loadProject(project: Project) {
   previewBaseline = null;
   previewActive.set(false);

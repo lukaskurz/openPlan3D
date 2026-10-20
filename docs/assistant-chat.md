@@ -29,10 +29,55 @@ server picks the model from the conversation (`assistantMode` in
    message.
 
 Tools: `get_plan`, `search_catalog`, `add_room`, `add_walls`, `add_openings`,
-`place_furniture`, `update_elements`, `delete_elements`, `switch_floor`,
-`add_floor`, `check_plan`, `make_tool`, `show_tool`. Placement tools reply
+`place_furniture`, `update_elements`, `delete_elements`, `add_pipes`,
+`link_switch`, `switch_floor`, `add_floor`, `check_plan`, `make_tool`,
+`show_tool`, `view_drawing`, `trace_drawing`, `view_plan`, `view_3d`,
+`read_skill`, `update_brief`. The browser runs them through
+[`tools.ts`](../src/lib/assistant/tools.ts). Placement tools reply
 with warnings for overlaps, items outside rooms, items through walls and
 blocked doors, and the prompt asks the model to fix them before it answers.
+
+- **Heights and trades.** `get_plan` gives the floor's default ceiling height
+  and each room's (marked when it is the room's own), floor finishes, wall
+  colours, each item's trade and how it is fixed (wall items: host wall, the
+  way they face and mounting height; ceiling items: drop and bottom height),
+  pipes and switch links. `place_furniture` snaps wall items (outlets,
+  switches, sconces) to the wall face nearest the point, or to `wallId`, and
+  takes `elevation` (mounting height) and `drop` (ceiling items); heights are
+  checked against the room's ceiling. `update_elements` also sets a room's
+  `ceilingHeight` (`null` resets it) and `floorMaterial`, a wall's `color`
+  (both faces) and a pipe's points, kind, diameter, run and elevation.
+  `add_pipes` draws water and waste runs and risers, `link_switch` says what a
+  switch controls. Wall and ceiling items don't warn about the furniture
+  under them; they warn instead when they sit in a door or window opening,
+  overlap on the wall, face outside, reach above the ceiling, or (ceiling
+  items) leave less than 200 cm headroom with no table, bed or counter under
+  them.
+- **Looking in 3D.** `view_3d` renders the active floor, proposal included,
+  from a room overview at 45° (near walls cut away), an eye-level view from
+  one plan point towards another, or the whole floor
+  ([`view3d.ts`](../src/lib/assistant/view3d.ts)). The 3D viewer registers a
+  capture function while it is mounted
+  ([`viewer3dCapture.ts`](../src/lib/stores/viewer3dCapture.ts)); if the
+  person is in 2D the tool opens 3D, waits up to 15 s for the scene and its
+  models, takes the picture with its own camera and offscreen renderer, and
+  goes back to 2D with the selection restored. The person's own 3D camera is
+  never moved.
+- **Design guides.** Each guide is a markdown file in
+  [`src/lib/assistant/skills/`](../src/lib/assistant/skills/) with a name and
+  a one-line description. The prompt lists the descriptions; `read_skill`
+  returns the whole guide, so the knowledge costs nothing until a request
+  needs it. Guides: lighting, electrical, plumbing, kitchen, bathroom,
+  furnishing, accessibility and rebuild-drawing. To add one, drop a file in
+  the folder; the prompt and the tool's list pick it up.
+- **Project brief.** `Project.brief` holds short notes on who the plan is for
+  and what the person decided, wants and doesn't want. It is saved with the
+  project (and in project packages, though not in the native `plan.json`),
+  shared by all alternatives, and separate from the description printed on
+  drawings. `get_plan` shows it first, `update_brief` replaces it as part of
+  the proposal, and the person can read and edit it at the top of the panel
+  ([`AssistantBrief.svelte`](../src/lib/components/chrome/AssistantBrief.svelte));
+  editing waits while the assistant works or a proposal is pending.
 
 - **Floors.** `get_plan` describes the floor on screen and lists the others;
   `switch_floor` changes the floor the person sees, `add_floor` adds one (empty,
@@ -50,7 +95,7 @@ blocked doors, and the prompt asks the model to fix them before it answers.
   `server-side-fallback-2026-07-01`): a declined request is retried on
   Anthropic's recommended fallback model. After a mid-reply switch only the
   text from before it is kept (`keptBlocks` in `stream.ts`).
-- **Rebuilding a drawing.** The prompt walks the model through reading an
+- **Rebuilding a drawing.** The rebuild-drawing guide walks the model through reading an
   architect's drawing: add up the dimension chains from an origin, draw walls
   on their centre lines with real thicknesses, treat glazed balcony openings as
   doors, then check. `get_plan` gives each room's area inside the walls (to

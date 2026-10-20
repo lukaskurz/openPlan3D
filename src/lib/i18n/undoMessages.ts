@@ -56,6 +56,7 @@ const keys: Extract<TranslationKey, `undoAction.${string}`>[] = [
   'undoAction.unlock',
   'undoAction.renameProject',
   'undoAction.describeProject',
+  'undoAction.changeBrief',
   'undoAction.addDimension',
   'undoAction.addConstraint',
   'undoAction.changeDimension',

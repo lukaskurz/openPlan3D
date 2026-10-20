@@ -13,7 +13,7 @@
   import OpenAIModelPicker from '$lib/components/ai/OpenAIModelPicker.svelte';
   import { activeFloor, currentProject, selectedElementId } from '$lib/stores/project';
   import { triggerTip } from '$lib/stores/onboarding.svelte';
-  import type { Floor, Wall, Door, Window as Win, Stair } from '$lib/models/types';
+  import type { Floor, Wall, Door, Window as Win, Stair, Project } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
   import { wallColors, type WallColor } from '$lib/utils/materials';
   import { projectSettings, formatArea } from '$lib/stores/settings';
@@ -36,8 +36,10 @@
   import { getCatalogItem, furnitureCatalog, furnitureCategories } from '$lib/utils/furnitureCatalog';
   import type { FurnitureDef } from '$lib/utils/furnitureCatalog';
   import { createWallHighlight } from '$lib/utils/wallHighlight';
-  import { applyWallXray } from '$lib/utils/wallXray';
-  import { disposeModel } from '$lib/utils/furnitureModelResources';
+  import { applyWallXray, XRAY_OPACITY } from '$lib/utils/wallXray';
+  import { disposeModel, loadCatalogModel } from '$lib/utils/furnitureModelResources';
+  import { getModelFile } from '$lib/utils/furnitureModelFiles';
+  import { registerViewer3dCapture, type Viewer3dShot } from '$lib/stores/viewer3dCapture';
   import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { ownColorCanvasTexture } from '$lib/utils/viewerTextures';
   import { createFloorFurnitureModels, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
@@ -80,6 +82,11 @@
   let renderedSignature: string | null = null;
   let framedContext: FramingContext | null = null;
   let wallGroup: THREE.Group;
+  // For pictures taken through viewer3dCapture: furniture whose model file is still loading,
+  // when the scene was last rebuilt, and what stacked mode added for the other floors.
+  const pendingModels = new Set<THREE.Object3D>();
+  let lastSceneBuild = 0;
+  let otherFloorObjects: THREE.Object3D[] = [];
 
   // Raycasting for wall selection in 3D
   const raycaster = new THREE.Raycaster();
@@ -1365,7 +1372,13 @@
     activeCeilingAt = ceilingAt;
 
     // Furniture; ceiling items at ceiling − drop − height of the room they hang in
-    for (const model of createFloorFurnitureModels(floor, ceilingAt, project, markSceneDirty)) wallGroup.add(model);
+    pendingModels.clear();
+    otherFloorObjects = [];
+    const modelArrived = (model: THREE.Group) => { pendingModels.delete(model); markSceneDirty(); };
+    for (const model of createFloorFurnitureModels(floor, ceilingAt, project, modelArrived)) {
+      if (loadsModelFile(model, project)) pendingModels.add(model);
+      wallGroup.add(model);
+    }
     // Pipes: runs at their height (ceiling runs under the ceiling), risers up to the next storey.
     for (const pipe of buildPipeMeshes(floor, ceilingAt, storeySpacing(project, floor))) wallGroup.add(pipe);
 
@@ -1533,6 +1546,7 @@
     // Use buildWalls for the active floor first (it clears wallGroup)
     const activeF = project.floors.find(f => f.id === project.activeFloorId) ?? project.floors[0];
     buildWalls(activeF);
+    const activeObjects = new Set(wallGroup.children);
 
     const entries = assembleFloorStack(wallGroup, project.floors, activeF.id,
       (floor, group, offset) => buildFloorIntoGroup(floor, group, offset, 0.35));
@@ -1542,6 +1556,7 @@
     for (const { floor, yOffset } of entries) {
       addFloorLabel(floor.name, yOffset, labelX, center.z);
     }
+    otherFloorObjects = wallGroup.children.filter(child => !activeObjects.has(child));
     activeFloorElevation = entries.find(entry => entry.floor.id === activeF.id)?.yOffset ?? 0;
     floorPlane.constant = -activeFloorElevation;
   }
@@ -1686,6 +1701,7 @@
     }
     markSceneDirty();
     renderedSignature = signature;
+    lastSceneBuild = performance.now();
   }
 
   function applyWallTransparency() {
@@ -1868,6 +1884,126 @@
     markSceneDirty();
   }
 
+  // ── Pictures for the Assistant (viewer3dCapture) ──────────────────────
+  // They render from their own camera with an offscreen renderer, so the person's
+  // orbit, walkthrough and interior camera stay exactly as they were.
+
+  /** Whether a placed item's container will swap in a model file once it loads. */
+  function loadsModelFile(model: THREE.Object3D, project: Project | undefined) {
+    if (!model.name.startsWith('furniture_')) return false;
+    const id = model.name.slice('furniture_'.length);
+    if (project?.customModels?.some(custom => custom.id === id)) return true;
+    return getModelFile(id) !== null && !getCatalogItem(id)?.symbol;
+  }
+
+  const SCENE_QUIET_MS = 500;
+  /** A failed catalog file never calls back; the shared cache says so, and the item keeps its stand-in. */
+  const checkedModels = new WeakSet<THREE.Object3D>();
+  function settleFailedModelFiles() {
+    for (const model of pendingModels) {
+      if (checkedModels.has(model)) continue;
+      checkedModels.add(model);
+      const file = getModelFile(model.name.slice('furniture_'.length));
+      if (file) void loadCatalogModel(file).then(loaded => {
+        if (loaded) disposeModel(loaded);
+        else pendingModels.delete(model);
+      });
+    }
+  }
+
+  async function whenSceneReady(deadline: number) {
+    while (true) {
+      rebuildScene();
+      settleFailedModelFiles();
+      // Photo textures arriving rebuild the scene; wait for it to settle a moment.
+      if (!pendingModels.size && performance.now() - lastSceneBuild >= SCENE_QUIET_MS) break;
+      if (performance.now() >= deadline) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    return { pendingModels: pendingModels.size };
+  }
+
+  /** Overviews: fade the walls, doors and windows on the box's sides that face the camera,
+   *  or beyond them in front of the box (judged at each mesh's point nearest the box centre, so a long far wall
+   *  stays), per mesh because wall materials are shared. Returns a function that puts them back. */
+  const CUTAWAY_MARGIN = 30;
+  function cutAway(cutaway: NonNullable<Viewer3dShot['cutaway']>) {
+    const { box: area, towards } = cutaway;
+    const swapped: [THREE.Mesh, THREE.Material | THREE.Material[]][] = [];
+    const clones = new Map<THREE.Material, THREE.Material>();
+    const faded = (material: THREE.Material) => {
+      let clone = clones.get(material);
+      if (!clone) {
+        clone = material.clone();
+        clone.transparent = true;
+        clone.opacity = Math.min(material.opacity, XRAY_OPACITY);
+        clone.depthWrite = false;
+        clones.set(material, clone);
+      }
+      return clone;
+    };
+    const nearSide = (value: number, min: number, max: number, direction: number) =>
+      direction > 0.1 ? value > max - CUTAWAY_MARGIN : direction < -0.1 ? value < min + CUTAWAY_MARGIN : false;
+    // A wall along the far side that runs on past the box (a neighbour's far wall) stays.
+    const farSide = (value: number, min: number, max: number, direction: number) => nearSide(value, min, max, -direction);
+    const bounds = new THREE.Box3(), nearest = new THREE.Vector3();
+    const centre = new THREE.Vector3((area.minX + area.maxX) / 2, activeFloorElevation + 100, (area.minY + area.maxY) / 2);
+    wallGroup.traverse(object => {
+      if (!(object instanceof THREE.Mesh) || object.userData.xray !== true) return;
+      bounds.setFromObject(object);
+      if (bounds.isEmpty()) return;
+      bounds.clampPoint(centre, nearest);
+      const nearX = nearSide(nearest.x, area.minX, area.maxX, towards.x), farX = farSide(nearest.x, area.minX, area.maxX, towards.x);
+      const nearZ = nearSide(nearest.z, area.minY, area.maxY, towards.y), farZ = farSide(nearest.z, area.minY, area.maxY, towards.y);
+      if (!(nearX && !farZ) && !(nearZ && !farX)) return;
+      swapped.push([object, object.material]);
+      object.material = Array.isArray(object.material) ? object.material.map(faded) : faded(object.material);
+    });
+    return () => {
+      for (const [mesh, material] of swapped) mesh.material = material;
+      for (const clone of clones.values()) clone.dispose();
+    };
+  }
+
+  function captureShot(shot: Viewer3dShot): string {
+    if (!scene || !wallGroup) throw new Error('The 3D scene is not ready.');
+    rebuildScene();
+    const shotCamera = new THREE.PerspectiveCamera(shot.fov, shot.width / shot.height, 5, 50000);
+    setFloorCameraPose(shotCamera, activeFloorElevation, shot.eye, shot.target);
+    shotCamera.updateProjectionMatrix();
+    const offRenderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: false });
+    offRenderer.setSize(shot.width, shot.height);
+    offRenderer.setPixelRatio(1);
+    offRenderer.shadowMap.enabled = true;
+    offRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    offRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+    offRenderer.toneMappingExposure = 1.2;
+    // Show the floor as built: no selection tint, see-through walls, placement ghost or other floors.
+    const transparent = wallsTransparent;
+    const ghostVisible = ghostGroup?.visible ?? false;
+    const others = otherFloorObjects.map(object => [object, object.visible] as const);
+    let restoreCutaway = () => {};
+    wallHighlight.clear();
+    try {
+      if (transparent) { wallsTransparent = false; applyWallTransparency(); }
+      if (ghostGroup) ghostGroup.visible = false;
+      for (const [object] of others) object.visible = false;
+      if (shot.cutaway) restoreCutaway = cutAway(shot.cutaway);
+      return withInteriorScene(() => {
+        offRenderer.render(scene, shotCamera);
+        return offRenderer.domElement.toDataURL('image/jpeg', 0.8);
+      }, false);
+    } finally {
+      restoreCutaway();
+      for (const [object, visible] of others) object.visible = visible;
+      if (ghostGroup) ghostGroup.visible = ghostVisible;
+      if (transparent) { wallsTransparent = true; applyWallTransparency(); }
+      wallHighlight.apply(wallMeshMap, selectedWallId3D);
+      releaseRenderer(offRenderer);
+      markSceneDirty();
+    }
+  }
+
   function takeScreenshot() {
     if (!renderer || !scene || !camera) return;
     renderer.render(scene, camera);
@@ -1900,8 +2036,16 @@
       openaiModel = getEffectiveModel(config);
     });
     // Without WebGL nothing below may start: every listener, observer and frame reaches the renderer.
-    if (!init()) { stopAISettings(); return; }
+    if (!init()) {
+      stopAISettings();
+      // The Assistant's view_3d hears why there is no picture instead of waiting for one.
+      return registerViewer3dCapture({
+        whenReady: async () => ({ pendingModels: 0 }),
+        capture: () => { throw new Error('WebGL is not available in this browser'); },
+      });
+    }
     viewerMounted = true;
+    const stopCapture = registerViewer3dCapture({ whenReady: whenSceneReady, capture: captureShot });
     markSceneDirty();
     // The one-time tip offers orbit and walkthrough, so only a view with a renderer uses it up.
     triggerTip('first-3d', 200, 80);
@@ -1935,6 +2079,7 @@
     });
 
     return () => {
+      stopCapture();
       viewerMounted = false;
       cancelAIRender();
       stopAISettings();

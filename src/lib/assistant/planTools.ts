@@ -4,18 +4,26 @@
  * plan can outline them while the change is a proposal.
  */
 import { get } from 'svelte/store';
-import type { Door, Floor, FurnitureItem, Point, Room, Wall, Window as Win } from '$lib/models/types';
+import type { Door, Floor, FurnitureItem, Mount, Pipe, PipeKind, PipeRun, Point, Room, Wall, Window as Win } from '$lib/models/types';
 import {
   currentProject, activeFloor, addWall, addDoor, addWindow, addFurniture, updateFurniture, updateDoor, updateWindow,
   updateWall, updateStair, updateColumn, removeElement, editActiveFloor, selectedElementIds, selectedRoomId, detectedRoomsStore,
-  setActiveFloor, addFloor,
+  setActiveFloor, addFloor, setRoomCeilingHeight, updateRoom, addPipe, updatePipe,
 } from '$lib/stores/project';
 import { projectSettings } from '$lib/stores/settings';
-import { furnitureCatalog, getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
+import { furnitureCatalog, furnitureTrade, getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { resolveRoomGeometry } from '$lib/utils/roomDetection';
 import { interiorRoomArea } from '$lib/utils/interiorArea';
 import { wallLength } from '$lib/utils/wallEditing';
-import { catalogName, convexOverlap, insidePolygon, isLayered, nearPolygon, polygonArea, rectCorners, segmentDistance, wallQuad } from './geometry';
+import { effectiveElevation, furnitureDrop, furnitureMount } from '$lib/utils/mounting';
+import { createCeilingResolver, effectiveRoomCeiling, floorDefaultCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
+import { DEFAULT_PIPE_DIAMETER, MAX_PIPE_DIAMETER, PIPE_KINDS, dedupePipePoints, diameterForKind, minPipePoints } from '$lib/utils/pipes';
+import { isSwitch, isSwitchTarget, linkOfSwitch } from '$lib/utils/switchLinks';
+import { floorMaterials, getMaterial, wallColors } from '$lib/utils/materials';
+import { hostedPose, wallHostAt, wallSideAt, type WallHost } from '$lib/utils/wallHostedItems';
+import { projectOntoWall } from '$lib/utils/wallProjection';
+import { catalogName, convexOverlap, furnitureFootprint, insidePolygon, isLayered, nearPolygon, polygonArea, rectCorners, segmentDistance, wallQuad } from './geometry';
+import { projectBriefForPlan } from './brief';
 import { assistantTools, clampMinimum, describeResult, makeTool, runCheck, showTool, type CheckKind } from './checks';
 
 export interface ToolOutcome {
@@ -79,15 +87,15 @@ function hashKey(text: string): string {
   return (h >>> 0).toString(36);
 }
 
-interface PlanRoom { id: string; room: Room; polygon: Point[]; saved: boolean }
+export interface PlanRoom { id: string; room: Room; polygon: Point[]; saved: boolean }
 
 /**
  * Rooms are detected from walls. Saved rooms keep their id; detected-only rooms
  * get an id from their walls, so it stays the same between tool calls.
  */
-function planRooms(floor: Floor): PlanRoom[] {
+export function planRooms(floor: Floor, detected = get(detectedRoomsStore)): PlanRoom[] {
   const savedIds = new Set(floor.rooms.map(room => room.id));
-  return resolveRoomGeometry(floor, get(detectedRoomsStore)).map(({ room, polygon }) => {
+  return resolveRoomGeometry(floor, detected).map(({ room, polygon }) => {
     const saved = savedIds.has(room.id);
     return { id: saved ? room.id : `room-${hashKey([...room.walls].sort().join(','))}`, room, polygon, saved };
   });
@@ -98,6 +106,46 @@ function findRoom(floor: Floor, id: string): PlanRoom | undefined {
 }
 
 const roomAt = (rooms: PlanRoom[], p: Point) => rooms.find(room => insidePolygon(p, room.polygon));
+
+/** Ceiling height above any plan point of the floor: the room's, else the floor default. */
+function ceilingResolver(floor: Floor, rooms: PlanRoom[]): (p: Point) => number {
+  return createCeilingResolver(get(currentProject) ?? fail('No plan is open.'), floor, rooms);
+}
+
+/** Which way an item faces on the plan, from its rotation (0 faces +y): +x, -y, +x+y… */
+function facing(rotation: number): string {
+  const a = rotation * Math.PI / 180, x = -Math.sin(a), y = Math.cos(a);
+  const part = (v: number, axis: string) => Math.abs(v) < 0.2 ? '' : `${v > 0 ? '+' : '-'}${axis}`;
+  return part(x, 'x') + part(y, 'y');
+}
+
+/** How an item is fixed, for get_plan and placement results ('' for an item standing on the floor). */
+function mountText(floor: Floor, item: FurnitureItem, ceilingAt: (p: Point) => number): string {
+  const mount = furnitureMount(item), elevation = r0(effectiveElevation(item, ceilingAt));
+  if (mount === 'ceiling') return `ceiling, drop ${r0(furnitureDrop(item))} cm, bottom at ${elevation} cm`;
+  if (mount === 'floor') return elevation ? `raised ${elevation} cm` : '';
+  const wall = floor.walls.find(w => w.id === item.wallId);
+  if (!wall) return `wall item at ${elevation} cm, not on a wall`;
+  return `on wall ${wall.id} facing ${facing(item.rotation || 0)} at ${elevation} cm, ${r0((item.wallPosition ?? 0.5) * wallLength(wall))} cm from its start`;
+}
+
+/** Plan-only wall colours, which 3D ignores (see ThreeViewer). */
+const DEFAULT_WALL_COLORS = ['#cccccc', '#888888', '#444444', '#404040'];
+
+/** A wall face's finish as one token: a colour id, a texture id, or #rrggbb; null when it has the default. */
+function faceFinish(wall: Wall, color: string | undefined, texture: string | undefined): string | null {
+  const tex = texture === 'none' ? undefined : texture ?? wall.texture;
+  if (tex) return tex;
+  const hex = color ?? (!wall.color || DEFAULT_WALL_COLORS.includes(wall.color.toLowerCase()) ? undefined : wall.color);
+  if (!hex) return null;
+  return wallColors.find(c => !c.texture && c.color.toLowerCase() === hex.toLowerCase())?.id ?? hex;
+}
+
+function wallColorText(wall: Wall): string {
+  const inside = faceFinish(wall, wall.interiorColor, wall.interiorTexture), outside = faceFinish(wall, wall.exteriorColor, wall.exteriorTexture);
+  if (inside === outside) return inside ? `, colour ${inside}` : '';
+  return `, colour inside ${inside ?? 'default'}, outside ${outside ?? 'default'}`;
+}
 
 
 function getPlan(): ToolOutcome {
@@ -114,6 +162,8 @@ function getPlan(): ToolOutcome {
   const lines: string[] = [];
   const floorIndex = project.floors.findIndex(f => f.id === floor.id);
   lines.push(`Project "${project.name}", floor "${floor.name}" (${floorIndex + 1} of ${project.floors.length}). Units the person uses: ${units}. Coordinates in cm, x right, y down.`);
+  lines.push(projectBriefForPlan() ?? '');
+  lines.push(`Default ceiling height ${r0(floorDefaultCeiling(project, floor))} cm.`);
   if (project.floors.length > 1) {
     lines.push('Floors:', ...project.floors.map(f => `- ${f.id} "${f.name}" level ${f.level}${f.id === floor.id ? ' (shown)' : `, ${f.walls.length} walls, ${f.furniture.length} items`}`));
   }
@@ -121,13 +171,15 @@ function getPlan(): ToolOutcome {
   lines.push(`Rooms (${rooms.length}):`);
   for (const room of rooms) {
     const inside = interiorRoomArea(room.polygon, [], floor.walls);
-    lines.push(`- ${room.id} "${room.room.name}" ${(polygonArea(room.polygon) / 10000).toFixed(1)} m² to wall centres${inside === null ? '' : `, ${inside.toFixed(2)} m² inside the walls`}, corners ${room.polygon.map(fmtPoint).join(' ')}`);
+    const ceiling = `ceiling ${r0(effectiveRoomCeiling(project, floor, room.room))} cm${roomCeilingOverride(floor, room.room.id) === undefined ? '' : ' (override)'}`;
+    const finish = `floor ${getMaterial(room.room.floorTexture).id}${room.room.color ? `, colour ${room.room.color}` : ''}`;
+    lines.push(`- ${room.id} "${room.room.name}" ${(polygonArea(room.polygon) / 10000).toFixed(1)} m² to wall centres${inside === null ? '' : `, ${inside.toFixed(2)} m² inside the walls`}, ${ceiling}, ${finish}, corners ${room.polygon.map(fmtPoint).join(' ')}`);
   }
   const sealed = rooms.filter(room => !floor.doors.some(door => room.room.walls.includes(door.wallId)));
   if (sealed.length && rooms.length > 1) lines.push(`No door or opening into: ${sealed.map(room => `"${room.room.name}"`).join(', ')}.`);
   lines.push(`Walls (${floor.walls.length}):`);
   for (const wall of floor.walls) {
-    lines.push(`- ${wall.id} ${fmtPoint(wall.start)}→${fmtPoint(wall.end)} ${r0(wallLength(wall))} cm, ${r0(wall.thickness)} cm thick${wall.curvePoint ? `, curved, control ${fmtPoint(wall.curvePoint)}` : ''}`);
+    lines.push(`- ${wall.id} ${fmtPoint(wall.start)}→${fmtPoint(wall.end)} ${r0(wallLength(wall))} cm, ${r0(wall.thickness)} cm thick${wall.curvePoint ? `, curved, control ${fmtPoint(wall.curvePoint)}` : ''}${wallColorText(wall)}`);
   }
   const opening = (o: Door | Win, kind: string) => {
     const wall = floor.walls.find(w => w.id === o.wallId);
@@ -137,12 +189,18 @@ function getPlan(): ToolOutcome {
   lines.push(`Doors (${floor.doors.length}):`, ...floor.doors.map(d => opening(d, 'door')));
   lines.push(`Windows (${floor.windows.length}):`, ...floor.windows.map(w => opening(w, 'window')));
   lines.push(`Furniture (${floor.furniture.length}):`);
+  const ceilingAt = ceilingResolver(floor, rooms);
   for (const item of floor.furniture.slice(0, 400)) {
     const size = getFurnitureSize(item);
     const room = roomAt(rooms, item.position);
-    lines.push(`- ${item.id} ${item.catalogId} "${catalogName(item)}" centre ${fmtPoint(item.position)} rot ${r0(item.rotation || 0)}° ${r0(size.width)}×${r0(size.depth)} cm${room ? ` in ${room.room.name}` : ''}`);
+    const trade = furnitureTrade(item), mount = mountText(floor, item, ceilingAt);
+    lines.push(`- ${item.id} ${item.catalogId} "${catalogName(item)}" centre ${fmtPoint(item.position)} rot ${r0(item.rotation || 0)}° ${r0(size.width)}×${r0(size.depth)} cm${room ? ` in ${room.room.name}` : ''}${trade === 'furnishing' ? '' : `, ${trade}`}${mount ? `, ${mount}` : ''}`);
   }
   if (floor.furniture.length > 400) lines.push(`… and ${floor.furniture.length - 400} more items.`);
+  if (floor.pipes?.length) {
+    lines.push('Pipes (Ø in mm):', ...floor.pipes.map(pipe => `- ${pipe.id} ${pipe.kind} Ø${r0(pipe.diameter)} ${pipe.run} ${pipe.points.map(fmtPoint).join(' ')}${pipe.riser ? ' riser' : ''}${pipe.elevation === undefined ? '' : `, elevation ${r0(pipe.elevation)} cm`}`));
+  }
+  if (floor.switchLinks?.length) lines.push('Switch links:', ...floor.switchLinks.map(link => `- switch ${link.switchId} controls ${link.targetIds.join(', ')}`));
   if (floor.stairs?.length) lines.push('Stairs:', ...floor.stairs.map(s => `- ${s.id} centre ${fmtPoint(s.position)} rot ${r0(s.rotation)}° ${r0(s.width)}×${r0(s.depth)} cm`));
   if (floor.columns?.length) lines.push('Columns:', ...floor.columns.map(c => `- ${c.id} ${c.shape} ${r0(c.diameter)} cm at ${fmtPoint(c.position)}`));
   const tools = get(assistantTools);
@@ -169,14 +227,59 @@ function searchCatalog(input: { query?: string; category?: string }): ToolOutcom
 
 // ── Validation for placed items ───────────────────────────────────────
 
-function furnitureWarnings(floor: Floor, item: FurnitureItem, rooms: PlanRoom[]): string[] {
+/** Least clear height under a ceiling item where nobody walks under it, in cm. */
+const HEADROOM = 200;
+/** Furniture nobody walks under, so a low pendant above it is fine. */
+const NOT_WALKED_UNDER = /table|desk|bed|counter|island|sink|bathtub|stove|dresser|nightstand/;
+
+/** Wall items: other wall items on the same face they overlap, and door or window openings they sit in. */
+function wallItemWarnings(floor: Floor, item: FurnitureItem, name: string): string[] {
+  const wall = floor.walls.find(w => w.id === item.wallId);
+  if (!wall) return [];
+  const length = wallLength(wall) || 1;
+  // Symbols (outlets, switches) have no height; count a cover plate.
+  const span = (it: FurnitureItem) => {
+    const size = getFurnitureSize(it), bottom = effectiveElevation(it, 0);
+    return { at: (it.wallPosition ?? 0.5) * length, width: size.width, bottom, top: bottom + Math.max(size.height, 8) };
+  };
+  const mine = span(item), warnings: string[] = [];
+  const hits = (at: number, width: number, bottom: number, top: number) =>
+    Math.abs(at - mine.at) < (width + mine.width) / 2 - 1 && bottom < mine.top - 1 && top > mine.bottom + 1;
+  for (const door of floor.doors) {
+    if (door.wallId === wall.id && hits(door.position * length, door.width, 0, door.height)) warnings.push(`${name}: sits in the opening of door ${door.id}`);
+  }
+  for (const win of floor.windows) {
+    if (win.wallId === wall.id && hits(win.position * length, win.width, win.sillHeight, win.sillHeight + win.height)) warnings.push(`${name}: sits in the opening of window ${win.id} (sill ${r0(win.sillHeight)} cm, top ${r0(win.sillHeight + win.height)} cm)`);
+  }
+  for (const other of floor.furniture) {
+    if (other.id === item.id || other.wallId !== wall.id || (other.wallSide ?? 1) !== (item.wallSide ?? 1)) continue;
+    const o = span(other);
+    if (hits(o.at, o.width, o.bottom, o.top)) warnings.push(`${name}: overlaps ${other.id} (${catalogName(other)}) on the wall`);
+  }
+  return warnings;
+}
+
+function furnitureWarnings(floor: Floor, item: FurnitureItem, rooms: PlanRoom[], ceilingAt: (p: Point) => number): string[] {
   const warnings: string[] = [];
   const size = getFurnitureSize(item);
   const corners = rectCorners(item.position, size.width, size.depth, item.rotation || 0);
   const name = `${item.id} (${catalogName(item)})`;
+  const mount = furnitureMount(item);
   const room = roomAt(rooms, item.position);
-  if (!room) warnings.push(`${name}: its centre is outside every room`);
+  if (mount === 'wall') {
+    // A wall item sits on the wall and over whatever stands in front of it.
+    if (!room && !/outdoor/i.test(getCatalogItem(item.catalogId)?.category ?? '')) warnings.push(`${name}: faces outside every room (the outer face of its wall)`);
+  } else if (!room) warnings.push(`${name}: its centre is outside every room`);
   else if (!corners.every(c => nearPolygon(c, room.polygon, 1))) warnings.push(`${name}: sticks out of ${room.room.name}`);
+  const ceiling = ceilingAt(item.position), bottom = effectiveElevation(item, ceiling);
+  if (mount !== 'ceiling' && room && bottom + size.height > ceiling + 1) warnings.push(`${name}: its top at ${r0(bottom + size.height)} cm is above the ${r0(ceiling)} cm ceiling`);
+  if (mount === 'wall') return [...warnings, ...wallItemWarnings(floor, item, name)];
+  if (mount === 'ceiling') {
+    const over = floor.furniture.find(other => furnitureMount(other) === 'floor' && NOT_WALKED_UNDER.test(other.catalogId) && !/lamp/.test(other.catalogId)
+      && insidePolygon(item.position, furnitureFootprint(other)));
+    if (bottom < HEADROOM && !over) warnings.push(`${name}: hangs down to ${r0(bottom)} cm, under ${HEADROOM} cm headroom with nothing under it (shorten the drop, or hang it over a table, bed or counter)`);
+    return warnings;
+  }
   for (const wall of floor.walls) {
     if (wall.curvePoint) continue;
     if (convexOverlap(corners, wallQuad(wall, 1), 1)) { warnings.push(`${name}: overlaps wall ${wall.id}`); break; }
@@ -319,31 +422,84 @@ function addOpenings(input: Record<string, unknown>): ToolOutcome {
   return { text: lines.join('\n'), changed, isError: !changed.length };
 }
 
+// ── How items are fixed ───────────────────────────────────────────────
+
+/** elevation, drop and wallId only apply to some mounts; say which instead of ignoring them. */
+function checkMountFields(mount: Mount, raw: Record<string, unknown>, catalogId: string) {
+  if (raw.drop !== undefined && mount !== 'ceiling') fail(`${catalogId} isn't hung from the ceiling, so it takes elevation, not drop.`);
+  if (raw.elevation !== undefined && mount === 'ceiling') fail(`${catalogId} hangs from the ceiling: give drop (cm from the ceiling to its top) instead of elevation.`);
+  if (raw.wallId !== undefined && mount !== 'wall') fail(`${catalogId} isn't a wall item, so it takes no wallId.`);
+}
+
+/** A height that keeps the item under the ceiling: 0 up to the ceiling less the item's own height. */
+function heightUnderCeiling(value: unknown, label: string, ceiling: number, itemHeight: number): number {
+  const max = Math.max(0, Math.floor(ceiling - itemHeight)), n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > max) fail(`${label} must be 0 to ${max} cm here: the ceiling is ${r0(ceiling)} cm and the item is ${r0(itemHeight)} cm tall.`);
+  return n;
+}
+
+/**
+ * Where a wall item hangs for a plan point: on `wallId`, or else the nearest wall, at the
+ * point's position along it (kept on the wall) and on the side the point is on. A point
+ * on the wall itself picks the face that looks into a room.
+ */
+function wallHostFor(floor: Floor, rooms: PlanRoom[], item: FurnitureItem, p: Point, wallId?: string): WallHost {
+  const wall = wallId !== undefined
+    ? floor.walls.find(w => w.id === wallId) ?? fail(`There is no wall ${wallId}.`)
+    : floor.walls.find(w => w.id === wallHostAt(p, floor.walls)?.wallId) ?? fail(`No wall within 100 cm of ${fmtPoint(p)}: give a point next to a wall, or wallId.`);
+  const projected = projectOntoWall(p, wall) ?? fail(`Wall ${wall.id} is too short to hang anything on.`);
+  const half = Math.min(0.5, getFurnitureSize(item).width / 2 / (wallLength(wall) || 1));
+  const wallPosition = Math.max(half, Math.min(1 - half, projected.position));
+  let wallSide = wallSideAt(wall, projected.position, p);
+  if (projected.distance <= wall.thickness / 2) {
+    const facesRoom = (side: 1 | -1) => !!roomAt(rooms, hostedPose(wall, item, { wallPosition, wallSide: side }).position);
+    if (!facesRoom(wallSide) && facesRoom(wallSide === 1 ? -1 : 1)) wallSide = wallSide === 1 ? -1 : 1;
+  }
+  return { wallId: wall.id, wallPosition, wallSide };
+}
+
+/** elevation and drop from the input, checked against the ceiling above `p`. */
+function heightUpdates(raw: Record<string, unknown>, item: FurnitureItem, ceiling: number): Partial<FurnitureItem> {
+  const height = getFurnitureSize(item).height, updates: Partial<FurnitureItem> = {};
+  if (raw.elevation !== undefined) updates.elevation = heightUnderCeiling(raw.elevation, furnitureMount(item) === 'wall' ? 'The mounting height' : 'elevation', ceiling, height);
+  if (raw.drop !== undefined) updates.drop = heightUnderCeiling(raw.drop, 'drop', ceiling, height);
+  return updates;
+}
+
 function placeFurniture(input: Record<string, unknown>): ToolOutcome {
   if (!Array.isArray(input.items) || !input.items.length) fail('items needs at least one item.');
   if (input.items.length > 60) fail('Place at most 60 items per call.');
   const lines: string[] = [], changed: string[] = [];
+  // Placing items changes no rooms or ceilings.
+  const floor = floorOrFail(), rooms = planRooms(floor), ceilingAt = ceilingResolver(floor, rooms);
   for (const raw of input.items as Record<string, unknown>[]) {
     try {
       const catalogId = String(raw.catalogId ?? '');
-      if (!getCatalogItem(catalogId)) fail(`Unknown catalogId ${catalogId}. Use search_catalog.`);
+      const def = getCatalogItem(catalogId) ?? fail(`Unknown catalogId ${catalogId}. Use search_catalog.`);
+      const mount = def.mount ?? 'floor';
+      checkMountFields(mount, raw, catalogId);
       const position = { x: finite(raw.x, 'x'), y: finite(raw.y, 'y') };
       const rotation = raw.rotation === undefined ? 0 : ((finite(raw.rotation, 'rotation', -3600, 3600) % 360) + 360) % 360;
-      const updates: Partial<FurnitureItem> = { rotation };
+      // Wall items face away from their wall, so their rotation follows the host.
+      const updates: Partial<FurnitureItem> = mount === 'wall' ? {} : { rotation };
       if (raw.width !== undefined) updates.width = finite(raw.width, 'width', 5, 2000);
       if (raw.depth !== undefined) updates.depth = finite(raw.depth, 'depth', 5, 2000);
-      const id = addFurniture(catalogId, position);
-      updateFurniture(id, updates);
-      lines.push(`${id} ${catalogId} ok`);
+      const draft: FurnitureItem = { id: '', catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...updates };
+      const host = mount === 'wall' ? wallHostFor(floor, rooms, draft, position, raw.wallId === undefined ? undefined : String(raw.wallId)) : undefined;
+      Object.assign(updates, heightUpdates(raw, draft, ceilingAt(position)));
+      const id = addFurniture(catalogId, position, host);
+      if (Object.keys(updates).length) updateFurniture(id, updates);
+      const placed = floor.furniture.find(item => item.id === id);
+      const how = placed ? mountText(floor, placed, ceilingAt) : '';
+      lines.push(`${id} ${catalogId} ok${how ? `, ${how}` : ''}`);
       changed.push(id);
     } catch (error) {
       lines.push(`error: ${(error as Error).message}`);
     }
   }
-  const floor = floorOrFail(), rooms = planRooms(floor);
   for (const id of changed) {
     const item = floor.furniture.find(item => item.id === id);
-    if (item) lines.push(...furnitureWarnings(floor, item, rooms).map(w => `warning: ${w}`));
+    if (item) lines.push(...furnitureWarnings(floor, item, rooms, ceilingAt).map(w => `warning: ${w}`));
   }
   return { text: lines.join('\n'), changed, isError: !changed.length };
 }
@@ -366,9 +522,90 @@ function shiftWall(wallId: string, dx: number, dy: number) {
   }, 'Moved wall');
 }
 
+/** Pipe kind, run and diameter from the input, checked. */
+const pipeKind = (value: unknown): PipeKind => PIPE_KINDS.includes(value as PipeKind) ? value as PipeKind : fail('kind must be cold, hot or waste.');
+const pipeRun = (value: unknown): PipeRun => value === 'floor' || value === 'wall' || value === 'ceiling' ? value : fail('run must be floor, wall or ceiling.');
+const pipeDiameter = (value: unknown) => finite(value, 'diameter (mm)', 5, MAX_PIPE_DIAMETER);
+const pipeElevation = (value: unknown) => finite(value, 'elevation', -50, 1000);
+
+function pipePoints(value: unknown, riser: boolean): Point[] {
+  if (!Array.isArray(value) || !value.length) fail('points needs at least one [x, y] point.');
+  const points = dedupePipePoints(value.map((p, i) => toPoint(p, `point ${i + 1}`)));
+  if (riser && points.length !== 1) fail('A riser stands at a single point.');
+  if (points.length < minPipePoints({ riser })) fail('A pipe run needs at least two different points (a riser, with riser: true, takes one).');
+  return points;
+}
+
+/** A wall colour id or #rrggbb, as updates for both faces (a textured id also sets the texture). */
+function wallColorUpdates(wall: Wall, value: unknown): Partial<Wall> {
+  const text = String(value ?? '').trim();
+  const named = wallColors.find(c => c.id === text.toLowerCase());
+  if (!named && !/^#[0-9a-f]{6}$/i.test(text)) fail(`Unknown wall colour ${text}. Use ${wallColors.map(c => c.id).join(', ')} or #rrggbb.`);
+  const color = named?.color ?? text.toLowerCase();
+  // A plain colour replaces a texture; 'none' also hides the wall's shared texture.
+  const texture = named?.texture ? named.id : wall.texture ? 'none' : undefined;
+  return { interiorColor: color, exteriorColor: color, interiorTexture: texture, exteriorTexture: texture };
+}
+
+/** The furniture changes for an update: pose (wall items: their host), size, elevation and drop. */
+function furnitureUpdates(floor: Floor, item: FurnitureItem, raw: Record<string, unknown>, rooms: () => PlanRoom[]): Partial<FurnitureItem> {
+  const mount = furnitureMount(item);
+  checkMountFields(mount, raw, item.catalogId);
+  const position = { x: raw.x === undefined ? item.position.x : finite(raw.x, 'x'), y: raw.y === undefined ? item.position.y : finite(raw.y, 'y') };
+  const updates: Partial<FurnitureItem> = {};
+  if (raw.width !== undefined) updates.width = finite(raw.width, 'width', 5, 2000) / Math.abs(item.scale?.x ?? 1);
+  if (raw.depth !== undefined) updates.depth = finite(raw.depth, 'depth', 5, 2000) / Math.abs(item.scale?.y ?? 1);
+  if (mount !== 'wall') {
+    updates.position = position;
+    updates.rotation = raw.rotation === undefined ? item.rotation || 0 : ((finite(raw.rotation, 'rotation', -3600, 3600) % 360) + 360) % 360;
+  } else if (raw.wallId !== undefined || raw.x !== undefined || raw.y !== undefined) {
+    // x, y pick the spot: the given wall, else the nearest one, else along its own wall.
+    const wallId = raw.wallId !== undefined ? String(raw.wallId) : wallHostAt(position, floor.walls) ? undefined : item.wallId;
+    Object.assign(updates, wallHostFor(floor, rooms(), { ...item, ...updates }, position, wallId));
+  }
+  if (raw.elevation !== undefined || raw.drop !== undefined) {
+    Object.assign(updates, heightUpdates(raw, { ...item, ...updates }, ceilingResolver(floor, rooms())(updates.position ?? item.position)));
+  }
+  return updates;
+}
+
+/** Room changes: name, ceiling height (null resets it) and floor material. A detected room is saved first, so it keeps its id. */
+function updateRoomFields(room: PlanRoom, raw: Record<string, unknown>) {
+  const name = raw.name === undefined ? undefined : String(raw.name).trim().slice(0, 60) || fail('A room name can\'t be empty.');
+  const ceiling = raw.ceilingHeight === undefined || raw.ceilingHeight === null ? raw.ceilingHeight : finite(raw.ceilingHeight, 'ceilingHeight', 150, 1500);
+  const material = raw.floorMaterial === undefined ? undefined
+    : floorMaterials.find(m => m.id === raw.floorMaterial)?.id ?? fail(`Unknown floorMaterial ${String(raw.floorMaterial)}. Use ${floorMaterials.map(m => m.id).join(', ')}.`);
+  if (name === undefined && ceiling === undefined && material === undefined) fail('Rooms take name, ceilingHeight or floorMaterial.');
+  // Nothing to reset on a room that was never saved.
+  if (name === undefined && material === undefined && ceiling === null && !room.saved) return;
+  nameRoom(room, name ?? room.room.name);
+  const id = room.saved ? room.room.id : room.id;
+  if (ceiling !== undefined) setRoomCeilingHeight(id, ceiling ?? undefined);
+  if (material !== undefined) updateRoom(id, { floorTexture: material });
+}
+
+function updatePipeFields(pipe: Pipe, raw: Record<string, unknown>) {
+  const updates: Partial<Omit<Pipe, 'id'>> = {};
+  if (raw.points !== undefined) updates.points = pipePoints(raw.points, !!pipe.riser);
+  if (raw.kind !== undefined) {
+    updates.kind = pipeKind(raw.kind);
+    // Switching between supply and waste picks a fitting diameter, as the pipe tool does.
+    if (raw.diameter === undefined) updates.diameter = diameterForKind(updates.kind, pipe.diameter);
+  }
+  if (raw.diameter !== undefined) updates.diameter = pipeDiameter(raw.diameter);
+  if (raw.run !== undefined) updates.run = pipeRun(raw.run);
+  if (raw.elevation !== undefined) updates.elevation = raw.elevation === null ? undefined : pipeElevation(raw.elevation);
+  if (!Object.keys(updates).length) fail('Pipes take points, kind, diameter, run or elevation.');
+  const before = JSON.stringify(pipe), wanted = { ...pipe, ...updates };
+  updatePipe(pipe.id, updates);
+  // updatePipe ignores an update that would leave the pipe malformed.
+  const after = floorOrFail().pipes?.find(item => item.id === pipe.id);
+  if (JSON.stringify(after) === before && JSON.stringify(wanted) !== before) fail(`That change would leave pipe ${pipe.id} malformed, so it wasn't made.`);
+}
+
 function updateElements(input: Record<string, unknown>): ToolOutcome {
   if (!Array.isArray(input.updates) || !input.updates.length) fail('updates needs at least one change.');
-  const lines: string[] = [], changed: string[] = [], movedFurniture: string[] = [];
+  const lines: string[] = [], changed: string[] = [], checkFurniture = new Set<string>();
   for (const raw of input.updates as Record<string, unknown>[]) {
     try {
       const floor = floorOrFail();
@@ -379,14 +616,14 @@ function updateElements(input: Record<string, unknown>): ToolOutcome {
       const door = floor.doors.find(item => item.id === id);
       const window = floor.windows.find(item => item.id === id);
       const wall = floor.walls.find(item => item.id === id);
+      const pipe = floor.pipes?.find(item => item.id === id);
       const position = (current: Point) => ({ x: raw.x === undefined ? current.x : finite(raw.x, 'x'), y: raw.y === undefined ? current.y : finite(raw.y, 'y') });
       const rotation = (current: number) => raw.rotation === undefined ? current : ((finite(raw.rotation, 'rotation', -3600, 3600) % 360) + 360) % 360;
+      let rooms: PlanRoom[] | undefined;
+      const lazyRooms = () => rooms ??= planRooms(floor);
       if (furniture) {
-        const updates: Partial<FurnitureItem> = { position: position(furniture.position), rotation: rotation(furniture.rotation || 0) };
-        if (raw.width !== undefined) updates.width = finite(raw.width, 'width', 5, 2000) / Math.abs(furniture.scale?.x ?? 1);
-        if (raw.depth !== undefined) updates.depth = finite(raw.depth, 'depth', 5, 2000) / Math.abs(furniture.scale?.y ?? 1);
-        updateFurniture(id, updates);
-        movedFurniture.push(id);
+        updateFurniture(id, furnitureUpdates(floor, furniture, raw, lazyRooms));
+        checkFurniture.add(id);
       } else if (stair) {
         updateStair(id, { position: position(stair.position), rotation: rotation(stair.rotation),
           ...(raw.width !== undefined ? { width: finite(raw.width, 'width', 40, 1000) } : {}),
@@ -407,16 +644,25 @@ function updateElements(input: Record<string, unknown>): ToolOutcome {
           updates.type = type as never;
         }
         if (door) updateDoor(id, updates as Partial<Door>); else updateWindow(id, updates as Partial<Win>);
+        // Wall items next to it may now sit in the opening.
+        for (const item of floor.furniture) if (item.wallId === host.id) checkFurniture.add(item.id);
       } else if (wall) {
         const dx = raw.dx === undefined ? 0 : finite(raw.dx, 'dx', -5000, 5000), dy = raw.dy === undefined ? 0 : finite(raw.dy, 'dy', -5000, 5000);
+        const colors = raw.color === undefined ? undefined : wallColorUpdates(wall, raw.color);
         if (dx || dy) shiftWall(id, dx, dy);
         if (raw.thickness !== undefined) updateWall(id, { thickness: finite(raw.thickness, 'thickness', 5, 100) });
         if (raw.straighten === true) updateWall(id, { curvePoint: undefined });
         else if (raw.curve !== undefined) updateWall(id, { curvePoint: toPoint(raw.curve, 'curve') });
+        if (colors) updateWall(id, colors);
+      } else if (pipe) {
+        updatePipeFields(pipe, raw);
       } else {
         const room = findRoom(floor, id) ?? fail(`There is no element ${id}.`);
-        const name = String(raw.name ?? '').trim().slice(0, 60) || fail('Rooms can only be renamed; give a name.');
-        nameRoom(room, name);
+        updateRoomFields(room, raw);
+        // A new ceiling height moves ceiling items and may leave wall items above it.
+        if (raw.ceilingHeight !== undefined) {
+          for (const item of floor.furniture) if (furnitureMount(item) !== 'floor' && insidePolygon(item.position, room.polygon)) checkFurniture.add(item.id);
+        }
       }
       lines.push(`${id} ok`);
       changed.push(id);
@@ -424,10 +670,10 @@ function updateElements(input: Record<string, unknown>): ToolOutcome {
       lines.push(`error: ${(error as Error).message}`);
     }
   }
-  const floor = floorOrFail(), rooms = planRooms(floor);
-  for (const id of movedFurniture) {
+  const floor = floorOrFail(), rooms = planRooms(floor), ceilingAt = ceilingResolver(floor, rooms);
+  for (const id of checkFurniture) {
     const item = floor.furniture.find(item => item.id === id);
-    if (item) lines.push(...furnitureWarnings(floor, item, rooms).map(w => `warning: ${w}`));
+    if (item) lines.push(...furnitureWarnings(floor, item, rooms, ceilingAt).map(w => `warning: ${w}`));
   }
   return { text: lines.join('\n'), changed, isError: !changed.length };
 }
@@ -438,7 +684,7 @@ function deleteElements(input: Record<string, unknown>): ToolOutcome {
   for (const raw of input.ids as unknown[]) {
     const id = String(raw);
     const floor = floorOrFail();
-    const known = [floor.walls, floor.doors, floor.windows, floor.furniture, floor.stairs ?? [], floor.columns ?? []].some(list => list.some(item => item.id === id));
+    const known = [floor.walls, floor.doors, floor.windows, floor.furniture, floor.stairs ?? [], floor.columns ?? [], floor.pipes ?? []].some(list => list.some(item => item.id === id));
     if (known) { removeElement(id); removed.push(id); lines.push(`${id} deleted`); continue; }
     const rooms = planRooms(floor);
     const room = rooms.find(room => room.id === id || room.room.id === id);
@@ -450,6 +696,57 @@ function deleteElements(input: Record<string, unknown>): ToolOutcome {
     lines.push(`${id} deleted with its own walls`);
   }
   return { text: lines.join('\n'), removed, isError: !removed.length };
+}
+
+// ── Trades: pipes and switch links ────────────────────────────────────
+
+function addPipes(input: Record<string, unknown>): ToolOutcome {
+  if (!Array.isArray(input.items) || !input.items.length) fail('items needs at least one pipe.');
+  if (input.items.length > 60) fail('Add at most 60 pipes per call.');
+  const lines: string[] = [], changed: string[] = [];
+  for (const raw of input.items as Record<string, unknown>[]) {
+    try {
+      const kind = pipeKind(raw.kind), riser = raw.riser === true;
+      const pipe: Omit<Pipe, 'id'> = {
+        kind, points: pipePoints(raw.points, riser), run: raw.run === undefined ? 'floor' : pipeRun(raw.run),
+        diameter: raw.diameter === undefined ? DEFAULT_PIPE_DIAMETER[kind] : pipeDiameter(raw.diameter),
+        ...(raw.elevation === undefined ? {} : { elevation: pipeElevation(raw.elevation) }),
+        ...(riser ? { riser } : {}),
+      };
+      const id = addPipe(pipe) ?? fail('That pipe is not well formed.');
+      lines.push(`${id} ${kind} ${riser ? 'riser' : 'pipe'} ok`);
+      changed.push(id);
+    } catch (error) {
+      lines.push(`error: ${(error as Error).message}`);
+    }
+  }
+  return { text: lines.join('\n'), changed, isError: !changed.length };
+}
+
+function linkSwitch(input: Record<string, unknown>): ToolOutcome {
+  const floor = floorOrFail();
+  const switchId = String(input.switchId ?? '');
+  const item = floor.furniture.find(it => it.id === switchId) ?? fail(`There is no item ${switchId} on this floor.`);
+  if (!isSwitch(item)) fail(`${switchId} (${catalogName(item)}) isn't a switch.`);
+  if (!Array.isArray(input.targetIds)) fail('targetIds must be a list of ids.');
+  const mode = input.mode ?? 'set';
+  if (mode !== 'set' && mode !== 'add' && mode !== 'remove') fail('mode must be set, add or remove.');
+  const targets = [...new Set((input.targetIds as unknown[]).map(String))];
+  for (const id of targets) {
+    const target = floor.furniture.find(it => it.id === id) ?? fail(`There is no item ${id} on this floor.`);
+    if (!isSwitchTarget(target)) fail(`${id} (${catalogName(target)}) can't be switched: a switch controls lights, fans, outlets and other electrical items.`);
+  }
+  const current = linkOfSwitch(floor.switchLinks, switchId)?.targetIds ?? [];
+  const next = mode === 'set' ? targets : mode === 'add' ? [...current, ...targets.filter(id => !current.includes(id))] : current.filter(id => !targets.includes(id));
+  // One link per switch, replaced in place so its id survives; an empty one goes.
+  editActiveFloor(f => {
+    const existing = linkOfSwitch(f.switchLinks, switchId);
+    if (existing && next.length) existing.targetIds = next;
+    else if (next.length) (f.switchLinks ??= []).push({ id: `link-${Math.random().toString(36).slice(2, 10)}`, switchId, targetIds: next });
+    else f.switchLinks = f.switchLinks?.filter(link => link !== existing);
+    if (!f.switchLinks?.length) delete f.switchLinks;
+  }, 'Linked switch');
+  return { text: next.length ? `${switchId} controls ${next.join(', ')}.` : `${switchId} controls nothing now.`, changed: [switchId] };
 }
 
 // ── Floors and checks ─────────────────────────────────────────────────
@@ -507,6 +804,8 @@ const HANDLERS: Record<string, (input: Record<string, unknown>) => ToolOutcome> 
   place_furniture: placeFurniture,
   update_elements: updateElements,
   delete_elements: deleteElements,
+  add_pipes: addPipes,
+  link_switch: linkSwitch,
 };
 
 export function runPlanTool(name: string, input: unknown): ToolOutcome {
