@@ -5,8 +5,10 @@
  * overwrite with something wrong. An older build (a stale deployment, a cached tab on another device)
  * can then still show such a plan, but refuses to save it and never lets library sync overwrite it in
  * the cloud (docs/cloud-sync.md). Plans saved before stamping began read as format 0.
+ *
+ * 1: fixture lights (FurnitureItem.light). 2: the Assistant's project brief (Project.brief).
  */
-export const PROJECT_FORMAT = 1;
+export const PROJECT_FORMAT = 2;
 
 /** The format a plan, or its JSON text, was saved in. */
 export function projectFormat(value: unknown): number {
