@@ -33,6 +33,20 @@ describe('wall and ceiling items', () => {
     expect(result.text).not.toMatch(/warning/);
   });
 
+  it('places and slides wall items by offset along their wall, and rejects fields furniture lacks', () => {
+    const top = wallAt([0, 0], [500, 0]);
+    const fromStart = (id: string) => item(id).wallPosition! * 500;
+    const [outlet] = place([{ catalogId: 'sym_outlet', x: 250, y: 20, wallId: top.id, offset: 120 }]).changed!;
+    expect(fromStart(outlet)).toBeCloseTo(top.start.x === 0 ? 120 : 380);
+    expect(runPlanTool('update_elements', { updates: [{ id: outlet, offset: 300 }] }).isError).toBeFalsy();
+    expect(fromStart(outlet)).toBeCloseTo(top.start.x === 0 ? 300 : 200);
+    expect(item(outlet).wallId).toBe(top.id);
+    expect(runPlanTool('update_elements', { updates: [{ id: outlet, offset: 900 }] }).text).toMatch(/offset on .* must be/);
+    const [sofa] = place([{ catalogId: 'sofa', x: 250, y: 300 }]).changed!;
+    expect(runPlanTool('update_elements', { updates: [{ id: sofa, offset: 100 }] }).text).toMatch(/takes x, y instead of offset/);
+    expect(runPlanTool('update_elements', { updates: [{ id: sofa, colour: 'red' }] }).text).toMatch(/not colour/);
+  });
+
   it('hangs a point on the wall itself on the room side, and warns about the outer face', () => {
     const [inside, outside] = place([
       { catalogId: 'sym_switch', x: 100, y: 0 },

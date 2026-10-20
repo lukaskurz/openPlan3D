@@ -424,11 +424,23 @@ function addOpenings(input: Record<string, unknown>): ToolOutcome {
 
 // ── How items are fixed ───────────────────────────────────────────────
 
-/** elevation, drop and wallId only apply to some mounts; say which instead of ignoring them. */
+const FURNITURE_FIELDS = ['x', 'y', 'rotation', 'width', 'depth', 'elevation', 'drop', 'wallId', 'offset'];
+
+/** elevation, drop, wallId and offset only apply to some mounts, and furniture takes no other fields; say so instead of ignoring them. */
 function checkMountFields(mount: Mount, raw: Record<string, unknown>, catalogId: string) {
+  const unknown = Object.keys(raw).filter(key => key !== 'id' && key !== 'catalogId' && !FURNITURE_FIELDS.includes(key));
+  if (unknown.length) fail(`Furniture takes ${FURNITURE_FIELDS.join(', ')}, not ${unknown.join(', ')}.`);
   if (raw.drop !== undefined && mount !== 'ceiling') fail(`${catalogId} isn't hung from the ceiling, so it takes elevation, not drop.`);
   if (raw.elevation !== undefined && mount === 'ceiling') fail(`${catalogId} hangs from the ceiling: give drop (cm from the ceiling to its top) instead of elevation.`);
   if (raw.wallId !== undefined && mount !== 'wall') fail(`${catalogId} isn't a wall item, so it takes no wallId.`);
+  if (raw.offset !== undefined && mount !== 'wall') fail(`${catalogId} isn't a wall item, so it takes x, y instead of offset.`);
+}
+
+/** offset: a wall item's centre in cm from its wall's start, as for doors and windows. */
+function withOffset(floor: Floor, item: FurnitureItem, host: WallHost, offset: unknown): WallHost {
+  const wall = floor.walls.find(w => w.id === host.wallId) ?? fail(`There is no wall ${host.wallId}.`);
+  const length = wallLength(wall) || 1, half = Math.min(length / 2, getFurnitureSize(item).width / 2);
+  return { ...host, wallPosition: finite(offset, `offset on ${wall.id}`, half, length - half) / length };
 }
 
 /** A height that keeps the item under the ceiling: 0 up to the ceiling less the item's own height. */
@@ -485,7 +497,8 @@ function placeFurniture(input: Record<string, unknown>): ToolOutcome {
       if (raw.width !== undefined) updates.width = finite(raw.width, 'width', 5, 2000);
       if (raw.depth !== undefined) updates.depth = finite(raw.depth, 'depth', 5, 2000);
       const draft: FurnitureItem = { id: '', catalogId, position, rotation: 0, scale: { x: 1, y: 1, z: 1 }, ...updates };
-      const host = mount === 'wall' ? wallHostFor(floor, rooms, draft, position, raw.wallId === undefined ? undefined : String(raw.wallId)) : undefined;
+      let host = mount === 'wall' ? wallHostFor(floor, rooms, draft, position, raw.wallId === undefined ? undefined : String(raw.wallId)) : undefined;
+      if (host && raw.offset !== undefined) host = withOffset(floor, draft, host, raw.offset);
       Object.assign(updates, heightUpdates(raw, draft, ceilingAt(position)));
       const id = addFurniture(catalogId, position, host);
       if (Object.keys(updates).length) updateFurniture(id, updates);
@@ -558,10 +571,18 @@ function furnitureUpdates(floor: Floor, item: FurnitureItem, raw: Record<string,
   if (mount !== 'wall') {
     updates.position = position;
     updates.rotation = raw.rotation === undefined ? item.rotation || 0 : ((finite(raw.rotation, 'rotation', -3600, 3600) % 360) + 360) % 360;
-  } else if (raw.wallId !== undefined || raw.x !== undefined || raw.y !== undefined) {
-    // x, y pick the spot: the given wall, else the nearest one, else along its own wall.
-    const wallId = raw.wallId !== undefined ? String(raw.wallId) : wallHostAt(position, floor.walls) ? undefined : item.wallId;
-    Object.assign(updates, wallHostFor(floor, rooms(), { ...item, ...updates }, position, wallId));
+  } else if (raw.wallId !== undefined || raw.x !== undefined || raw.y !== undefined || raw.offset !== undefined) {
+    const draft = { ...item, ...updates };
+    let host: WallHost;
+    if (raw.wallId === undefined && raw.x === undefined && raw.y === undefined) {
+      // offset alone slides the item along its own wall.
+      host = { wallId: item.wallId ?? fail(`${item.id} isn't on a wall: give wallId or x, y.`), wallPosition: item.wallPosition ?? 0.5, wallSide: item.wallSide ?? 1 };
+    } else {
+      // x, y pick the spot: the given wall, else the nearest one, else along its own wall.
+      const wallId = raw.wallId !== undefined ? String(raw.wallId) : wallHostAt(position, floor.walls) ? undefined : item.wallId;
+      host = wallHostFor(floor, rooms(), draft, position, wallId);
+    }
+    Object.assign(updates, raw.offset === undefined ? host : withOffset(floor, draft, host, raw.offset));
   }
   if (raw.elevation !== undefined || raw.drop !== undefined) {
     Object.assign(updates, heightUpdates(raw, { ...item, ...updates }, ceilingResolver(floor, rooms())(updates.position ?? item.position)));

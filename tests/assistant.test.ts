@@ -273,6 +273,17 @@ describe('chat endpoint', () => {
   });
 
   it('rejects conversations that are not this assistant’s', () => {
+    // A tool the model invented comes back with an error result; the chat must go on.
+    expect(parseConversation({ messages: [
+      { role: 'user', content: [{ type: 'text', text: 'Move the outlet' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'update_elements_placeholder', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'Unknown tool update_elements_placeholder.', is_error: true }] },
+    ] })).toHaveLength(3);
+    expect(() => parseConversation({ messages: [
+      { role: 'user', content: [{ type: 'text', text: 'x' }] },
+      { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'not a tool name!', input: {} }] },
+      { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'x' }] },
+    ] })).toThrow();
     expect(() => parseConversation({ messages: [] })).toThrow();
     expect(() => parseConversation({ messages: [{ role: 'assistant', content: [{ type: 'text', text: 'x' }] }] })).toThrow();
     expect(() => parseConversation({ messages: [

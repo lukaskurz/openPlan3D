@@ -15,8 +15,10 @@ server picks the model from the conversation (`assistantMode` in
 2. The server adds the API key, the fixed system prompt and the eight plan
    tools ([`src/lib/assistant/definitions.ts`](../src/lib/assistant/definitions.ts)),
    calls the Messages API with streaming and prompt caching, and streams the
-   reply straight back. It accepts only conversations that use this
-   assistant's tools, so the endpoint can't be used as a general proxy.
+   reply straight back. It accepts only conversations shaped like this
+   assistant's and always sends its own prompt and tools, so the endpoint
+   can't be used as a general proxy. A tool the model invents gets an error
+   result, and the conversation carrying it is still accepted.
 3. When the model calls a tool, the **browser** runs it against the open plan
    ([`planTools.ts`](../src/lib/assistant/planTools.ts)) and sends the result
    back in the next request. The plan never leaves the device except as tool
