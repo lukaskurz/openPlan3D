@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import type { FixtureLight } from '$lib/models/types';
+import { FIXTURE_LIGHT_RANGES, type FixtureLight } from '$lib/models/types';
 
 /**
  * Light fixtures as light sources in 3D: photometry in real units, converted for the scene.
@@ -130,6 +130,28 @@ export function resolveFixtureLight(catalogId: string, light?: FixtureLight): Re
     tilt: finite(light?.tilt) ? clamp(light.tilt, 0, 90) : 0,
     beamAngle: finite(light?.beamAngle) ? clamp(light.beamAngle, MIN_BEAM_ANGLE, MAX_BEAM_ANGLE) : undefined,
   };
+}
+
+/** A fixture's defaults for the editor: `resolveFixtureLight` without overrides, with the beam angle of its first spot (undefined for point-only fixtures, where beam angle and tilt do not apply). */
+export function fixtureLightDefaults(catalogId: string): ResolvedFixtureLight | null {
+  const base = resolveFixtureLight(catalogId);
+  if (!base) return null;
+  const spot = FIXTURE_PHOTOMETRY[catalogId].emitters.find(emitter => emitter.kind === 'spot');
+  return { ...base, beamAngle: spot ? spot.beamAngle ?? 60 : undefined };
+}
+
+/** Editor range of a FixtureLight field: what the project reader accepts, beam angles narrowed to what renders. */
+export function fixtureLightRange(key: keyof FixtureLight): [number, number] {
+  const [min, max] = FIXTURE_LIGHT_RANGES[key];
+  return key === 'beamAngle' ? [Math.max(min, MIN_BEAM_ANGLE), Math.min(max, MAX_BEAM_ANGLE)] : [min, max];
+}
+
+/** `light` with `key` set to `value` clamped to its range, or cleared back to the default when `value` is not a number. Undefined once no override is left. */
+export function setFixtureLightField(light: FixtureLight | undefined, key: keyof FixtureLight, value: number | undefined): FixtureLight | undefined {
+  const next: FixtureLight = { ...light };
+  if (finite(value)) next[key] = clamp(value, ...fixtureLightRange(key));
+  else delete next[key];
+  return Object.keys(next).length ? next : undefined;
 }
 
 /** three's spot cone half angle (radians) whose falloff is at half intensity at `beamAngle / 2`. */

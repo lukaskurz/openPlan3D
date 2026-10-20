@@ -164,6 +164,11 @@ export interface FixtureLight {
   tilt?: number;
 }
 
+/** Ranges the project reader accepts for each FixtureLight field. */
+export const FIXTURE_LIGHT_RANGES: Record<keyof FixtureLight, [number, number]> = {
+  lumens: [0, 1_000_000], beamAngle: [1, 180], colorTemperature: [1000, 10000], dim: [0, 1], tilt: [0, 90],
+};
+
 export interface ElementGroup {
   id: string;
   elementIds: string[];
