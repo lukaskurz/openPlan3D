@@ -1,0 +1,11 @@
+# Cloudflare Pages response headers for the static build (docs/deployment-security.md).
+# The Content-Security-Policy itself is a meta tag in index.html (kit.csp in svelte.config.js).
+/*
+  Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+/_app/immutable/*
+  Cache-Control: public, max-age=31536000, immutable
