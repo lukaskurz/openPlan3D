@@ -4,6 +4,8 @@
  * server (which owns the prompt and tool list, so the endpoint can only be
  * used as this assistant).
  */
+import { floorMaterials, wallColors } from '$lib/utils/materials';
+import { SKILL_INDEX, SKILL_NAMES } from './skills';
 
 /**
  * Two modes. Chat (questions, edits, furnishing) runs on Sonnet. A message that
@@ -49,12 +51,13 @@ How to work:
 - Only change what the person asked for. If a request is ambiguous, make a sensible choice and say what you chose. If something can't be done with your tools, say so.
 - get_plan covers the active floor and lists the others. Use switch_floor to look at or work on another floor (the person sees it switch) and add_floor to add one.
 - Walls can be curved: a wall's curve is the control point of a quadratic curve, so the wall bends halfway towards it. Openings on curved walls are measured along the curve.
-- If the person attaches a floor plan (an architect's drawing, a sketch or a photo of one) to be drawn, rebuild it exactly:
-  1. Read it first. Use view_drawing to zoom into the drawing wherever the numbers are small: its blue grid gives positions as fractions of the page. Then trace_drawing to lay the drawing under the plan at its real scale, using two points a known distance apart (two grid axes, or the ends of the longest dimension line, read off a zoomed view), and view_plan to read positions off it in cm. Pick an origin, such as a grid axis or the inside corner of an outer wall, and write down the positions you need in cm by adding up the dimension chains (the rows of numbers along dimension lines), checking each chain against its overall dimension. Read wall thicknesses from the drawing (outer and load-bearing walls are often 20–40 cm, partitions 8–15 cm). Note slanted walls, recesses, shafts, wall stubs, and openings without doors.
-  2. Walls are drawn on their centre lines. A wall's centre is its inside face plus half its thickness, away from the room. Draw them with add_walls, one call per thickness, joining at shared corners so rooms close; rooms appear where walls enclose a space. Keep slanted walls slanted. Leave openings without a door open (no wall). Then name the rooms with update_elements.
-  3. Add doors and windows from the drawing. Labels like 100/245 are width/height in cm. Full-height glazed openings onto a balcony or terrace are doors (balcony or french), not windows.
-  4. Check: look at every part of the plan with view_plan; your walls are drawn over the drawing, so move any wall that doesn't sit on the drawn one. get_plan lists each room's area inside the walls. Compare it with the areas printed on the drawing and fix anything more than about 3% off before you answer. get_plan also names rooms with no door or opening: every room except shafts must be reachable, so add the missing door, or an opening where the drawing shows a passage without a door.
-  If sizes are missing, estimate from typical door widths (about 80–90 cm) and say what you assumed. Leave out furniture drawn on the plan unless the person asks for it. For photos of a room or of furniture, use them to answer or to pick similar catalog items.
+- get_plan starts with the project brief: who the plan is for and what the person decided, wants and doesn't want for the whole project. Follow it. When the person tells you something that should hold for the whole project (a decision, a preference, a constraint, a budget), add it to the brief with update_brief, as part of your proposal.
+- Items are fixed one of three ways. Floor items stand on the floor (elevation lifts them, like a TV on a stand). Wall items (outlets, switches, sconces, wall cabinets) sit on a wall face at a mounting height. Ceiling items (ceiling lights, pendants, fans) hang from the room's ceiling, and their drop is the distance from the ceiling to the item's top. Each room has its own ceiling height.
+- The plan has three trades: Furnishing, Electrical (outlets, switches, lights) and Plumbing (pipes and fixtures). Use link_switch to say which lights a switch controls, and add_pipes for water and waste runs.
+- After bigger changes, and always for lighting, heights and anything on walls or ceilings, look at the result with view_3d and fix what looks wrong before you answer.
+- Design guides. Before work that one of these covers, read it with read_skill and follow it:
+${SKILL_INDEX}
+- If the person attaches a floor plan (an architect's drawing, a sketch or a photo of one) to be drawn, read the rebuild-drawing guide first and follow it exactly. For photos of a room or of furniture, use them to answer or to pick similar catalog items.
 - If the person asks for a tool or check they can reuse, make one with make_tool. Two kinds exist: walkway (marks gaps between furniture, or furniture and walls, narrower than a minimum in cm) and room_size (marks rooms smaller than a minimum in m²). Use check_plan to answer questions about walkways or room sizes, and show_tool to switch on a tool made earlier.
 - Help only with this plan, home design, layout and furnishing. Politely decline anything unrelated.
 - Reply in the person's language. Keep replies short: 1–4 sentences, plain text, no headings or tables. Use the person's units. Don't show ids or coordinates unless asked.`;
@@ -69,7 +72,7 @@ const ids = { type: 'array', items: { type: 'string' } };
 export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   {
     name: 'get_plan',
-    description: 'Read the active floor: rooms with corners and areas, walls, doors, windows, furniture with centres, rotations and sizes, plus what the person has selected.',
+    description: 'Read the project brief and the active floor: rooms with corners, areas, ceiling heights and floor finishes, walls with colours, doors, windows, furniture with centres, rotations, sizes, trades and how each is fixed (wall items: host wall and mounting height; ceiling items: drop), pipes, which lights each switch controls, plus what the person has selected.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -77,7 +80,7 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
     description: 'Search the furniture catalog by words and/or category. Returns catalog ids with default width × depth × height in cm.',
     input_schema: { type: 'object', properties: {
       query: { type: 'string' },
-      category: { type: 'string', description: 'Living Room, Bedroom, Kitchen, Bathroom, Office, Dining, Decor, Lighting, Outdoor Furniture, …' },
+      category: { type: 'string', description: 'Living Room, Bedroom, Kitchen, Bathroom, Office, Dining, Decor, Lighting, Electrical, Plumbing, Outdoor Furniture, …' },
     } },
   },
   {
@@ -106,22 +109,27 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   },
   {
     name: 'place_furniture',
-    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. Returns the new ids and warnings about overlaps, blocked doors and items outside rooms.',
+    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. Floor items: elevation lifts the bottom above the floor in cm. Wall items (search_catalog says wall-mounted) snap to the wall face nearest x, y, or to wallId, and face into the room on the side x, y is on; rotation is ignored and elevation is the mounting height in cm. Ceiling items hang from the room\'s ceiling; drop is the distance in cm from the ceiling to the item\'s top (a pendant\'s cord). Returns the new ids and warnings about overlaps, blocked doors and items outside rooms.',
     input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
       catalogId: { type: 'string' }, x: num, y: num, rotation: num, width: num, depth: num,
+      elevation: num, drop: num, wallId: { type: 'string' },
     }, required: ['catalogId', 'x', 'y'] } } }, required: ['items'] },
   },
   {
     name: 'update_elements',
-    description: 'Change existing elements by id. Furniture, stairs, columns: x, y, rotation, width, depth. Rooms: name. Doors and windows: offset, width, type. Walls: dx, dy shift the wall (walls joined to it stretch to follow), thickness, curve (control point) or straighten: true.',
+    description: 'Change existing elements by id. Furniture, stairs, columns: x, y, rotation, width, depth. Furniture also: elevation (floor items: bottom above the floor; wall items: mounting height), drop (ceiling items), wallId (move a wall item to another wall; x, y pick the spot and side). Rooms: name, ceilingHeight in cm (null goes back to the storey\'s height), floorMaterial. Doors and windows: offset, width, type. Walls: dx, dy shift the wall (walls joined to it stretch to follow), thickness, curve (control point) or straighten: true, color (both faces). Pipes: points, kind, diameter, run, elevation.',
     input_schema: { type: 'object', properties: { updates: { type: 'array', items: { type: 'object', properties: {
       id: { type: 'string' }, x: num, y: num, rotation: num, width: num, depth: num,
-      name: { type: 'string' }, offset: num, type: { type: 'string' }, dx: num, dy: num, thickness: num, curve: point, straighten: { type: 'boolean' },
+      elevation: num, drop: num, wallId: { type: 'string' },
+      name: { type: 'string' }, ceilingHeight: { type: ['number', 'null'] }, floorMaterial: { enum: floorMaterials.map(m => m.id) },
+      offset: num, type: { type: 'string' }, dx: num, dy: num, thickness: num, curve: point, straighten: { type: 'boolean' },
+      color: { type: 'string', description: `A wall colour id (${wallColors.map(c => c.id).join(', ')}) or #rrggbb.` },
+      points: { type: 'array', items: point, minItems: 1 }, kind: { enum: ['cold', 'hot', 'waste'] }, diameter: num, run: { enum: ['floor', 'wall', 'ceiling'] },
     }, required: ['id'] } } }, required: ['updates'] },
   },
   {
     name: 'delete_elements',
-    description: 'Delete rooms (their walls unless shared), walls, doors, windows, furniture, stairs or columns by id.',
+    description: 'Delete rooms (their walls unless shared), walls, doors, windows, furniture, stairs, columns or pipes by id.',
     input_schema: { type: 'object', properties: { ids }, required: ['ids'] },
   },
   {
@@ -168,8 +176,38 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
     description: 'Switch on a tool made earlier (ids are listed by get_plan), optionally with a new minimum.',
     input_schema: { type: 'object', properties: { id: { type: 'string' }, minimum: num }, required: ['id'] },
   },
+  {
+    name: 'add_pipes',
+    description: 'Draw water and waste pipes on the active floor (Plumbing). points is the run on the plan in cm; a riser is a single point, a vertical stack through the storey. run is where it is laid: in the floor screed, along the walls or under the ceiling. diameter is in mm (default 20 for cold and hot, 50 for waste); elevation is the height above the floor in cm (negative is in the screed; the default follows the run).',
+    input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
+      kind: { enum: ['cold', 'hot', 'waste'] }, points: { type: 'array', items: point, minItems: 1 }, run: { enum: ['floor', 'wall', 'ceiling'] },
+      diameter: num, elevation: num, riser: { type: 'boolean' },
+    }, required: ['kind', 'points'] } } }, required: ['items'] },
+  },
+  {
+    name: 'link_switch',
+    description: 'Say which lights, fans or outlets a switch controls (Electrical). mode set (the default) replaces what the switch controls, and an empty targetIds removes its link; add and remove change it. The switch and its targets are furniture on the active floor.',
+    input_schema: { type: 'object', properties: {
+      switchId: { type: 'string' }, targetIds: ids, mode: { enum: ['set', 'add', 'remove'] },
+    }, required: ['switchId', 'targetIds'] },
+  },
+  {
+    name: 'view_3d',
+    description: 'Look at the active floor in 3D, as it would be built: walls, doors, windows, furniture, lights and ceilings, including your proposal. Give room (id or name) for a view of that room from above at an angle, or from and to (plan points in cm) for an eye-level view from one point towards another; height is the eye height in cm (default 160). Leave everything out for the whole floor. Returns a picture.',
+    input_schema: { type: 'object', properties: { room: { type: 'string' }, from: point, to: point, height: num } },
+  },
+  {
+    name: 'read_skill',
+    description: 'Read one of the design guides listed in your instructions.',
+    input_schema: { type: 'object', properties: { name: { enum: SKILL_NAMES } }, required: ['name'] },
+  },
+  {
+    name: 'update_brief',
+    description: 'Replace the project brief with text: short notes on who the plan is for and what the person decided, wants and doesn\'t want for the whole project. Keep what still holds from the current brief (get_plan shows it). It is part of your proposal, so the person applies or discards it with your other changes.',
+    input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
+  },
 ];
 
 export const ASSISTANT_TOOL_NAMES = new Set(ASSISTANT_TOOLS.map(tool => tool.name));
 /** Tools that only read; anything else starts a proposal. */
-export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan']);
+export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan', 'view_3d', 'read_skill']);
