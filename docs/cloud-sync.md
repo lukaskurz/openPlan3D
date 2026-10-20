@@ -146,6 +146,23 @@ editor. **Connect iCloud** shows Apple's **Sign in with Apple ID** button, and
 Apple's sign-in opens in a popup. CloudKit JS remembers the session, so
 returning visits stay signed in.
 
+## Static hosting
+
+Sync needs no server, so the app can be hosted statically. Run
+`npm run build:static`: it builds a single-page app into `build/`, where every
+route is served from `index.html`. On Cloudflare Pages:
+
+- Build command `npm run build:static`, output directory `build`.
+- Set the `PUBLIC_*` variables above as build variables of the production
+  environment. They are baked into `_app/env.js` at build time. Use the
+  production CloudKit token, with `PUBLIC_CLOUDKIT_ENVIRONMENT=production`.
+- With no `404.html` present, Pages serves `index.html` for unknown paths,
+  which is what the single-page build needs.
+
+A static build has no server endpoints. The hosted Assistant, Assistant
+shares, the MCP connector and capture uploads are unavailable there. The
+editor, the library, sync and the Assistant with a personal key keep working.
+
 ## Code map
 
 - `src/lib/services/cloudSync/engine.ts`: provider-neutral reconciliation.
