@@ -54,11 +54,14 @@ export interface AssistantToolDef { name: string; description: string; input_sch
 const num = { type: 'number' };
 const point = { type: 'array', items: num, minItems: 2, maxItems: 2 };
 const ids = { type: 'array', items: { type: 'string' } };
+const orNull = { type: ['number', 'null'] };
+/** A light fixture's own output; fields left out keep the catalog's, null goes back to it. */
+const light = { type: ['object', 'null'], properties: { lumens: orNull, colorTemperature: orNull, beamAngle: orNull, tilt: orNull, dim: orNull } };
 
 export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   {
     name: 'get_plan',
-    description: 'Read the project brief and the active floor: rooms with corners, areas, ceiling heights and floor finishes, walls with colours, doors, windows, furniture with centres, rotations, sizes, trades and how each is fixed (wall items: host wall and mounting height; ceiling items: drop), pipes, which lights each switch controls, plus what the person has selected.',
+    description: 'Read the project brief and the active floor: rooms with corners, areas, ceiling heights and floor finishes, walls with colours, doors, windows, furniture with centres, rotations, sizes, trades, how each is fixed (wall items: host wall and mounting height; ceiling items: drop) and each light fixture\'s output (lumens, colour temperature, beam, tilt, dimming), pipes, which lights each switch controls, plus what the person has selected.',
     input_schema: { type: 'object', properties: {} },
   },
   {
@@ -95,18 +98,18 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   },
   {
     name: 'place_furniture',
-    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. Floor items: elevation lifts the bottom above the floor in cm. Wall items (search_catalog says wall-mounted) snap to the wall face nearest x, y, or to wallId, and face into the room on the side x, y is on; offset (cm from the wall\'s start to the item\'s centre, as for openings) places it exactly along the wall; rotation is ignored and elevation is the mounting height in cm. Ceiling items hang from the room\'s ceiling; drop is the distance in cm from the ceiling to the item\'s top (a pendant\'s cord). Returns the new ids and warnings about overlaps, blocked doors and items outside rooms.',
+    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. Floor items: elevation lifts the bottom above the floor in cm. Wall items (search_catalog says wall-mounted) snap to the wall face nearest x, y, or to wallId, and face into the room on the side x, y is on; offset (cm from the wall\'s start to the item\'s centre, as for openings) places it exactly along the wall; rotation is ignored and elevation is the mounting height in cm. Ceiling items hang from the room\'s ceiling; drop is the distance in cm from the ceiling to the item\'s top (a pendant\'s cord). Light fixtures (search_catalog shows their light) take light: lumens (full output), colorTemperature (K, 1000–10000), beamAngle (spots, degrees, 5–140), tilt (spots, degrees from straight down towards the item\'s front, 0–90, for wall washing) and dim (0 off to 1 full); what you leave out keeps the catalog\'s. Returns the new ids and warnings about overlaps, blocked doors and items outside rooms.',
     input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
       catalogId: { type: 'string' }, x: num, y: num, rotation: num, width: num, depth: num,
-      elevation: num, drop: num, wallId: { type: 'string' }, offset: num,
+      elevation: num, drop: num, wallId: { type: 'string' }, offset: num, light,
     }, required: ['catalogId', 'x', 'y'] } } }, required: ['items'] },
   },
   {
     name: 'update_elements',
-    description: 'Change existing elements by id. Furniture, stairs, columns: x, y, rotation, width, depth. Furniture also: elevation (floor items: bottom above the floor; wall items: mounting height), drop (ceiling items), wallId (move a wall item to another wall; x, y pick the spot and side), offset (a wall item\'s centre in cm from its wall\'s start; alone it slides the item along its wall). Rooms: name, ceilingHeight in cm (null goes back to the storey\'s height), floorMaterial. Doors and windows: offset, width, type. Walls: dx, dy shift the wall (walls joined to it stretch to follow), thickness, curve (control point) or straighten: true, color (both faces). Pipes: points, kind, diameter, run, elevation.',
+    description: 'Change existing elements by id. Furniture, stairs, columns: x, y, rotation, width, depth. Furniture also: elevation (floor items: bottom above the floor; wall items: mounting height), drop (ceiling items), wallId (move a wall item to another wall; x, y pick the spot and side), offset (a wall item\'s centre in cm from its wall\'s start; alone it slides the item along its wall), light (light fixtures, as in place_furniture; null in a field, or for the whole light, goes back to the catalog\'s). Rooms: name, ceilingHeight in cm (null goes back to the storey\'s height), floorMaterial. Doors and windows: offset, width, type. Walls: dx, dy shift the wall (walls joined to it stretch to follow), thickness, curve (control point) or straighten: true, color (both faces). Pipes: points, kind, diameter, run, elevation.',
     input_schema: { type: 'object', properties: { updates: { type: 'array', items: { type: 'object', properties: {
       id: { type: 'string' }, x: num, y: num, rotation: num, width: num, depth: num,
-      elevation: num, drop: num, wallId: { type: 'string' },
+      elevation: num, drop: num, wallId: { type: 'string' }, light,
       name: { type: 'string' }, ceilingHeight: { type: ['number', 'null'] }, floorMaterial: { enum: floorMaterials.map(m => m.id) },
       offset: num, type: { type: 'string' }, dx: num, dy: num, thickness: num, curve: point, straighten: { type: 'boolean' },
       color: { type: 'string', description: `A wall colour id (${wallColors.map(c => c.id).join(', ')}) or #rrggbb.` },

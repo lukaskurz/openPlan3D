@@ -21,7 +21,7 @@
   import { getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
   import { furnitureElevation, surfaceBelow } from '$lib/utils/furnitureStacking';
   import { effectiveElevation, furnitureDrop, furnitureMount } from '$lib/utils/mounting';
-  import { fixtureLightDefaults, fixtureLightRange, setFixtureLightField } from '$lib/utils/fixtureLights';
+  import { fixtureLightDefaults, fixtureLightRange, setFixtureLightField } from '$lib/utils/fixturePhotometry';
   import { projectSettings, formatLength, formatArea, parseLengthInput } from '$lib/stores/settings';
     import type { Floor, Wall, Door, Window as Win, Room, FurnitureItem, Stair, Column, RoomCategory, TextAnnotation, FixtureLight } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';

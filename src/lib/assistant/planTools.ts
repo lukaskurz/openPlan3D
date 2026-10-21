@@ -4,7 +4,7 @@
  * plan can outline them while the change is a proposal.
  */
 import { get } from 'svelte/store';
-import type { Door, Floor, FurnitureItem, Mount, Pipe, PipeKind, PipeRun, Point, Room, Wall, Window as Win } from '$lib/models/types';
+import type { Door, FixtureLight, Floor, FurnitureItem, Mount, Pipe, PipeKind, PipeRun, Point, Room, Wall, Window as Win } from '$lib/models/types';
 import {
   currentProject, activeFloor, addWall, addDoor, addWindow, addFurniture, updateFurniture, updateDoor, updateWindow,
   updateWall, updateStair, updateColumn, removeElement, editActiveFloor, selectedElementIds, selectedRoomId, detectedRoomsStore,
@@ -20,6 +20,7 @@ import { createCeilingResolver, effectiveRoomCeiling, floorDefaultCeiling, roomC
 import { DEFAULT_PIPE_DIAMETER, MAX_PIPE_DIAMETER, PIPE_KINDS, dedupePipePoints, diameterForKind, minPipePoints } from '$lib/utils/pipes';
 import { isSwitch, isSwitchTarget, linkOfSwitch } from '$lib/utils/switchLinks';
 import { floorMaterials, getMaterial, wallColors } from '$lib/utils/materials';
+import { fixtureLightDefaults, fixtureLightRange, resolveFixtureLight, setFixtureLightField } from '$lib/utils/fixturePhotometry';
 import { hostedPose, wallHostAt, wallSideAt, type WallHost } from '$lib/utils/wallHostedItems';
 import { projectOntoWall } from '$lib/utils/wallProjection';
 import { catalogName, convexOverlap, furnitureFootprint, insidePolygon, isLayered, nearPolygon, polygonArea, rectCorners, segmentDistance, wallQuad } from './geometry';
@@ -193,8 +194,8 @@ function getPlan(): ToolOutcome {
   for (const item of floor.furniture.slice(0, 400)) {
     const size = getFurnitureSize(item);
     const room = roomAt(rooms, item.position);
-    const trade = furnitureTrade(item), mount = mountText(floor, item, ceilingAt);
-    lines.push(`- ${item.id} ${item.catalogId} "${catalogName(item)}" centre ${fmtPoint(item.position)} rot ${r0(item.rotation || 0)}° ${r0(size.width)}×${r0(size.depth)} cm${room ? ` in ${room.room.name}` : ''}${trade === 'furnishing' ? '' : `, ${trade}`}${mount ? `, ${mount}` : ''}`);
+    const trade = furnitureTrade(item), mount = mountText(floor, item, ceilingAt), light = lightText(item);
+    lines.push(`- ${item.id} ${item.catalogId} "${catalogName(item)}" centre ${fmtPoint(item.position)} rot ${r0(item.rotation || 0)}° ${r0(size.width)}×${r0(size.depth)} cm${room ? ` in ${room.room.name}` : ''}${trade === 'furnishing' ? '' : `, ${trade}`}${mount ? `, ${mount}` : ''}${light ? `, ${light}` : ''}`);
   }
   if (floor.furniture.length > 400) lines.push(`… and ${floor.furniture.length - 400} more items.`);
   if (floor.pipes?.length) {
@@ -215,6 +216,39 @@ function mountHint(item: (typeof furnitureCatalog)[number]): string {
   return item.elevation ? `, hangs ${item.elevation} cm up` : '';
 }
 
+// ── Fixture lights ────────────────────────────────────────────────────
+
+const LIGHT_FIELDS: (keyof FixtureLight)[] = ['lumens', 'colorTemperature', 'beamAngle', 'tilt', 'dim'];
+
+/** A light fixture's output, its own settings over the catalog's; '' for items that give no light. */
+function lightText(item: Pick<FurnitureItem, 'catalogId' | 'light'>): string {
+  const defaults = fixtureLightDefaults(item.catalogId), now = resolveFixtureLight(item.catalogId, item.light);
+  if (!defaults || !now) return '';
+  const beam = now.beamAngle ?? defaults.beamAngle;
+  const parts = [`${r0(now.lumens)} lm`, `${r0(now.colorTemperature)} K`];
+  if (beam !== undefined) parts.push(`beam ${r0(beam)}°`);
+  if (now.tilt) parts.push(`tilt ${r0(now.tilt)}°`);
+  if (now.dim < 1) parts.push(`dimmed to ${r0(now.dim * 100)}%`);
+  const own = LIGHT_FIELDS.filter(key => item.light?.[key] !== undefined);
+  return `light ${parts.join(', ')}${own.length ? ` (set: ${own.join(', ')})` : ''}`;
+}
+
+const lightHint = (catalogId: string) => { const text = lightText({ catalogId }); return text ? `, ${text}` : ''; };
+
+/** The item's light settings with `value` applied: each field checked against its range, null clearing a field (or all of them). */
+function lightUpdates(item: Pick<FurnitureItem, 'catalogId' | 'light'>, value: unknown): FixtureLight | undefined {
+  const defaults = fixtureLightDefaults(item.catalogId) ?? fail(`${item.catalogId} gives no light, so it takes no light settings.`);
+  if (value === null) return undefined;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`light must be an object with ${LIGHT_FIELDS.join(', ')}.`);
+  let light = item.light;
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    const field = LIGHT_FIELDS.find(f => f === key) ?? fail(`light takes ${LIGHT_FIELDS.join(', ')}, not ${key}.`);
+    if ((field === 'beamAngle' || field === 'tilt') && defaults.beamAngle === undefined) fail(`${item.catalogId} shines all round, so it has no ${field}.`);
+    light = setFixtureLightField(light, field, raw === null ? undefined : finite(raw, `light.${field}`, ...fixtureLightRange(field)));
+  }
+  return light;
+}
+
 function searchCatalog(input: { query?: string; category?: string }): ToolOutcome {
   const words = String(input.query ?? '').toLowerCase().split(/\s+/).filter(Boolean);
   const category = input.category ? String(input.category).toLowerCase() : null;
@@ -222,7 +256,7 @@ function searchCatalog(input: { query?: string; category?: string }): ToolOutcom
     .filter(item => !category || item.category.toLowerCase() === category)
     .filter(item => !words.length || words.some(word => `${item.id} ${item.name} ${item.category}`.toLowerCase().includes(word)));
   if (!hits.length) return { text: 'No matches. Try a broader word or a category.' };
-  return { text: hits.slice(0, 40).map(item => `${item.id}: ${item.name} (${item.category}) ${item.width}×${item.depth}×${item.height}${mountHint(item)}`).join('\n') + (hits.length > 40 ? `\n… ${hits.length - 40} more, narrow the search.` : '') };
+  return { text: hits.slice(0, 40).map(item => `${item.id}: ${item.name} (${item.category}) ${item.width}×${item.depth}×${item.height}${mountHint(item)}${lightHint(item.id)}`).join('\n') + (hits.length > 40 ? `\n… ${hits.length - 40} more, narrow the search.` : '') };
 }
 
 // ── Validation for placed items ───────────────────────────────────────
@@ -424,7 +458,7 @@ function addOpenings(input: Record<string, unknown>): ToolOutcome {
 
 // ── How items are fixed ───────────────────────────────────────────────
 
-const FURNITURE_FIELDS = ['x', 'y', 'rotation', 'width', 'depth', 'elevation', 'drop', 'wallId', 'offset'];
+const FURNITURE_FIELDS = ['x', 'y', 'rotation', 'width', 'depth', 'elevation', 'drop', 'wallId', 'offset', 'light'];
 
 /** elevation, drop, wallId and offset only apply to some mounts, and furniture takes no other fields; say so instead of ignoring them. */
 function checkMountFields(mount: Mount, raw: Record<string, unknown>, catalogId: string) {
@@ -500,10 +534,11 @@ function placeFurniture(input: Record<string, unknown>): ToolOutcome {
       let host = mount === 'wall' ? wallHostFor(floor, rooms, draft, position, raw.wallId === undefined ? undefined : String(raw.wallId)) : undefined;
       if (host && raw.offset !== undefined) host = withOffset(floor, draft, host, raw.offset);
       Object.assign(updates, heightUpdates(raw, draft, ceilingAt(position)));
+      if (raw.light !== undefined) updates.light = lightUpdates(draft, raw.light);
       const id = addFurniture(catalogId, position, host);
       if (Object.keys(updates).length) updateFurniture(id, updates);
       const placed = floor.furniture.find(item => item.id === id);
-      const how = placed ? mountText(floor, placed, ceilingAt) : '';
+      const how = placed ? [mountText(floor, placed, ceilingAt), raw.light === undefined ? '' : lightText(placed)].filter(Boolean).join(', ') : '';
       lines.push(`${id} ${catalogId} ok${how ? `, ${how}` : ''}`);
       changed.push(id);
     } catch (error) {
@@ -587,6 +622,7 @@ function furnitureUpdates(floor: Floor, item: FurnitureItem, raw: Record<string,
   if (raw.elevation !== undefined || raw.drop !== undefined) {
     Object.assign(updates, heightUpdates(raw, { ...item, ...updates }, ceilingResolver(floor, rooms())(updates.position ?? item.position)));
   }
+  if (raw.light !== undefined) updates.light = lightUpdates(item, raw.light);
   return updates;
 }
 

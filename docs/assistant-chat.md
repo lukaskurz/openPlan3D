@@ -58,6 +58,18 @@ blocked doors, and the prompt asks the model to fix them before it answers.
   overlap on the wall, face outside, reach above the ceiling, or (ceiling
   items) leave less than 200 cm headroom with no table, bed or counter under
   them.
+- **Light output.** Light fixtures (`isLightFixture`) report what they give in
+  `get_plan` and `search_catalog`: lumens, colour temperature, beam angle for
+  spots, tilt and dimming, with "(set: …)" naming the fields the item
+  overrides. `place_furniture` and `update_elements` take a `light` object
+  with any of those fields, checked against `FIXTURE_LIGHT_RANGES` (beam angle
+  5–140°, as the 3D view renders it); null clears a field, `light: null` all
+  of them, and items that give no light, or a beam on a fixture that shines
+  all round, are refused. The values come from
+  [`fixturePhotometry.ts`](../src/lib/utils/fixturePhotometry.ts), which holds
+  the catalog defaults without three, so the assistant and the Inspector don't
+  load the 3D engine for them. The lighting guide says how to size lumens from
+  a room's lumen budget and pick colour temperature, beam and tilt.
 - **Looking in 3D.** `view_3d` renders the active floor, proposal included,
   from a room overview at 45° (near walls cut away), an eye-level view from
   one plan point towards another, or the whole floor
