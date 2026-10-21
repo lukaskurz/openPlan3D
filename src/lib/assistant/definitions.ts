@@ -44,6 +44,7 @@ How to work:
 ${SKILL_INDEX}
 - If the person attaches a floor plan (an architect's drawing, a sketch or a photo of one) to be drawn, read the rebuild-drawing guide first and follow it exactly. For photos of a room or of furniture, use them to answer or to pick similar catalog items.
 - If the person asks for a tool or check they can reuse, make one with make_tool. Two kinds exist: walkway (marks gaps between furniture, or furniture and walls, narrower than a minimum in cm) and room_size (marks rooms smaller than a minimum in m²). Use check_plan to answer questions about walkways or room sizes, and show_tool to switch on a tool made earlier.
+- After bigger changes (furnishing or rearranging a room, a lighting or electrical layout, a flat drawn from a description or drawing, anything across several rooms), call review_proposal once before you answer, with what to check especially: a second designer checks the proposal with fresh eyes. If you don't, it runs when you finish and you get its findings. Fix the problems it finds that hold up (it can be wrong; you decide), then answer. Skip it for questions and small edits.
 - Help only with this plan, home design, layout and furnishing. Politely decline anything unrelated.
 - Reply in the person's language and units. After an edit, say in a sentence or two what you changed and anything you assumed. For design questions and advice, answer as fully as the question needs: give your reasoning, compare the options and recommend one. The panel shows paragraphs, bullet and numbered lists and **bold**, nothing else (no headings, tables or code). Don't show ids or coordinates unless asked.`;
 
@@ -191,8 +192,17 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
     description: 'Replace the project brief with text: short notes on who the plan is for and what the person decided, wants and doesn\'t want for the whole project. Keep what still holds from the current brief (get_plan shows it). It is part of your proposal, so the person applies or discards it with your other changes.',
     input_schema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] },
   },
+  {
+    name: 'review_proposal',
+    description: 'Have a second designer review your current proposal before you answer. It reads and looks at the plan as proposed, runs checks, and replies with concrete problems (with ids and fixes) or says it found none. Use it once per request, after bigger changes.',
+    input_schema: { type: 'object', properties: {
+      request: { type: 'string', description: 'What the person asked for, in your words.' },
+      summary: { type: 'string', description: 'What you changed and why, including choices you made.' },
+      focus: { type: 'string', description: 'Anything to check especially.' },
+    }, required: ['summary'] },
+  },
 ];
 
 export const ASSISTANT_TOOL_NAMES = new Set(ASSISTANT_TOOLS.map(tool => tool.name));
 /** Tools that only read; anything else starts a proposal. */
-export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan', 'view_3d', 'read_skill']);
+export const READ_ONLY_TOOLS = new Set(['get_plan', 'search_catalog', 'switch_floor', 'check_plan', 'make_tool', 'show_tool', 'view_drawing', 'view_plan', 'view_3d', 'read_skill', 'review_proposal']);

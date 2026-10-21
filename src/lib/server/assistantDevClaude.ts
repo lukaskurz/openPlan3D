@@ -17,7 +17,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { ASSISTANT_CONFIG, ASSISTANT_SYSTEM_PROMPT, ASSISTANT_TOOLS } from '$lib/assistant/definitions';
-import { ChatError, CHAT_MAX_BYTES, parseConversation } from './assistantChat';
+import { REVIEWER_MODEL, REVIEWER_SYSTEM_PROMPT, REVIEWER_TOOLS, type AssistantAgent } from '$lib/assistant/reviewer';
+import { ChatError, CHAT_MAX_BYTES, parseAgent, parseConversation } from './assistantChat';
 
 const TOOL_PREFIX = 'mcp__plan__';
 const IDLE_MS = 30 * 60_000;
@@ -30,6 +31,8 @@ interface Session {
   id: string;
   proc: ChildProcessWithoutNullStreams;
   alive: boolean;
+  /** The reviewer runs in its own process, with its own prompt and tools. */
+  agent?: AssistantAgent;
   /** Events not yet delivered to a browser request. */
   queue: string[];
   /** The open response for the current model call, if any. */
@@ -63,8 +66,9 @@ function startBridge(): Promise<string> {
     const server: Server = createServer(async (req, res) => {
       const json = (status: number, body: unknown) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
       if (req.headers.authorization !== `Bearer ${token}`) return json(403, { error: 'forbidden' });
-      if (req.method === 'GET' && req.url === '/tools') {
-        return json(200, ASSISTANT_TOOLS.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })));
+      if (req.method === 'GET' && (req.url === '/tools' || req.url === '/tools?agent=reviewer')) {
+        const tools = req.url.endsWith('reviewer') ? REVIEWER_TOOLS : ASSISTANT_TOOLS;
+        return json(200, tools.map(tool => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })));
       }
       if (req.method === 'POST' && req.url === '/call') {
         let raw = '';
@@ -144,34 +148,37 @@ function onOutput(session: Session, message: any) {
     return;
   }
   if (message.type === 'result') {
-    console.log(JSON.stringify({ event: 'assistant_chat_dev', model: ASSISTANT_CONFIG.model, turns: message.num_turns, apiEquivalentUsd: message.total_cost_usd }));
+    console.log(JSON.stringify({ event: 'assistant_chat_dev', model: session.agent === 'reviewer' ? REVIEWER_MODEL.model : ASSISTANT_CONFIG.model, ...(session.agent ? { agent: session.agent } : {}), turns: message.num_turns, apiEquivalentUsd: message.total_cost_usd }));
     if (message.is_error || message.subtype !== 'success') {
       emit(session, { type: 'error', error: { message: String(message.result ?? message.subtype ?? 'claude -p failed') } });
       finishCall(session);
     }
+    // A review is one message: its process isn't needed once it has answered.
+    if (session.agent) endSession(session);
   }
 }
 
-async function startSession(id: string): Promise<Session> {
+async function startSession(id: string, agent?: AssistantAgent): Promise<Session> {
   const url = await startBridge();
   workdir ??= mkdtempSync(path.join(tmpdir(), 'openplan3d-assistant-'));
   const mcp = { mcpServers: { plan: {
     command: process.execPath,
     args: [path.resolve('tooling/assistant-dev-bridge.mjs')],
-    env: { BRIDGE_URL: url, BRIDGE_TOKEN: token, BRIDGE_CONVERSATION: id },
+    env: { BRIDGE_URL: url, BRIDGE_TOKEN: token, BRIDGE_CONVERSATION: id, ...(agent ? { BRIDGE_AGENT: agent } : {}) },
   } } };
   // Without an API key in its environment, claude uses your Claude login (subscription).
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
+  const model = agent === 'reviewer' ? REVIEWER_MODEL : ASSISTANT_CONFIG;
   const proc = spawn(process.env.ASSISTANT_DEV_CLAUDE_BIN || 'claude', [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--model', ASSISTANT_CONFIG.model, '--effort', ASSISTANT_CONFIG.effort,
-    '--system-prompt', ASSISTANT_SYSTEM_PROMPT,
+    '--model', model.model, '--effort', model.effort,
+    '--system-prompt', agent === 'reviewer' ? REVIEWER_SYSTEM_PROMPT : ASSISTANT_SYSTEM_PROMPT,
     '--tools', '', '--mcp-config', JSON.stringify(mcp), '--strict-mcp-config', '--allowedTools', 'mcp__plan',
     '--setting-sources', '', '--no-session-persistence',
   ], { cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const session: Session = {
-    id, proc, alive: true, queue: [], listener: null, expected: [], results: new Map(), waiting: new Map(),
+    id, proc, alive: true, agent, queue: [], listener: null, expected: [], results: new Map(), waiting: new Map(),
     blocks: new Map(), stopReason: null, lastUsed: Date.now(),
   };
   let buffer = '', stderr = '';
@@ -229,7 +236,8 @@ export async function handleDevChat(request: Request): Promise<Response> {
     if (raw.length > CHAT_MAX_BYTES) throw new ChatError(413, 'This conversation is too long. Start a new chat.');
     let body: { conversation?: unknown };
     try { body = JSON.parse(raw); } catch { throw new ChatError(400, 'This conversation could not be read.'); }
-    const messages = parseConversation(body);
+    const agent = parseAgent(body);
+    const messages = parseConversation(body, agent);
     const id = typeof body.conversation === 'string' && /^[\w-]{8,64}$/.test(body.conversation) ? body.conversation : 'default';
     const last = messages[messages.length - 1];
     const results = last.content.filter(block => block.type === 'tool_result');
@@ -254,7 +262,7 @@ export async function handleDevChat(request: Request): Promise<Response> {
       if (session && (session.waiting.size || session.expected.length || session.listener)) { endSession(session); session = undefined; }
       session?.queue.splice(0);
       const fresh = !session?.alive;
-      if (fresh) session = await startSession(id);
+      if (fresh) session = await startSession(id, agent);
       const text = last.content.filter(block => block.type === 'text').map(block => String(block.text)).join('\n\n');
       const images = last.content.filter(block => block.type === 'image' || block.type === 'document');
       const content = [...images, { type: 'text', text: (fresh ? catchUp(messages) : '') + text }];

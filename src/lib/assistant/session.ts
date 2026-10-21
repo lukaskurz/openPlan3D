@@ -11,10 +11,12 @@ import { previewHighlight } from '$lib/stores/planView';
 import { ASSISTANT_CONFIG, READ_ONLY_TOOLS } from './definitions';
 import { forgetDrawings, rememberDrawing } from './drawings';
 import { runAssistantTool } from './tools';
+import type { ToolOutcome } from './planTools';
+import { AUTO_REVIEW_MIN_CHANGES, MAX_REVIEWS, reviewBrief, reviewEnabled, runReview, type ReviewInput } from './reviewer';
 import { assistantApiKey } from './apiKey';
 import { streamTurn, AssistantRequestError, type ApiMessage, type ContentBlock, type ImageSource, type ToolResultPart } from './stream';
 
-export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing' | 'pipes' | 'wiring' | 'looking3d' | 'guide' | 'brief';
+export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing' | 'pipes' | 'wiring' | 'looking3d' | 'guide' | 'brief' | 'reviewing';
 
 export interface ChangeCounts { rooms: number; walls: number; openings: number; furniture: number; floors: number; changed: number; removed: number }
 
@@ -76,7 +78,7 @@ const ACTIVITY: Record<string, ActivityKind> = {
   get_plan: 'reading', search_catalog: 'catalog', add_room: 'rooms', add_walls: 'walls', add_openings: 'openings',
   place_furniture: 'furniture', update_elements: 'adjusting', delete_elements: 'removing',
   switch_floor: 'floors', add_floor: 'floors', check_plan: 'checking', show_tool: 'checking', make_tool: 'building',
-  view_drawing: 'drawing', trace_drawing: 'drawing', view_plan: 'checking',
+  view_drawing: 'drawing', trace_drawing: 'drawing', view_plan: 'checking', review_proposal: 'reviewing',
   add_pipes: 'pipes', link_switch: 'wiring', view_3d: 'looking3d', read_skill: 'guide', update_brief: 'brief',
 };
 
@@ -434,12 +436,31 @@ export async function retry() {
   await send(lastUser.text, lastUser.images);
 }
 
+/** Ask the reviewer to look at the proposal; its findings become the tool's result. */
+async function reviewProposal(input: unknown, round: number, signal: AbortSignal): Promise<ToolOutcome> {
+  if (!get(reviewEnabled)) return { text: 'Review is switched off. Check the proposal yourself, then answer.' };
+  if (round > MAX_REVIEWS) return { text: 'This change has been reviewed already. Fix what is left, then answer.' };
+  const brief = reviewBrief((input ?? {}) as ReviewInput, {
+    personSaid: lastUser.text,
+    changed: proposal ? [...proposal.changed] : [],
+    removed: proposal ? [...proposal.removed] : [],
+  });
+  const apiKey = get(assistantApiKey) || undefined;
+  const text = await runReview(brief, {
+    signal,
+    call: messages => streamTurn(messages as ApiMessage[], { signal, agent: 'reviewer', conversation: `${conversationId}-review-${round}`, apiKey }),
+    runTool: runAssistantTool,
+  });
+  return { text: `Review:\n${text}` };
+}
+
 async function runLoop() {
   controller = new AbortController();
   const signal = controller.signal;
   const replyId = nextId++;
   let replyShown = false;
   const madeTools: string[] = [];
+  let reviews = 0;
   const showReply = (text: string, streaming: boolean) => {
     if (!replyShown) {
       replyShown = true;
@@ -465,7 +486,16 @@ async function runLoop() {
       const uses = turn.content.filter((block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use');
       if (!uses.length || turn.stopReason !== 'tool_use') {
         if (text) showReply(text, false);
-        break;
+        // A bigger proposal finished without a review: have it reviewed, and let the Assistant fix and answer again.
+        const size = proposal ? proposal.changed.size + proposal.removed.size : 0;
+        if (turn.stopReason !== 'end_turn' || reviews || size < AUTO_REVIEW_MIN_CHANGES || !get(reviewEnabled)) break;
+        update(state => { state.activity = 'reviewing'; });
+        const review = await reviewProposal({ summary: text }, ++reviews, signal);
+        // Nothing to fix, or no review to act on: keep the answer as it is.
+        if (/^Review:\s*(No problems found|The review failed|The reviewer (declined|ran out))/i.test(review.text)) break;
+        api.push({ role: 'user', content: [{ type: 'text', text: `[A second designer reviewed your proposal before the person saw it.\n${review.text}\nFix the problems that hold up, then give your answer again.]` }] });
+        update(state => { state.activity = 'thinking'; });
+        continue;
       }
       const results: ContentBlock[] = [];
       for (const use of uses) {
@@ -474,7 +504,7 @@ async function runLoop() {
           beginPreview();
           proposal ??= { counts: emptyCounts(), changed: new Set(), removed: new Set(), itemId: null };
         }
-        const outcome = await runAssistantTool(use.name, use.input);
+        const outcome = use.name === 'review_proposal' ? await reviewProposal(use.input, ++reviews, signal) : await runAssistantTool(use.name, use.input);
         if (!READ_ONLY_TOOLS.has(use.name)) recordChanges(use.name, outcome);
         if (outcome.madeTool) madeTools.push(outcome.madeTool);
         const content = outcome.image ? [{ type: 'text' as const, text: outcome.text }, { type: 'image' as const, source: { type: 'base64' as const, media_type: outcome.image.mediaType, data: outcome.image.data } }] : outcome.text;

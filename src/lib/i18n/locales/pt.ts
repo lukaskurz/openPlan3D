@@ -2028,6 +2028,7 @@ export const pt = {
   "chrome.assistant.brief.cancel": "Cancelar",
   "chrome.assistant.brief.busy": "Pode editar o resumo quando o Assistente terminar.",
   "chrome.assistant.brief.locked": "Toque primeiro em Aplicar ou Agora não para editar o resumo.",
+  "chrome.assistant.activity.reviewing": "Revendo a proposta…",
   "chrome.assistant.history.title": "Conversas",
   "chrome.assistant.history.empty": "Ainda não há conversas anteriores.",
   "chrome.assistant.history.untitled": "Conversa sem título",

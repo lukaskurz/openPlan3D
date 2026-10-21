@@ -2028,6 +2028,7 @@ export const en = {
   "chrome.assistant.brief.cancel": "Cancel",
   "chrome.assistant.brief.busy": "You can edit the brief when the Assistant has finished.",
   "chrome.assistant.brief.locked": "Choose Apply or Not now first to edit the brief.",
+  "chrome.assistant.activity.reviewing": "Reviewing the proposal…",
   "chrome.assistant.history.title": "Chats",
   "chrome.assistant.history.empty": "No earlier chats yet.",
   "chrome.assistant.history.untitled": "Untitled chat",

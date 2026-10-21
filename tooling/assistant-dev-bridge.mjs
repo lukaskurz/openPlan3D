@@ -4,7 +4,7 @@
 // See docs/assistant-chat.md ("Development with your Claude subscription").
 import readline from 'node:readline';
 
-const { BRIDGE_URL, BRIDGE_TOKEN, BRIDGE_CONVERSATION } = process.env;
+const { BRIDGE_URL, BRIDGE_TOKEN, BRIDGE_CONVERSATION, BRIDGE_AGENT } = process.env;
 const headers = { 'content-type': 'application/json', authorization: `Bearer ${BRIDGE_TOKEN}` };
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 
@@ -14,7 +14,7 @@ async function handle(message) {
     case 'initialize':
       return reply({ protocolVersion: message.params?.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'plan', version: '1.0.0' } });
     case 'tools/list': {
-      const response = await fetch(`${BRIDGE_URL}/tools`, { headers });
+      const response = await fetch(`${BRIDGE_URL}/tools${BRIDGE_AGENT ? `?agent=${BRIDGE_AGENT}` : ''}`, { headers });
       return reply({ tools: await response.json() });
     }
     case 'tools/call': {
