@@ -17,6 +17,7 @@ const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif
 const MAX_MESSAGES = 240;
 const MAX_TEXT = 8000;
 const MAX_TOOL_RESULT = 120_000;
+const TOOL_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 /** Thinking blocks come back as the API sent them (text is usually empty; the signature carries the reasoning). */
 const MAX_THINKING_CHARS = 400_000;
 
@@ -95,7 +96,8 @@ function checkBlock(block: unknown, role: Message['role']): Block {
     return { type: 'redacted_thinking', data: b.data };
   }
   if (b.type === 'tool_use' && role === 'assistant') {
-    if (typeof b.id !== 'string' || typeof b.name !== 'string' || !ASSISTANT_TOOL_NAMES.has(b.name)) invalid();
+    // A tool that doesn't exist is checked in parseConversation: the model invented it, and it must have failed.
+    if (typeof b.id !== 'string' || typeof b.name !== 'string' || !TOOL_NAME.test(b.name)) invalid();
     if (!b.input || typeof b.input !== 'object' || Array.isArray(b.input)) invalid();
     return { type: 'tool_use', id: b.id, name: b.name, input: b.input };
   }
@@ -129,6 +131,10 @@ export function parseConversation(body: unknown): Message[] {
     return { role, content: blocks };
   });
   if (parsed[0].role !== 'user' || parsed[parsed.length - 1].role !== 'user') invalid();
+  // A model now and then calls a tool that doesn't exist. The browser answers it with an error and the
+  // chat goes on; any other result for an unknown tool means the conversation isn't this assistant's.
+  const invented = new Set(parsed.flatMap(m => m.content).filter(b => b.type === 'tool_use' && !ASSISTANT_TOOL_NAMES.has(String(b.name))).map(b => b.id));
+  for (const block of parsed.flatMap(m => m.content)) if (block.type === 'tool_result' && invented.has(block.tool_use_id) && block.is_error !== true) invalid();
   return parsed;
 }
 

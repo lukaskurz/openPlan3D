@@ -20,7 +20,7 @@ it('runs a conversation through claude -p, with tool calls answered by the brows
   messages.push({ role: 'assistant', content: first.content }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'A plan with one room' }] });
   const second = await streamTurn(messages, { fetchImpl: via(conversation), conversation });
   expect(second.stopReason).toBe('end_turn');
-  expect(second.content).toEqual([{ type: 'text', text: 'Saw: A plan with one room (16 tools, turn 1, "What is here?")' }]);
+  expect(second.content).toEqual([{ type: 'text', text: 'Saw: A plan with one room (21 tools, turn 1, "What is here?")' }]);
   // The same process takes the next message.
   messages.push({ role: 'assistant', content: second.content }, { role: 'user', content: [{ type: 'text', text: 'And now?' }] });
   const third = await streamTurn(messages, { fetchImpl: via(conversation), conversation });

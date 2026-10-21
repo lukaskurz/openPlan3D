@@ -250,6 +250,19 @@ describe('library cloud sync', () => {
 describe('plans saved by a newer app version', () => {
   const newer = (project: Project) => { project.formatVersion = PROJECT_FORMAT + 1; };
 
+  it('stamps format 2 or later, so builds that predate the project brief cannot save over it', async () => {
+    expect(PROJECT_FORMAT).toBeGreaterThanOrEqual(2);
+    const cloud = memoryCloud(), mac = device(), ipad = device();
+    const plan = createDefaultProject('Plan');
+    plan.brief = 'Family of four. Keep the kitchen wall.';
+    await mac.use().save(plan);
+    await syncLibrary(cloud.provider);
+    expect(JSON.parse(cloud.files.get(plan.id)!.raw)).toMatchObject({ formatVersion: PROJECT_FORMAT, brief: plan.brief });
+    const ipadStore = ipad.use();
+    await syncLibrary(cloud.provider);
+    expect((await ipadStore.load(plan.id))!.brief).toBe(plan.brief);
+  });
+
   it('stamps every save with the format of the build that wrote it', async () => {
     const store = device().use(), plan = createDefaultProject('Plan');
     await store.save(plan);

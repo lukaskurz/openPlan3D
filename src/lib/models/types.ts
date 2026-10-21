@@ -420,6 +420,10 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
+  /** Notes the Assistant keeps for the whole project (who it is for, decisions, wishes, no-gos);
+   * it reads them with every request and edits them with update_brief. Project-level, so every
+   * plan alternative shares it; missing = no brief. Separate from `description` (plan notes on prints). */
+  brief?: string;
   floors: Floor[];
   activeFloorId: string;
   createdAt: Date;

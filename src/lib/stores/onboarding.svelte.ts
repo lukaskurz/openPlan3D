@@ -51,6 +51,11 @@ export function triggerTip(tipId: TipId, x: number, y: number) {
   _activeTip = { id: tipId, x, y };
 }
 
+/** Close `tipId` if it is showing, without marking it seen, so it shows again next time. */
+export function hideTip(tipId: TipId) {
+  if (_activeTip?.id === tipId) _activeTip = null;
+}
+
 /** Dismiss the current tip */
 export function dismissTip() {
   if (_activeTip) {

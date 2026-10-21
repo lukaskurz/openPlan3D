@@ -9,12 +9,12 @@ import { get, writable } from 'svelte/store';
 import { currentProject, previewActive, beginPreview, commitPreview, discardPreview } from '$lib/stores/project';
 import { previewHighlight } from '$lib/stores/planView';
 import { ASSISTANT_CONFIG, READ_ONLY_TOOLS } from './definitions';
-import { forgetDrawings, isDrawingTool, rememberDrawing, runDrawingTool } from './drawings';
-import { runPlanTool } from './planTools';
+import { forgetDrawings, rememberDrawing } from './drawings';
+import { runAssistantTool } from './tools';
 import { assistantApiKey } from './apiKey';
 import { streamTurn, AssistantRequestError, type ApiMessage, type ContentBlock, type ImageSource, type ToolResultPart } from './stream';
 
-export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing';
+export type ActivityKind = 'thinking' | 'reading' | 'catalog' | 'rooms' | 'walls' | 'openings' | 'furniture' | 'adjusting' | 'removing' | 'floors' | 'checking' | 'building' | 'drawing' | 'pipes' | 'wiring' | 'looking3d' | 'guide' | 'brief';
 
 export interface ChangeCounts { rooms: number; walls: number; openings: number; furniture: number; floors: number; changed: number; removed: number }
 
@@ -77,6 +77,7 @@ const ACTIVITY: Record<string, ActivityKind> = {
   place_furniture: 'furniture', update_elements: 'adjusting', delete_elements: 'removing',
   switch_floor: 'floors', add_floor: 'floors', check_plan: 'checking', show_tool: 'checking', make_tool: 'building',
   view_drawing: 'drawing', trace_drawing: 'drawing', view_plan: 'checking',
+  add_pipes: 'pipes', link_switch: 'wiring', view_3d: 'looking3d', read_skill: 'guide', update_brief: 'brief',
 };
 
 let api: ApiMessage[] = [];
@@ -376,7 +377,7 @@ function recordChanges(name: string, outcome: { changed?: string[]; removed?: st
   else if (name === 'add_openings') counts.openings += changed.length;
   else if (name === 'place_furniture') counts.furniture += changed.length;
   else if (name === 'add_floor') counts.floors += outcome.isError ? 0 : 1;
-  else if (name === 'update_elements') counts.changed += changed.filter(id => !proposal!.changed.has(id)).length;
+  else if (name === 'update_elements' || name === 'add_pipes' || name === 'link_switch' || name === 'update_brief') counts.changed += changed.filter(id => !proposal!.changed.has(id)).length;
   else if (name === 'delete_elements') counts.removed += (outcome.removed ?? []).filter(id => !proposal!.changed.has(id)).length;
   for (const id of changed) proposal.changed.add(id);
   for (const id of outcome.removed ?? []) { proposal.removed.add(id); proposal.changed.delete(id); }
@@ -473,7 +474,7 @@ async function runLoop() {
           beginPreview();
           proposal ??= { counts: emptyCounts(), changed: new Set(), removed: new Set(), itemId: null };
         }
-        const outcome = isDrawingTool(use.name) ? await runDrawingTool(use.name, use.input) : runPlanTool(use.name, use.input);
+        const outcome = await runAssistantTool(use.name, use.input);
         if (!READ_ONLY_TOOLS.has(use.name)) recordChanges(use.name, outcome);
         if (outcome.madeTool) madeTools.push(outcome.madeTool);
         const content = outcome.image ? [{ type: 'text' as const, text: outcome.text }, { type: 'image' as const, source: { type: 'base64' as const, media_type: outcome.image.mediaType, data: outcome.image.data } }] : outcome.text;
