@@ -4,7 +4,7 @@
  * project directly, so they keep working when the tools change.
  */
 import { get } from 'svelte/store';
-import type { Door, Floor, FurnitureItem, Point, Project, Wall, Window as Win } from '$lib/models/types';
+import type { Door, FixtureLight, Floor, FurnitureItem, Pipe, Point, Project, Wall, Window as Win } from '$lib/models/types';
 import { createDefaultProject, currentProject, loadProject } from '$lib/stores/project';
 import { runPlanTool } from '$lib/assistant/planTools';
 import { runCheck } from '$lib/assistant/checks';
@@ -15,6 +15,7 @@ import { getCatalogItem, getFurnitureSize, furnitureTrade } from '$lib/utils/fur
 import { effectiveElevation, furnitureMount } from '$lib/utils/mounting';
 import { createCeilingResolver } from '$lib/utils/ceilingHeights';
 import { wallLength } from '$lib/utils/wallEditing';
+import { resolveFixtureLight, type ResolvedFixtureLight } from '$lib/utils/fixtureLights';
 
 export interface CheckResult { name: string; pass: boolean; detail: string }
 
@@ -66,6 +67,21 @@ export type Placement = [catalogId: string, x: number, y: number, rotation?: num
 export function place(...items: Placement[]): string[] {
   const outcome = tool('place_furniture', { items: items.map(([catalogId, x, y, rotation = 0, size]) => ({ catalogId, x, y, rotation, ...size })) });
   return outcome.changed ?? [];
+}
+
+/** Place one item with any place_furniture fields (drop, elevation, …); returns its id. */
+export function placeItem(item: Record<string, unknown>): string {
+  const id = tool('place_furniture', { items: [item] }).changed?.[0];
+  if (!id) throw new Error(`setup place_furniture placed nothing for ${JSON.stringify(item)}`);
+  return id;
+}
+
+/** Set a fixture's photometry on the starting plan directly, without going through the tools. */
+export function setLight(id: string, light: FixtureLight) {
+  currentProject.update(p => p && {
+    ...p,
+    floors: p.floors.map(f => ({ ...f, furniture: f.furniture.map(i => i.id === id ? { ...i, light: { ...i.light, ...light } } : i) })),
+  });
 }
 
 /** Living 5.0 × 4.0 m and bedroom 4.0 × 4.0 m side by side (wall centres), a door between them and one in from outside. */
@@ -127,6 +143,16 @@ export function diningSet() {
     ['dining_chair', 370, 55], ['dining_chair', 430, 55],
     ['dining_chair', 370, 185, 180], ['dining_chair', 430, 185, 180],
   );
+}
+
+/** Sofa against the apartment's living-room wall to the bedroom, facing a TV stand on the top wall left of the window, coffee table between. */
+export function livingSet() {
+  place(['sofa', 200, 395, 180], ['coffee_table', 200, 260], ['tv_stand', 120, 30]);
+}
+
+/** Shower in the bathroom's top-right corner, basin on the top wall, WC against the right wall below the window. */
+export function bathroomFixtures() {
+  place(['shower', 945, 355], ['sink_b', 830, 330], ['toilet', 955, 505, 90]);
 }
 
 // ── Reading the final plan ───────────────────────────────────────────
@@ -367,3 +393,26 @@ export function numbersWithUnit(text: string, unit: RegExp): number[] {
 }
 
 export const fmtList = (list: string[], max = 4) => list.length ? `${list.slice(0, max).join('; ')}${list.length > max ? `; … ${list.length - max} more` : ''}` : 'none';
+
+/** A light fixture's photometry as the 3D view uses it; null for plan symbols and anything without photometry. */
+export function lightOf(item: FurnitureItem): ResolvedFixtureLight | null {
+  return resolveFixtureLight(item.catalogId, item.light);
+}
+
+/** Pipes whose run starts or ends within `tol` cm of the item's footprint. */
+export function pipesTo(floor: Floor, item: FurnitureItem, tol = 40): Pipe[] {
+  const footprint = furnitureFootprint(item);
+  const near = (p: Point) => insidePolygon(p, footprint) || polygonGap([p, p], footprint).distance <= tol;
+  return (floor.pipes ?? []).filter(pipe => pipe.points.length && (near(pipe.points[0]) || near(pipe.points[pipe.points.length - 1])));
+}
+
+/** The door between two rooms: its centre lies on both outlines. */
+export function doorBetween(floor: Floor, a: RoomShape, b: RoomShape): Door | undefined {
+  return floor.doors.find(d => { const c = openingCentre(floor, d); return !!c && nearPolygon(c, a.polygon, 2) && nearPolygon(c, b.polygon, 2); });
+}
+
+/** Walls lying on the segment a–b (within 2 cm), as a comparable signature. */
+export function wallsOn(floor: Floor, a: Point, b: Point): string {
+  const on = floor.walls.filter(w => segmentDistance(w.start, a, b) < 2 && segmentDistance(w.end, a, b) < 2);
+  return JSON.stringify(on.map(w => [r0(w.start.x), r0(w.start.y), r0(w.end.x), r0(w.end.y), w.thickness, w.height]).sort());
+}

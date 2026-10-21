@@ -1,8 +1,9 @@
 # Assistant test set
 
-October 20, 2026. A runnable evaluation of the in-app Assistant
+October 20, 2026; 8 cases for trades, light, the 3D view and the brief added
+October 21. A runnable evaluation of the in-app Assistant
 ([assistant-chat.md](assistant-chat.md)). Each case starts from a known plan,
-sends one message through the real conversation loop
+sends one message (two for `brief-remember`) through the real conversation loop
 ([`session.ts`](../src/lib/assistant/session.ts) `send`) with the own-key path
 (the Messages API called directly, as the browser does with a person's key),
 applies the proposal if there is one, and scores the result twice:
@@ -18,7 +19,7 @@ API) and `compare.mjs`.
 
 ## What it covers
 
-16 cases, English and German, on three starting plans: an empty plan, a
+24 cases, English and German, on three starting plans: an empty plan, a
 two-room flat (living room 5.0 × 4.0 m, bedroom 4.0 × 4.0 m) and a 75 m²
 apartment (living room, kitchen, hall with the entrance, bathroom, storage,
 bedroom; every room opens off the hall).
@@ -41,6 +42,23 @@ bedroom; every room opens off the hall).
 | `ambiguous-nicer` | "Make it nicer." |
 | `make-walkway-tool` | A reusable walkway check with an 80 cm minimum |
 | `decline-taxes-de` | Tax return help, which it should decline politely |
+| `light-dining-pendant` | Two pendants 65 cm above the table, warm white, dimmed to half |
+| `light-living-layers` | General, accent and reading light in the living room, warm |
+| `spots-kitchen-worktop` | Recessed spots along the worktop at 4000 K with a 36° beam |
+| `electrical-switches` | Switches inside the living-room and bedroom doors, linked to the ceiling lights; outlets either side of the bed |
+| `plumbing-bathroom` | Cold, hot and waste pipes to shower, basin and WC from a riser |
+| `brief-remember` | Two messages: a decision goes into the brief, then a kitchen redo honours it |
+| `view3d-check` | Is the pendant (40 cm above the table) too low? Look and fix it |
+| `skill-bathroom-zones-de` | Bathroom lights and a hair-dryer outlet; read the guide, respect the zones |
+
+The last eight start from the apartment with a few items placed for them
+(`livingSet`, `bathroomFixtures`, ceiling lights and a bed, a pendant hung
+too low). On October 21 the trade cases also gained checks on the new fields:
+`light-kitchen-dining-de` checks that pendants are warm white and that spots
+are light fixtures rather than plan symbols, `electrical-kitchen` that outlets
+are hosted by a wall, and `bathroom-de` that a light hangs over the basin at
+150 cm or higher. Totals from runs before that date are not comparable for
+those three cases.
 
 Checks read the final project directly, not the tools' text, so they keep
 working as the tools change. Items are found by catalog name and category, not
@@ -54,9 +72,30 @@ TV, every room reachable from the entrance, room areas inside the walls within
 above the table top, outlets wall-mounted at sensible heights (at least two at
 95–125 cm over the worktop), a switch at 85–115 cm by the kitchen door, no
 outlets within 60 cm of the shower, and, for questions, a plan that did not
-change. Some checks fail with today's tools on purpose (the assistant can't
-set a drop or a mounting height yet); the set is there to measure those
-improvements.
+change.
+
+The newer cases read the trade data the same way. Light checks use the
+fixture's photometry as the 3D view resolves it (`resolveFixtureLight`: the
+item's `light` overrides over the catalog's defaults), so a plan symbol such as
+`sym_ceiling_light` counts as a light without photometry and fails them:
+colour temperature, dimming (0.35–0.65 for "about half"), beam angle, and
+total lumens times dimming per m² of the room (100–300 lm/m² for the living
+room). Switches must be inside the room within 60 cm of the door edge, on the
+wall at 95–115 cm, with a switch link (`Floor.switchLinks`) to that room's
+ceiling light. Pipes count for a fixture when a run of the right kind starts or
+ends within 40 cm of it; waste pipes must be in the floor or wall and at least
+40 mm. The brief is read from `Project.brief`. Two checks read the tool calls
+instead of the plan: `view3d-check` wants a `view_3d` call and
+`skill-bathroom-zones-de` a `read_skill` call for the bathroom or electrical
+guide.
+
+[`tests/assistant-eval-cases.test.ts`](../tests/assistant-eval-cases.test.ts)
+checks the checks without a model, as part of `npm test`: for the eight new
+cases and cases 8–10, the starting plan must fail and a hand-made good answer
+must pass every check, and six answers with one deliberate mistake each (no
+switch link, an outlet in zone 2, default colour temperature, pendants 40 cm
+above the table, a WC without pipes, an island) must fail the check meant for
+it.
 
 ## Running it
 
@@ -82,8 +121,10 @@ with a message, and the run passes.
 
 Cases run one at a time in one worker (the session is a module singleton),
 each with up to 15 minutes. Each case resets the plan, starts a new
-conversation, builds its starting plan, sends the prompt, applies a pending
-proposal, runs the checks and the grader. The runner records the final reply,
+conversation, builds its starting plan, sends the prompt (and any follow-up
+messages, applying a pending proposal before each, as the person would),
+applies a pending proposal, runs the checks and the grader. The grader sees
+all the messages, numbered. The runner records the final reply,
 errors shown in the chat, every tool call with its input and result (the
 assistant's and the reviewer's), the number of model calls, wall time, token
 usage and cost, by wrapping `fetch` and reading a copy of each event stream.
@@ -124,7 +165,14 @@ million tokens: Opus 5.5 $4 / $20, Sonnet 5.5 $2 / $10, Haiku 5.5 $0.10 /
 $0.50, cache reads and 5-minute cache writes as listed there). A model
 missing from the table costs $0 and is listed under `unpricedModels`.
 
-An estimate for one pass over the 16 cases, not a measurement: the
+Measured on October 20 with the Sonnet assistant, one run each of
+`furnish-bedroom`, `furnish-living-de` and `rearrange-living`: $0.08–0.10 per
+case with the reviewer off, $0.13–0.21 with it on (the reviewer alone
+$0.04–0.09 per review), grader included. The assistant now runs on Opus 5.5 at
+`xhigh`, so expect more per case; measure again before relying on the figures
+below.
+
+An earlier estimate for one pass over the first 16 cases, not a measurement: the
 assistant's fixed prompt and tools are about 3,500 tokens (cached after the
 first call), a plan readout of the apartment about 1,000. The assistant
 (Sonnet 5.5) costs roughly $0.5–1 (from the September figures in
@@ -156,6 +204,15 @@ EVAL_LABEL=no-review EVAL_REVIEW=off npm run eval:assistant
 
 ## Limitations
 
+- **Browser-only parts.** Two tools need a browser and don't work in this
+  run. `view_3d` waits for the editor's 3D viewer, which never mounts in
+  Node, and after 15 seconds answers "The 3D view did not open in time, so
+  there is no picture" as a tool error; each call costs those 15 seconds.
+  `view3d-check` still counts the call (the check is "it looked"), but the
+  model gets no picture and has to judge from the heights in `get_plan`, so
+  the case measures the decision and the fix, not reading a 3D picture. To
+  test the pictures themselves, try the case in the browser panel. The same
+  goes for reviews: the reviewer's `view_plan` and `view_3d` both fail here.
 - **Node, not a browser.** `view_plan` draws on a canvas
   (`document.createElement`), which doesn't exist in Node: the tool returns
   "error: the tool failed (document is not defined)" to the model, as a tool
@@ -170,7 +227,8 @@ EVAL_LABEL=no-review EVAL_REVIEW=off npm run eval:assistant
   same geometry as `check_plan`, heights use the mounting rules in
   `utils/mounting.ts`. A clever answer the checks don't foresee can fail a
   check; the grader is told it may say so.
-- Every case is one message. Follow-ups, undo, discarded proposals and long
-  conversations are not exercised.
+- Only `brief-remember` has a second message, and it always applies the
+  first proposal. Undo, discarded proposals and long conversations are not
+  exercised.
 - Calls go straight to Anthropic with the key, so the server's limits and its
   logging are not involved. A 429 shows as an error in the case's chat errors.
