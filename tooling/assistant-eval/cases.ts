@@ -4,13 +4,15 @@
  * Some checks fail on today's tools on purpose (mounting heights and drops
  * can't be set yet); the set measures the improvements as they land.
  */
-import type { Floor, FurnitureItem, Point, Project } from '$lib/models/types';
+import type { Floor, FurnitureItem, PipeKind, Point, Project } from '$lib/models/types';
 import type { PlanTool } from '$lib/assistant/checks';
 import { furnitureMount } from '$lib/utils/mounting';
+import { createCeilingResolver } from '$lib/utils/ceilingHeights';
+import { getFurnitureSize } from '$lib/utils/furnitureCatalog';
 import { furnitureFootprint, insidePolygon, nearPolygon, polygonGap } from '$lib/assistant/geometry';
 import type { ToolCallRecord } from './recorder';
 import {
-  KIND, apartment, backAgainstWall, blockedDoors, bottomOf, check, diningSet, faces, fmtList, fresh, gapBetween, inRoom, itemsIn, itemsOf,
+  KIND, activeFloorOf, apartment, backAgainstWall, bathroomFixtures, doorBetween, lightOf, livingSet, pipesTo, placeItem, project, setLight, wallsOn, blockedDoors, bottomOf, check, diningSet, faces, fmtList, fresh, gapBetween, inRoom, itemsIn, itemsOf,
   kitchenRun, narrowWalkways, numbersWithUnit, openingCentre, overlaps, place, planSignature, reachability, roomAtPoint, roomNamed, rooms,
   structureSignature, tallInFrontOfWindows, throughWalls, topOf, twoRoomFlat, wallFaceDistance, type CheckResult, type RoomShape,
 } from './helpers';
@@ -35,6 +37,8 @@ export interface EvalCase {
   id: string;
   summary: string;
   prompt: string;
+  /** Later messages in the same conversation; a pending proposal is applied before each. */
+  followUps?: string[];
   setup: () => void;
   checks: Check[];
   rubric: string[];
@@ -93,6 +97,55 @@ const kitchen = (f: Floor) => roomNamed(f, /kitchen|küche/i);
 const bedroom = (f: Floor) => roomNamed(f, /bed|schlaf/i);
 const bathroom = (f: Floor) => roomNamed(f, /bath|bad/i);
 const hall = (f: Floor) => roomNamed(f, /hall|flur|diele/i);
+
+/** Every item is a light fixture with photometry, and each passes `test`. */
+function lightCheck(name: string, items: FurnitureItem[], test: (l: NonNullable<ReturnType<typeof lightOf>>) => boolean, show: (l: NonNullable<ReturnType<typeof lightOf>>) => string): CheckResult {
+  const lights = items.map(i => ({ i, l: lightOf(i) }));
+  const pass = lights.length > 0 && lights.every(({ l }) => !!l && test(l));
+  return check(name, pass, lights.length ? lights.map(({ i, l }) => l ? show(l) : `${i.catalogId} has no photometry`).join(', ') : 'none');
+}
+
+/** A light over the basin (within 40 cm of it) at mirror height or above. */
+function mirrorLight(ctx: EvalContext, basin: FurnitureItem | undefined, near: FurnitureItem[]): CheckResult[] {
+  if (!basin) return [check('a light over the basin', false, 'no basin')];
+  const footprint = furnitureFootprint(basin);
+  const over = near.filter(i => KIND.light(i) && pointGap(i.position, footprint) <= 40 && bottomOf(ctx.after, ctx.floor, i) >= 150);
+  return [
+    check('a light over the basin, 150 cm up or higher', over.length > 0, `${over.length} found`),
+    lightCheck('it is a light fixture with photometry', over, () => true, l => `${l.lumens} lm`),
+  ];
+}
+
+/** Electrical lights and lamps (floor and table lamps are furnishing), anything with photometry except a fireplace. */
+const isLight = (i: FurnitureItem) => KIND.light(i) || (!!lightOf(i) && i.catalogId !== 'fireplace');
+const centreOf = (poly: Point[]) => ({ x: poly.reduce((s, p) => s + p.x, 0) / poly.length, y: poly.reduce((s, p) => s + p.y, 0) / poly.length });
+const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
+const isNew = (ctx: EvalContext, i: FurnitureItem) => !ctx.beforeFloor.furniture.some(b => b.id === i.id);
+
+/** Furniture other than `except` is still there, unmoved. */
+function othersUntouched(ctx: EvalContext, except: (i: FurnitureItem) => boolean): CheckResult {
+  const now = new Map(ctx.floor.furniture.map(i => [i.id, key(i)]));
+  const moved = ctx.beforeFloor.furniture.filter(i => !except(i) && now.get(i.id) !== key(i));
+  return check('other furniture untouched', !moved.length, fmtList(moved.map(i => `${i.catalogId} ${i.id}`)));
+}
+
+/** The pendant placed over the dining table hangs `gap` cm above the table top. */
+function lowPendant(gap: number) {
+  apartment(); diningSet();
+  const p = project(), floor = activeFloorOf(p);
+  const table = floor.furniture.find(KIND.diningTable)!;
+  const ceiling = createCeilingResolver(p, floor)(table.position);
+  const height = getFurnitureSize({ catalogId: 'pendant_light' } as FurnitureItem).height;
+  placeItem({ catalogId: 'pendant_light', x: table.position.x, y: table.position.y, drop: Math.round(ceiling - (topOf(p, floor, table) + gap) - height) });
+}
+
+/** Cold, hot and waste pipes each ending at a fixture. */
+function plumbed(ctx: EvalContext, label: string, item: FurnitureItem | undefined, kinds: PipeKind[]): CheckResult {
+  if (!item) return check(`${label} has ${kinds.join(', ')} pipes`, false, `no ${label}`);
+  const have = new Set(pipesTo(ctx.floor, item).map(p => p.kind));
+  const missing = kinds.filter(k => !have.has(k));
+  return check(`${label} has ${kinds.join(', ')} pipes`, !missing.length, missing.length ? `missing ${missing.join(', ')}` : '');
+}
 
 // ── The cases ────────────────────────────────────────────────────────
 
@@ -308,6 +361,7 @@ export const CASES: EvalCase[] = [
           check('a pendant over the dining table', pendants.length > 0, `${pendants.length} over the table`),
           check('pendants are ceiling-mounted', pendants.length > 0 && pendants.every(p => furnitureMount(p) === 'ceiling'), pendants.map(p => furnitureMount(p)).join(', ')),
           check('pendants hang 55–80 cm above the table top', heights.length > 0 && heights.every(h => h >= 55 && h <= 80), heights.length ? `${heights.join(', ')} cm above the top` : 'no pendants'),
+          lightCheck('pendants are warm white (≤ 3300 K)', pendants, l => l.colorTemperature <= 3300, l => `${l.colorTemperature} K`),
         ];
       },
       ctx => {
@@ -318,6 +372,7 @@ export const CASES: EvalCase[] = [
         return [
           check('at least two spots in the kitchen, ceiling-mounted', spots.length >= 2 && spots.every(s => furnitureMount(s) === 'ceiling'), `${spots.length} spot(s)`),
           check('spots light the worktop (within 80 cm of it)', overWork.length >= 2, `${overWork.length} near the worktop`),
+          lightCheck('spots are light fixtures, not plan symbols', spots, () => true, l => `${l.lumens} lm`),
         ];
       },
       ctx => {
@@ -350,6 +405,7 @@ export const CASES: EvalCase[] = [
           check('at least four outlets in the kitchen', outlets.length >= 4, `${outlets.length} outlet(s)`),
           check('outlets are wall-mounted', outlets.length > 0 && outlets.every(o => furnitureMount(o) === 'wall'), outlets.map(o => furnitureMount(o)).join(', ')),
           check('outlets sit on a wall (within 15 cm of its face)', outlets.length > 0 && outlets.every(o => wallFaceDistance(ctx.floor, o.position) <= 15)),
+          check('outlets are hosted by a wall (wallId)', outlets.length > 0 && outlets.every(o => !!o.wallId && ctx.floor.walls.some(w => w.id === o.wallId)), `${outlets.filter(o => !o.wallId).length} without a host wall`),
           check('at least two outlets above the worktop (95–125 cm)', heights.filter(h => h >= 95 && h <= 125).length >= 2, `heights ${heights.join(', ') || 'none'} cm`),
           check('every outlet at a sensible height', heights.length > 0 && heights.every(sensible), `heights ${heights.join(', ') || 'none'} cm`),
         ];
@@ -406,6 +462,7 @@ export const CASES: EvalCase[] = [
           check('an outlet near the basin (within 120 cm)', !!basin && all.some(o => KIND.outlet(o) && Math.hypot(o.position.x - basin.position.x, o.position.y - basin.position.y) <= 120)),
           check('no outlets or switches within 60 cm of shower or tub (zones 1–2)', !zone2.length, fmtList(zone2.map(i => i.catalogId))),
           check('no wall lights above the shower or tub (zone 1)', !zone1.length, fmtList(zone1.map(i => i.catalogId))),
+          ...mirrorLight(ctx, basin, all),
         ];
       },
       ctx => untouchedOutside(ctx, bathroom),
@@ -586,6 +643,270 @@ export const CASES: EvalCase[] = [
       'Offers what it can do instead (the plan, layout, furnishing), without giving tax advice.',
       'Replies in German, in one to three sentences.',
       'Does not use tools to change the plan.',
+    ],
+  },
+
+  // ── Trades, light, the 3D view and the brief (October 21, 2026) ────
+  {
+    id: 'light-dining-pendant',
+    summary: 'Two pendants over the dining table: height, warm white, dimmed for dinner.',
+    prompt: 'Hang two pendant lights over the dining table, with their bottom about 65 cm above the table top. Warm white, and dim them to about half for dinner.',
+    setup: () => { apartment(); diningSet(); },
+    checks: [
+      ctx => {
+        const table = itemsOf(ctx.floor, KIND.diningTable)[0];
+        if (!table) return check('dining table still there', false);
+        const footprint = furnitureFootprint(table);
+        const pendants = itemsOf(ctx.floor, KIND.pendant).filter(p => pointGap(p.position, footprint) <= 20);
+        const heights = pendants.map(p => Math.round(bottomOf(ctx.after, ctx.floor, p) - topOf(ctx.after, ctx.floor, table)));
+        return [
+          check('two pendants over the table', pendants.length === 2, `${pendants.length} over the table`),
+          check('ceiling-mounted', pendants.length > 0 && pendants.every(p => furnitureMount(p) === 'ceiling'), pendants.map(p => furnitureMount(p)).join(', ')),
+          check('bottoms 60–70 cm above the table top', heights.length > 0 && heights.every(h => h >= 60 && h <= 70), heights.length ? `${heights.join(', ')} cm` : 'none'),
+          lightCheck('warm white (2400–3000 K)', pendants, l => l.colorTemperature >= 2400 && l.colorTemperature <= 3000, l => `${l.colorTemperature} K`),
+          lightCheck('dimmed to about half (dim 0.35–0.65)', pendants, l => l.dim >= 0.35 && l.dim <= 0.65, l => `dim ${l.dim}`),
+        ];
+      },
+      ctx => othersUntouched(ctx, () => false),
+    ],
+    rubric: [
+      'Two pendants spaced evenly along the table, both over it, bottoms about 65 cm above the top.',
+      'Warm white and dimmed to about half, set on the lights themselves rather than only described.',
+      'Nothing else changes.',
+      'Brief reply that says the height and settings.',
+    ],
+  },
+  {
+    id: 'light-living-layers',
+    summary: 'Layered living-room lighting: general, accent and reading light, warm, sensible lumens.',
+    prompt: 'Plan the lighting for the living room in layers: general light, some accent light and a reading light by the sofa. It should feel warm and cosy.',
+    setup: () => { apartment(); livingSet(); },
+    checks: [
+      ctx => {
+        const room = need(living(ctx.floor), 'living room');
+        const lights = ctx.floor.furniture.filter(i => isLight(i) && nearRoom(room, i));
+        const layers = new Set(lights.map(i => furnitureMount(i) === 'floor' ? (/table/.test(i.catalogId) ? 'table' : 'floor') : furnitureMount(i)));
+        const lumens = lights.reduce((sum, i) => sum + (lightOf(i)?.lumens ?? 0) * (lightOf(i)?.dim ?? 0), 0);
+        const perM2 = Math.round(lumens / room.area);
+        const sofa = itemsOf(ctx.floor, KIND.sofa)[0];
+        const reading = sofa && lights.filter(i => furnitureMount(i) !== 'ceiling' && gapBetween(i, sofa) <= 60);
+        return [
+          check('at least three kinds of light (ceiling, wall, floor, table)', layers.size >= 3, [...layers].join(', ') || 'none'),
+          check('100–300 lm per m² in total', perM2 >= 100 && perM2 <= 300, `${perM2} lm/m² over ${room.area.toFixed(1)} m²`),
+          lightCheck('all warm (≤ 3000 K)', lights, l => l.colorTemperature <= 3000, l => `${l.colorTemperature} K`),
+          check('a reading light within 60 cm of the sofa', !!reading?.length, sofa ? `${reading?.length ?? 0} found` : 'no sofa'),
+          ...sound(lights.filter(i => furnitureMount(i) === 'floor'), ctx.floor),
+        ];
+      },
+      ctx => othersUntouched(ctx, () => false),
+    ],
+    rubric: [
+      'Three layers: general (ceiling) light, accent light (wall lights or lamps lighting walls or corners), and a reading light beside the sofa.',
+      'Warm white throughout, with a sensible total brightness for a living room.',
+      'Floor and table lamps stand clear of walkways and do not block the TV view.',
+      'Explains the layers briefly.',
+    ],
+  },
+  {
+    id: 'spots-kitchen-worktop',
+    summary: 'Recessed spots along the worktop: position, spacing, neutral white, narrow beam.',
+    prompt: 'Put recessed spots in the kitchen ceiling along the worktop, so the counter gets good working light. Neutral white around 4000 K, with a beam of about 36°.',
+    setup: () => { apartment(); kitchenRun(); },
+    checks: [
+      ctx => {
+        const room = need(kitchen(ctx.floor), 'kitchen');
+        const spots = itemsOf(ctx.floor, KIND.spot).filter(s => insidePolygon(s.position, room.polygon));
+        const counters = itemsIn(ctx.floor, room, KIND.counter);
+        const overWork = spots.filter(s => counters.some(c => pointGap(s.position, furnitureFootprint(c)) <= 40));
+        const fromWall = overWork.map(s => Math.round(wallFaceDistance(ctx.floor, s.position)));
+        const xs = overWork.map(s => s.position.x).sort((a, b) => a - b);
+        const gaps = xs.slice(1).map((x, i) => Math.round(x - xs[i]));
+        const ceiling = createCeilingResolver(ctx.after, ctx.floor)(centreOf(room.polygon));
+        return [
+          check('at least three spots over the worktop', overWork.length >= 3, `${overWork.length} of ${spots.length} spots`),
+          check('30–90 cm from the wall behind the worktop', fromWall.length > 0 && fromWall.every(d => d >= 30 && d <= 90), `${fromWall.join(', ') || 'none'} cm`),
+          check('spaced at most one ceiling height apart', gaps.length > 0 && gaps.every(g => g >= 30 && g <= ceiling), `gaps ${gaps.join(', ') || 'none'} cm, ceiling ${Math.round(ceiling)} cm`),
+          lightCheck('neutral white (3500–4500 K)', overWork, l => l.colorTemperature >= 3500 && l.colorTemperature <= 4500, l => `${l.colorTemperature} K`),
+          lightCheck('beam about 36° (25–50°)', overWork, l => l.beamAngle !== undefined && l.beamAngle >= 25 && l.beamAngle <= 50, l => `${l.beamAngle ?? 'default'}°`),
+        ];
+      },
+      existingUntouched,
+    ],
+    rubric: [
+      'Spots run along the worktop slightly in front of the cabinets, so the person working does not shade the counter.',
+      'Even spacing that covers the whole worktop, including the ends.',
+      'Colour temperature and beam angle set as asked.',
+      'Nothing else changes; brief reply.',
+    ],
+  },
+  {
+    id: 'electrical-switches',
+    summary: 'Switches inside the living-room and bedroom doors, linked to the ceiling lights; outlets either side of the bed.',
+    prompt: 'Add a light switch inside the door of the living room and of the bedroom, each wired to that room\'s ceiling light, and an outlet on each side of the bed for the nightstands.',
+    setup: () => {
+      apartment();
+      place(['ceiling_light', 275, 225], ['ceiling_light', 275, 600], ['bed_queen', 275, 642, 180]);
+    },
+    checks: [
+      ...(['living', 'bedroom'] as const).map((which): Check => ctx => {
+        const room = need(which === 'living' ? living(ctx.floor) : bedroom(ctx.floor), which);
+        const door = doorBetween(ctx.floor, room, need(hall(ctx.floor), 'hall'));
+        const centre = door && openingCentre(ctx.floor, door);
+        const switches = itemsOf(ctx.floor, KIND.switch).filter(s => centre && insidePolygon(s.position, room.polygon) && dist(s.position, centre) <= door!.width / 2 + 60);
+        const heights = switches.map(s => Math.round(bottomOf(ctx.after, ctx.floor, s)));
+        const lamp = ctx.beforeFloor.furniture.find(i => i.catalogId === 'ceiling_light' && insidePolygon(i.position, room.polygon));
+        const linked = switches.some(s => (ctx.floor.switchLinks ?? []).some(l => l.switchId === s.id && !!lamp && l.targetIds.includes(lamp.id)));
+        return [
+          check(`${which}: a switch inside the door`, switches.length > 0, `${switches.length} within 60 cm of the door edge`),
+          check(`${which}: switch on the wall at 95–115 cm`, switches.length > 0 && switches.every((s, i) => furnitureMount(s) === 'wall' && heights[i] >= 95 && heights[i] <= 115), `${heights.join(', ') || 'none'} cm`),
+          check(`${which}: switch linked to the ceiling light`, linked, `${(ctx.floor.switchLinks ?? []).length} link(s) on the floor`),
+        ];
+      }),
+      ctx => {
+        const bed = itemsOf(ctx.floor, KIND.bed)[0];
+        if (!bed) return check('bed still there', false);
+        const footprint = furnitureFootprint(bed);
+        const outlets = itemsOf(ctx.floor, KIND.outlet).filter(o => pointGap(o.position, footprint) <= 70);
+        // Which side of the bed: along its width, from its centre.
+        const side = (o: FurnitureItem) => Math.sign(Math.round((o.position.x - bed.position.x) * Math.cos(bed.rotation * Math.PI / 180) + (o.position.y - bed.position.y) * Math.sin(bed.rotation * Math.PI / 180)));
+        const sides = new Set(outlets.map(side).filter(s => s !== 0));
+        const heights = outlets.map(o => Math.round(bottomOf(ctx.after, ctx.floor, o)));
+        return [
+          check('an outlet on each side of the bed', sides.size === 2, `${outlets.length} outlet(s) near the bed`),
+          check('bed outlets on the wall, at most 90 cm up', outlets.length > 0 && outlets.every((o, i) => furnitureMount(o) === 'wall' && heights[i] <= 90), `${heights.join(', ') || 'none'} cm`),
+        ];
+      },
+      ctx => othersUntouched(ctx, () => false),
+    ],
+    rubric: [
+      'Switches at about 105 cm on the latch side of each door, inside the room.',
+      'Each switch is linked to its room\'s ceiling light (the link exists in the plan, not only in the reply).',
+      'Outlets on both sides of the bed at nightstand height (about 30 cm, or about 70 cm above a nightstand).',
+      'Nothing else changes; brief reply.',
+    ],
+  },
+  {
+    id: 'plumbing-bathroom',
+    summary: 'Cold, hot and waste pipes to the shower, basin and WC from a riser.',
+    prompt: 'Draw the water pipes for the bathroom: cold and hot water to the shower and the basin, cold water to the WC, and waste pipes from all three, coming from a riser in the corner next to the hall.',
+    setup: () => { apartment(); bathroomFixtures(); },
+    checks: [
+      ctx => {
+        const room = need(bathroom(ctx.floor), 'bathroom');
+        const items = itemsIn(ctx.floor, room);
+        const pipes = ctx.floor.pipes ?? [];
+        const waste = pipes.filter(p => p.kind === 'waste');
+        const stray = pipes.filter(p => p.points.some(pt => !nearPolygon(pt, room.polygon, 30)));
+        return [
+          plumbed(ctx, 'shower', items.find(KIND.showerOrTub), ['cold', 'hot', 'waste']),
+          plumbed(ctx, 'basin', items.find(KIND.basin), ['cold', 'hot', 'waste']),
+          plumbed(ctx, 'WC', items.find(KIND.toilet), ['cold', 'waste']),
+          check('a riser in the bathroom', pipes.some(p => (p.riser || p.points.length === 1) && nearPolygon(p.points[0], room.polygon, 30)), `${pipes.filter(p => p.riser).length} riser(s)`),
+          check('waste pipes in the floor or wall, at least 40 mm', waste.length > 0 && waste.every(p => p.run !== 'ceiling' && p.diameter >= 40), waste.map(p => `${p.run} ${p.diameter} mm`).join(', ') || 'none'),
+          check('pipes stay in the bathroom', !stray.length, `${stray.length} leave it`),
+        ];
+      },
+      ctx => othersUntouched(ctx, () => false),
+    ],
+    rubric: [
+      'Every fixture gets the supplies it needs (shower and basin cold and hot, WC cold) and a waste pipe.',
+      'Runs are short and sensible, from the riser in the corner by the hall, laid in the floor or along the walls.',
+      'Waste pipes are wide enough (about 50 mm; 100 mm for the WC if it says).',
+      'Nothing else changes; brief reply.',
+    ],
+  },
+  {
+    id: 'brief-remember',
+    summary: 'Two messages: a decision goes into the brief, and the next kitchen redo honours it.',
+    prompt: 'Für das ganze Projekt: Wir haben uns gegen eine Kücheninsel entschieden, und die Wand zwischen Küche und Wohnzimmer ist tragend, die bleibt, wie sie ist. Merk dir das bitte.',
+    followUps: ['Plane die Küche neu: mehr Arbeitsfläche und ein kleiner Frühstücksplatz.'],
+    setup: () => { apartment(); kitchenRun(); diningSet(); },
+    checks: [
+      ctx => {
+        const brief = ctx.after.brief ?? '';
+        return [
+          check('the brief notes no island', /insel|island/i.test(brief), brief ? `${brief.length} characters` : 'no brief'),
+          check('the brief notes the load-bearing wall', /tragend|load|wand|wall/i.test(brief)),
+        ];
+      },
+      ctx => check('the wall between kitchen and living room unchanged', wallsOn(ctx.beforeFloor, { x: 550, y: 0 }, { x: 550, y: 300 }) === wallsOn(ctx.floor, { x: 550, y: 0 }, { x: 550, y: 300 })),
+      ctx => {
+        const room = need(kitchen(ctx.floor), 'kitchen');
+        const counters = itemsIn(ctx.floor, room, KIND.counter);
+        const island = counters.filter(c => wallFaceDistance(ctx.floor, c.position) > getFurnitureSize(c).depth / 2 + 30);
+        const added = itemsIn(ctx.floor, room).filter(i => isNew(ctx, i));
+        return [
+          check('no free-standing counter (island) in the kitchen', !island.length, fmtList(island.map(c => c.catalogId))),
+          check('the kitchen was redone (items added)', added.length > 0, `${added.length} new item(s)`),
+          ...sound(itemsIn(ctx.floor, room), ctx.floor),
+        ];
+      },
+    ],
+    rubric: [
+      'After the first message: the decisions are stored in the project brief (both the island and the load-bearing wall), and the reply confirms that briefly.',
+      'After the second message: more worktop and a small breakfast spot, without an island and without touching the wall to the living room.',
+      'The second reply shows it remembered the decisions, without the person repeating them.',
+      'Replies in German.',
+    ],
+  },
+  {
+    id: 'view3d-check',
+    summary: 'A pendant hangs 40 cm above the table; asked whether it is too low, it should look and fix it.',
+    prompt: 'Does the pendant over the dining table hang too low? Have a look and fix it if it does.',
+    setup: () => lowPendant(40),
+    checks: [
+      ctx => check('looked at it in 3D (view_3d)', ctx.toolCalls.some(t => t.agent === 'assistant' && t.name === 'view_3d')),
+      ctx => {
+        const table = itemsOf(ctx.floor, KIND.diningTable)[0];
+        const pendant = itemsOf(ctx.floor, KIND.pendant)[0];
+        if (!table || !pendant) return check('table and pendant still there', false);
+        const gap = Math.round(bottomOf(ctx.after, ctx.floor, pendant) - topOf(ctx.after, ctx.floor, table));
+        return [
+          check('now 55–80 cm above the table top', gap >= 55 && gap <= 80, `${gap} cm`),
+          check('still over the table', pointGap(pendant.position, furnitureFootprint(table)) <= 20),
+        ];
+      },
+      ctx => check('says it was too low', /too low|lower than|40 ?cm|zu (tief|niedrig)/i.test(ctx.reply)),
+      ctx => othersUntouched(ctx, KIND.pendant),
+    ],
+    rubric: [
+      'Says plainly that 40 cm above the table is too low (about 60–70 cm is usual) and raises it by shortening the drop.',
+      'Checks the situation (heights or a 3D view) before answering rather than guessing.',
+      'Changes only the pendant.',
+      'Brief reply.',
+    ],
+  },
+  {
+    id: 'skill-bathroom-zones-de',
+    summary: 'Bathroom lights and a hair-dryer outlet in German; should read the guide and respect the zones.',
+    prompt: 'Plane Licht und Steckdosen fürs Bad: eine Deckenleuchte, eine Leuchte über dem Spiegel am Waschbecken und eine Steckdose für den Föhn. Was muss ich bei den Schutzbereichen beachten?',
+    setup: () => { apartment(); bathroomFixtures(); },
+    checks: [
+      ctx => check('read the bathroom or electrical guide', ctx.toolCalls.some(t => t.agent === 'assistant' && t.name === 'read_skill' && /bathroom|electrical/.test(JSON.stringify(t.input)))),
+      ctx => {
+        const room = need(bathroom(ctx.floor), 'bathroom');
+        const all = ctx.floor.furniture.filter(i => nearRoom(room, i));
+        const wet = all.filter(KIND.showerOrTub).map(furnitureFootprint);
+        const basin = all.find(KIND.basin);
+        const sockets = all.filter(i => KIND.outlet(i) || KIND.switch(i));
+        const zone2 = sockets.filter(s => wet.some(w => pointGap(s.position, w) < 60));
+        const dryer = basin ? sockets.filter(o => KIND.outlet(o) && dist(o.position, basin.position) <= 120) : [];
+        const heights = dryer.map(o => Math.round(bottomOf(ctx.after, ctx.floor, o)));
+        return [
+          check('a ceiling light in the bathroom', all.some(i => KIND.light(i) && furnitureMount(i) === 'ceiling')),
+          ...mirrorLight(ctx, basin, all),
+          check('an outlet by the basin at 100–130 cm', heights.some(h => h >= 100 && h <= 130), `${heights.join(', ') || 'none'} cm`),
+          check('no outlets or switches within 60 cm of the shower (zones 1–2)', !zone2.length, fmtList(zone2.map(i => i.catalogId))),
+        ];
+      },
+      ctx => check('mentions the zones in the reply', /schutzbereich|bereich ?[0-2]|zone/i.test(ctx.reply)),
+      ctx => othersUntouched(ctx, () => false),
+    ],
+    rubric: [
+      'Follows DIN VDE 0100-701 / ÖVE E 8101: no outlet within 60 cm of the shower; the outlet by the basin outside zone 2; lights above the shower only if rated for it.',
+      'Explains the zones briefly and correctly in German (zone 0 inside the shower tray, zone 1 above it, zone 2 the 60 cm around it).',
+      'Mirror light above the mirror at the basin, ceiling light centred.',
+      'Replies in German.',
     ],
   },
 ];

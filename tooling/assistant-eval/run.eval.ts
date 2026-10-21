@@ -199,6 +199,11 @@ async function runCase(c: EvalCase, repeat: number): Promise<CaseResult> {
     vi.stubGlobal('fetch', recorder.fetch);
     const started = Date.now();
     await send(c.prompt);
+    for (const followUp of c.followUps ?? []) {
+      // The person applies what was proposed before writing again.
+      if (get(assistant).items.some(item => item.kind === 'proposal' && item.status === 'pending')) { applyProposal(); result.applied = true; }
+      await send(followUp);
+    }
     await recorder.settle();
     result.seconds = Math.round((Date.now() - started) / 100) / 10;
     vi.stubGlobal('fetch', realFetch);
@@ -225,7 +230,7 @@ async function runCase(c: EvalCase, repeat: number): Promise<CaseResult> {
 
     const notes = [...result.chatErrors.map(e => `The chat showed an error: ${e}`)];
     result.grader = await grade({
-      prompt: c.prompt, planBefore: result.planBefore, planAfter: result.planAfter, reply: result.reply, checks: result.checks,
+      prompt: c.followUps?.length ? [c.prompt, ...c.followUps].map((text, i) => `Message ${i + 1}: ${text}`).join('\n') : c.prompt, planBefore: result.planBefore, planAfter: result.planAfter, reply: result.reply, checks: result.checks,
       rubric: c.rubric, toolLog: recorder.toolCalls.map(toolLine).join('\n'), notes,
     }, KEY, apiFetch);
     result.graderSeconds = Math.round(result.grader.ms / 100) / 10;
