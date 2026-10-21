@@ -7,7 +7,7 @@ import { runPlanTool } from '$lib/assistant/planTools';
 import { applyStreamEvent, keptBlocks, streamTurn, type TurnResult } from '$lib/assistant/stream';
 import { richText } from '$lib/assistant/richText';
 import { handleAssistantChat, parseConversation, resetChatLimits } from '$lib/server/assistantChat';
-import { ASSISTANT_MODEL, ASSISTANT_MODELS, assistantMode } from '$lib/assistant/definitions';
+import { ASSISTANT_MODEL } from '$lib/assistant/definitions';
 import { buildMessagesRequest } from '$lib/assistant/request';
 import { gridStep } from '$lib/assistant/drawings';
 import { assistant, send, applyProposal, discardProposal, newConversation } from '$lib/assistant/session';
@@ -302,9 +302,12 @@ describe('chat endpoint', () => {
     expect(await response.text()).toContain('Hi!');
     expect(sent.model).toBe(ASSISTANT_MODEL);
     expect(sent.stream).toBe(true);
-    expect(sent.thinking).toEqual({ type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+    expect(sent.thinking).toEqual({ type: 'adaptive', display: 'updates', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+    expect(sent.output_config).toEqual({ effort: 'xhigh' });
+    expect(sent.max_tokens).toBe(64000);
     expect(sent.fallbacks).toBe('default');
     expect((fetchImpl.mock.calls[0][1]!.headers as Record<string, string>)['anthropic-beta']).toContain('thinking-binding-controls-2026-08-01');
+    expect((fetchImpl.mock.calls[0][1]!.headers as Record<string, string>)['anthropic-beta']).toContain('thinking-display-updates-2026-08-18');
     expect(sent.system[0].cache_control).toEqual({ type: 'ephemeral' });
     expect(sent.tools.at(-1).cache_control).toEqual({ type: 'ephemeral' });
     expect(sent.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
@@ -323,22 +326,20 @@ describe('chat endpoint', () => {
     expect(() => parseConversation(turn([{ type: 'document', source: {} }]))).toThrow();
   });
 
-  it('runs a turn that starts with a photo or PDF on the build model', () => {
+  it('keeps one model and effort for drawings and plain messages, and sends thinking back unchanged', () => {
     const pdf = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: 'JVBERi0xLjQ=' } };
     const turn = [
       { role: 'user' as const, content: [pdf, { type: 'text', text: 'Draw this plan' }] },
       { role: 'assistant' as const, content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'tool_use', id: 't', name: 'get_plan', input: {} }] },
       { role: 'user' as const, content: [{ type: 'tool_result', tool_use_id: 't', content: 'Project' }] },
     ];
-    expect(assistantMode(turn)).toBe('build');
     const sent = buildMessagesRequest(turn);
-    expect(sent.model).toBe(ASSISTANT_MODELS.build.model);
-    expect(sent.output_config).toEqual({ effort: 'high' });
+    expect(sent.model).toBe(ASSISTANT_MODEL);
+    expect(sent.output_config).toEqual({ effort: 'xhigh' });
     expect(sent.messages[1].content[0]).toEqual({ type: 'thinking', thinking: '', signature: 's' });
-    // The next plain message goes back to the chat model.
     const next = [...turn, { role: 'assistant' as const, content: [{ type: 'text', text: 'Done.' }] }, { role: 'user' as const, content: [{ type: 'text', text: 'Thanks' }] }];
-    expect(assistantMode(next)).toBe('chat');
     expect(buildMessagesRequest(next).model).toBe(ASSISTANT_MODEL);
+    expect(buildMessagesRequest(next).output_config).toEqual({ effort: 'xhigh' });
     expect(parseConversation({ messages: turn })[1].content[0]).toEqual({ type: 'thinking', thinking: '', signature: 's' });
   });
 

@@ -2036,6 +2036,8 @@ export const pt = {
   "chrome.assistant.key.remove": "Remover chave",
   "chrome.assistant.key.invalid": "Isto não parece uma chave de API da Anthropic.",
   "chrome.assistant.key.active": "A sua chave",
+  "chrome.assistant.key.needed": "Aqui o Assistente funciona com a sua própria chave de API da Anthropic. A chave fica neste navegador, o Assistente fala diretamente com a Anthropic e o uso é cobrado a essa chave.",
+  "chrome.assistant.key.add": "Adicionar chave de API",
   "chrome.assistant.attach": "Anexar uma foto",
   "chrome.assistant.removePhoto": "Remover foto",
   "chrome.assistant.photoFailed": "Não foi possível ler esse ficheiro. Funcionam fotos e um PDF até 3 MB.",

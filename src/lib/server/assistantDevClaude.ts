@@ -16,7 +16,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { ASSISTANT_MODELS, ASSISTANT_SYSTEM_PROMPT, ASSISTANT_TOOLS, assistantMode, type AssistantMode } from '$lib/assistant/definitions';
+import { ASSISTANT_CONFIG, ASSISTANT_SYSTEM_PROMPT, ASSISTANT_TOOLS } from '$lib/assistant/definitions';
 import { ChatError, CHAT_MAX_BYTES, parseConversation } from './assistantChat';
 
 const TOOL_PREFIX = 'mcp__plan__';
@@ -30,7 +30,6 @@ interface Session {
   id: string;
   proc: ChildProcessWithoutNullStreams;
   alive: boolean;
-  mode: AssistantMode;
   /** Events not yet delivered to a browser request. */
   queue: string[];
   /** The open response for the current model call, if any. */
@@ -145,7 +144,7 @@ function onOutput(session: Session, message: any) {
     return;
   }
   if (message.type === 'result') {
-    console.log(JSON.stringify({ event: 'assistant_chat_dev', model: ASSISTANT_MODELS[session.mode].model, turns: message.num_turns, apiEquivalentUsd: message.total_cost_usd }));
+    console.log(JSON.stringify({ event: 'assistant_chat_dev', model: ASSISTANT_CONFIG.model, turns: message.num_turns, apiEquivalentUsd: message.total_cost_usd }));
     if (message.is_error || message.subtype !== 'success') {
       emit(session, { type: 'error', error: { message: String(message.result ?? message.subtype ?? 'claude -p failed') } });
       finishCall(session);
@@ -153,7 +152,7 @@ function onOutput(session: Session, message: any) {
   }
 }
 
-async function startSession(id: string, mode: AssistantMode): Promise<Session> {
+async function startSession(id: string): Promise<Session> {
   const url = await startBridge();
   workdir ??= mkdtempSync(path.join(tmpdir(), 'openplan3d-assistant-'));
   const mcp = { mcpServers: { plan: {
@@ -166,13 +165,13 @@ async function startSession(id: string, mode: AssistantMode): Promise<Session> {
   delete env.ANTHROPIC_API_KEY;
   const proc = spawn(process.env.ASSISTANT_DEV_CLAUDE_BIN || 'claude', [
     '-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
-    '--model', ASSISTANT_MODELS[mode].model, ...(ASSISTANT_MODELS[mode].effort ? ['--effort', ASSISTANT_MODELS[mode].effort!] : []),
+    '--model', ASSISTANT_CONFIG.model, '--effort', ASSISTANT_CONFIG.effort,
     '--system-prompt', ASSISTANT_SYSTEM_PROMPT,
     '--tools', '', '--mcp-config', JSON.stringify(mcp), '--strict-mcp-config', '--allowedTools', 'mcp__plan',
     '--setting-sources', '', '--no-session-persistence',
   ], { cwd: workdir, env, stdio: ['pipe', 'pipe', 'pipe'] });
   const session: Session = {
-    id, proc, alive: true, mode, queue: [], listener: null, expected: [], results: new Map(), waiting: new Map(),
+    id, proc, alive: true, queue: [], listener: null, expected: [], results: new Map(), waiting: new Map(),
     blocks: new Map(), stopReason: null, lastUsed: Date.now(),
   };
   let buffer = '', stderr = '';
@@ -253,12 +252,9 @@ export async function handleDevChat(request: Request): Promise<Response> {
     } else {
       // A new message. A process still waiting on tools belongs to a stopped turn: start over.
       if (session && (session.waiting.size || session.expected.length || session.listener)) { endSession(session); session = undefined; }
-      // A photo or PDF moves the conversation to the build model; it then stays there, so the process keeps its context.
-      const mode = assistantMode(messages);
-      if (session?.alive && mode === 'build' && session.mode !== 'build') { endSession(session); session = undefined; }
       session?.queue.splice(0);
       const fresh = !session?.alive;
-      if (fresh) session = await startSession(id, mode);
+      if (fresh) session = await startSession(id);
       const text = last.content.filter(block => block.type === 'text').map(block => String(block.text)).join('\n\n');
       const images = last.content.filter(block => block.type === 'image' || block.type === 'document');
       const content = [...images, { type: 'text', text: (fresh ? catchUp(messages) : '') + text }];

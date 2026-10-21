@@ -10,7 +10,7 @@
   import { sketching, sketchAttachment, startSketch, clearSketch } from '$lib/assistant/sketch';
   import { richText } from '$lib/assistant/richText';
   import { prepareImage, preparePdf, PDF_MAX_BYTES } from '$lib/assistant/images';
-  import { assistantApiKey, plausibleKey } from '$lib/assistant/apiKey';
+  import { assistantApiKey, assistantServer, checkAssistantServer, plausibleKey } from '$lib/assistant/apiKey';
   import Icon from './Icon.svelte';
   import AssistantToolCard from './AssistantToolCard.svelte';
 
@@ -62,6 +62,9 @@
   $effect(() => {
     if (!$sketching && hidForSketch) { hidForSketch = false; assistantOpen.set(true); }
   });
+
+  // Static hosting has no server to run the Assistant, so it needs the person's own key first.
+  let needsKey = $derived(!$assistantApiKey && $assistantServer === false);
 
   let rooms = $derived($detectedRoomsStore.length);
   let alternative = $derived(($currentProject?.alternatives ?? []).find(alt => alt.id === $currentProject?.activeAlternativeId)?.name);
@@ -127,6 +130,7 @@
     if (visible) {
       // Side by side on wide screens: Elements on the left, the Assistant on the right.
       if (window.innerWidth <= 1000) elementsListOpen.set(false);
+      void checkAssistantServer();
       tick().then(() => { if (window.matchMedia('(pointer: fine)').matches) input?.focus(); });
     }
   });
@@ -299,56 +303,69 @@
     {/each}
     {#if $assistant.activity}
       <div class="flex items-center gap-2 text-sm" style="color:var(--color-text-muted)" data-chat-activity>
-        <span class="op-typing" aria-hidden="true"><i></i><i></i><i></i></span>
-        {$t(`chrome.assistant.activity.${$assistant.activity}`)}
+        <span class="op-typing shrink-0" aria-hidden="true"><i></i><i></i><i></i></span>
+        {#if $assistant.note}
+          <span class="min-w-0 line-clamp-2" data-chat-note>{$assistant.note}</span>
+        {:else}
+          {$t(`chrome.assistant.activity.${$assistant.activity}`)}
+        {/if}
       </div>
     {/if}
   </div>
 
-  <div class="flex flex-col gap-2.5 p-3 shrink-0" style="border-top:1px solid var(--color-border-subtle)">
-    {#if !$assistant.busy}
-      <div class="op-chips flex flex-wrap gap-2">
-        {#each suggestions as key}
-          <button class="op-chip" onclick={() => submit($t(key))}>{$t(key)}</button>
-        {/each}
+  {#if needsKey && !$assistant.busy}
+    <div class="flex flex-col gap-2.5 p-4 shrink-0" style="border-top:1px solid var(--color-border-subtle)" data-assistant-needs-key>
+      <p class="text-sm leading-snug" style="color:var(--color-text-muted)">{$t('chrome.assistant.key.needed')}</p>
+      <div class="flex gap-2 flex-wrap">
+        <button class="op-btn is-primary" aria-expanded={keyOpen} onclick={() => keyOpen ? keyOpen = false : openKey()}>{$t('chrome.assistant.key.add')}</button>
       </div>
-    {/if}
-    {#if outgoing.length || photoError}
-      <div class="flex gap-2 items-center flex-wrap" data-attachments>
-        {#each outgoing as attachment, i}
-          <div class="relative">
-            {#if attachment.thumb}
-              <img src={attachment.thumb} alt="" class="w-14 h-14 object-cover rounded-lg" style="border:1px solid var(--color-border)" />
-            {:else}
-              <div class="h-14 max-w-[9rem] px-2.5 rounded-lg flex flex-col justify-center text-xs" style="border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text)" data-pdf-chip><span class="font-semibold">PDF</span><span class="truncate">{attachment.name}</span></div>
-            {/if}
-            <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t(attachment.sketch ? 'chrome.assistant.sketch.remove' : 'chrome.assistant.removePhoto')} onclick={() => attachment.sketch ? clearSketch() : attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
-          </div>
-        {/each}
-        {#if photoError}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.photoFailed')}</span>{/if}
-      </div>
-    {/if}
-    <div class="flex items-end gap-2">
-      <input bind:this={fileInput} type="file" accept="image/*,application/pdf" multiple class="hidden" onchange={(e) => { const el = e.currentTarget; void addPhotos([...(el.files ?? [])]); el.value = ''; }} />
-      <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || outgoing.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
-      <button class="op-attach" aria-label={$t('chrome.assistant.sketch.start')} title={$t('chrome.assistant.sketch.start')} aria-pressed={$sketching} disabled={$assistant.busy || (outgoing.length >= 3 && !$sketchAttachment)} onclick={toggleSketch} data-sketch-button><Icon name="pencil" size={19} /></button>
-      <textarea
-        bind:this={input}
-        bind:value={draft}
-        oninput={resize}
-        onkeydown={onKeydown}
-        onpaste={onPaste}
-        rows="1"
-        maxlength="4000"
-        class="op-chat-input flex-1 min-w-0"
-        placeholder={$t('chrome.assistant.placeholder')}
-        aria-label={$t('chrome.assistant.placeholder')}
-      ></textarea>
-      {#if $assistant.busy}
-        <button class="op-send" aria-label={$t('chrome.assistant.stop')} title={$t('chrome.assistant.stop')} onclick={stop}><Icon name="stop" size={18} /></button>
-      {:else}
-        <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
-      {/if}
     </div>
-  </div>
+  {:else}
+    <div class="flex flex-col gap-2.5 p-3 shrink-0" style="border-top:1px solid var(--color-border-subtle)">
+      {#if !$assistant.busy}
+        <div class="op-chips flex flex-wrap gap-2">
+          {#each suggestions as key}
+            <button class="op-chip" onclick={() => submit($t(key))}>{$t(key)}</button>
+          {/each}
+        </div>
+      {/if}
+      {#if outgoing.length || photoError}
+        <div class="flex gap-2 items-center flex-wrap" data-attachments>
+          {#each outgoing as attachment, i}
+            <div class="relative">
+              {#if attachment.thumb}
+                <img src={attachment.thumb} alt="" class="w-14 h-14 object-cover rounded-lg" style="border:1px solid var(--color-border)" />
+              {:else}
+                <div class="h-14 max-w-[9rem] px-2.5 rounded-lg flex flex-col justify-center text-xs" style="border:1px solid var(--color-border);background:var(--color-surface-muted);color:var(--color-text)" data-pdf-chip><span class="font-semibold">PDF</span><span class="truncate">{attachment.name}</span></div>
+              {/if}
+              <button class="absolute -top-2 -right-2 w-6 h-6 rounded-full flex items-center justify-center" style="background:var(--color-text-strong);color:var(--color-surface)" aria-label={$t(attachment.sketch ? 'chrome.assistant.sketch.remove' : 'chrome.assistant.removePhoto')} onclick={() => attachment.sketch ? clearSketch() : attachments = attachments.filter((_, j) => j !== i)}><Icon name="close" size={14} /></button>
+            </div>
+          {/each}
+          {#if photoError}<span class="text-xs" style="color:var(--color-danger-text)">{$t('chrome.assistant.photoFailed')}</span>{/if}
+        </div>
+      {/if}
+      <div class="flex items-end gap-2">
+        <input bind:this={fileInput} type="file" accept="image/*,application/pdf" multiple class="hidden" onchange={(e) => { const el = e.currentTarget; void addPhotos([...(el.files ?? [])]); el.value = ''; }} />
+        <button class="op-attach" aria-label={$t('chrome.assistant.attach')} title={$t('chrome.assistant.attach')} disabled={$assistant.busy || outgoing.length >= 3} onclick={() => fileInput?.click()}><Icon name="plus" size={20} /></button>
+        <button class="op-attach" aria-label={$t('chrome.assistant.sketch.start')} title={$t('chrome.assistant.sketch.start')} aria-pressed={$sketching} disabled={$assistant.busy || (outgoing.length >= 3 && !$sketchAttachment)} onclick={toggleSketch} data-sketch-button><Icon name="pencil" size={19} /></button>
+        <textarea
+          bind:this={input}
+          bind:value={draft}
+          oninput={resize}
+          onkeydown={onKeydown}
+          onpaste={onPaste}
+          rows="1"
+          maxlength="4000"
+          class="op-chat-input flex-1 min-w-0"
+          placeholder={$t('chrome.assistant.placeholder')}
+          aria-label={$t('chrome.assistant.placeholder')}
+        ></textarea>
+        {#if $assistant.busy}
+          <button class="op-send" aria-label={$t('chrome.assistant.stop')} title={$t('chrome.assistant.stop')} onclick={stop}><Icon name="stop" size={18} /></button>
+        {:else}
+          <button class="op-send" aria-label={$t('chrome.assistant.send')} disabled={(!draft.trim() && !outgoing.length) || $sketching} onclick={() => submit()}><Icon name="send" size={20} strokeWidth={2.2} /></button>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </aside>

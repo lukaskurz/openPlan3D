@@ -2,12 +2,15 @@
 
 October 2, 2026. The ✦ Assistant button next to the tool strip opens a chat
 docked on the right of the plan (Round 2 of the iPad redesign). The assistant
-reads the plan, answers questions and edits it with Claude Sonnet 5.5
-(`claude-sonnet-5-5`). A message that comes with a photo or PDF (usually a
-plan to rebuild) runs that turn on Claude Opus 5.5 (`claude-opus-5-5`) at high
-effort, with more room per call (32k tokens) and per message (30 calls). The
-server picks the model from the conversation (`assistantMode` in
-`definitions.ts`), so the browser can't choose one.
+reads the plan, answers questions and edits it.
+
+October 20, 2026: every turn runs on Claude Opus 5.5 (`claude-opus-5-5`) at
+`xhigh` effort, with 64k tokens per call and up to 60 calls per message
+(`ASSISTANT_CONFIG` in `definitions.ts`). Before, questions and edits ran on
+Sonnet 5.5 and only messages with a photo or PDF switched to Opus; each switch
+lost the prompt cache and the earlier reasoning. Replies to design questions
+may now be as long as the question needs; edits are still confirmed in a
+sentence or two.
 
 ## How a message is handled
 
@@ -40,8 +43,10 @@ blocked doors, and the prompt asks the model to fix them before it answers.
 - **Curved walls.** Walls take a quadratic control point (`curves` in
   `add_walls`, `curve`/`straighten` in `update_elements`); openings on curved
   walls are measured along the curve.
-- **Thinking.** Both models think adaptively. Thinking blocks are kept in the
-  conversation and sent back unchanged, so reasoning carries across tool
+- **Thinking.** The model thinks adaptively. Requests set `display: "updates"`
+  (beta `thinking-display-updates-2026-08-18`), so the short progress notes it
+  writes between tool calls arrive as thinking text and show in the panel while
+  a long turn runs. Thinking blocks are kept in the conversation and sent back unchanged, so reasoning carries across tool
   rounds. Trimming older turns invalidates their blocks, so requests set
   `prefix_mismatch_behavior: "drop_block"` (beta
   `thinking-binding-controls-2026-08-01`) and those blocks are dropped
@@ -92,8 +97,7 @@ blocked doors, and the prompt asks the model to fix them before it answers.
   view moves. The sketch goes with the next message as a picture of that part
   of the plan as it is on screen, strokes in red and numbered, plus a text
   block listing each stroke's points in plan cm (simplified, and marked when a
-  stroke circles an area), so "put a desk here" has a here. Like photos, it runs
-  that turn on the build model. On narrow screens the panel steps aside while
+  stroke circles an area), so "put a desk here" has a here. On narrow screens the panel steps aside while
   drawing.
 - **Own API key.** The key button in the panel stores an Anthropic key in this
   browser (`o3d_anthropic_key`). With a key, the browser calls the Messages
@@ -103,11 +107,20 @@ blocked doors, and the prompt asks the model to fix them before it answers.
 
 ## Setup
 
+Static hosting (Cloudflare Pages, `BUILD_TARGET=static`): there is no server,
+so the Assistant runs only with each person's own Anthropic API key. On
+opening, the panel asks the server whether it can run the Assistant
+(`GET /api/assistant/chat` answers `{ available }`); on a static site that
+request fails, and instead of the input the panel shows a short note and an
+**Add API key** button. For a family, create one key per person in the
+Anthropic Console, each in its own workspace with a monthly spend limit, so
+Anthropic enforces the budget and a key can be revoked on its own.
+
 Local development: copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`
 (a Claude Console key, billed pay-as-you-go). Restart `npm run dev`.
 
-Firebase App Hosting: store the key as a secret and reference it in
-`apphosting.yaml`:
+Firebase App Hosting (Node build): store the key as a secret and reference it
+in `apphosting.yaml`:
 
 ```bash
 firebase apphosting:secrets:set anthropic-api-key
@@ -120,16 +133,18 @@ firebase apphosting:secrets:set anthropic-api-key
       - RUNTIME
 ```
 
-Without a key the endpoint returns 503 and the panel says the assistant isn't
-available on this server. `ASSISTANT_CHAT_UPSTREAM` overrides the API base URL
-(tests and local fakes).
+Without a key the endpoint returns 503 and, as on a static site, the panel
+asks for the person's own key. `ASSISTANT_CHAT_UPSTREAM` overrides the API
+base URL (tests and local fakes). A server with a key serves anyone who can
+reach it, limited only per client address (below), so don't deploy one with a
+key on a public URL.
 
 ## Development with your Claude subscription
 
 Set `ASSISTANT_DEV_CLAUDE=1` in `.env` and restart `npm run dev`. The chat
 then runs on your own Claude plan through Claude Code instead of an API key:
 each conversation gets one `claude -p --input-format stream-json` process
-(Sonnet 5.5, or Opus 5.5 at high effort once a photo or PDF is attached; the same system prompt, no built-in tools and none of your own
+(Opus 5.5 at `xhigh` effort, the same system prompt, no built-in tools and none of your own
 MCP servers or settings). Its plan tools come from
 [`tooling/assistant-dev-bridge.mjs`](../tooling/assistant-dev-bridge.mjs),
 which hands every call to the browser and waits for the result, so the
@@ -159,8 +174,10 @@ model calls; drawing a whole flat takes about 20. Requests are capped at
 the history.
 
 Measured with Sonnet 5.5 at list prices (September 2026 harness, 75 m²
-apartment): a question costs about $0.02, a small edit $0.02, furnishing a
+apartment): a question cost about $0.02, a small edit $0.02, furnishing a
 room $0.03, rearranging a room $0.04, and drawing and furnishing a whole flat
-$0.13. Each call logs `{"event":"assistant_chat", input, output, cacheRead,
-cacheWrite}` (token counts only, never content), so real costs can be read
+$0.13. Opus 5.5 costs twice as much per token ($4 / $20 per million input /
+output tokens) and `xhigh` thinks more, so expect several times those
+figures until the harness is re-run. Each call logs `{"event":"assistant_chat", model, input, output,
+cacheRead, cacheWrite}` (token counts only, never content), so real costs can be read
 from the server logs.

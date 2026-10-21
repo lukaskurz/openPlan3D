@@ -2036,6 +2036,8 @@ export const en = {
   "chrome.assistant.key.remove": "Remove key",
   "chrome.assistant.key.invalid": "That doesn’t look like an Anthropic API key.",
   "chrome.assistant.key.active": "Your key",
+  "chrome.assistant.key.needed": "The Assistant here runs on your own Anthropic API key. The key stays in this browser, the Assistant talks to Anthropic directly, and usage is billed to that key.",
+  "chrome.assistant.key.add": "Add API key",
   "chrome.assistant.attach": "Attach a photo",
   "chrome.assistant.removePhoto": "Remove photo",
   "chrome.assistant.photoFailed": "That file couldn’t be read. Photos and one PDF up to 3 MB work.",

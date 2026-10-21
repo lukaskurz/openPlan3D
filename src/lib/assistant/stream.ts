@@ -47,8 +47,12 @@ export function keptBlocks(content: ContentBlock[]): ContentBlock[] {
     .filter(block => block.type !== 'text' || block.text.length > 0);
 }
 
-/** Apply one SSE event to the blocks being assembled. Exported for tests. */
-export function applyStreamEvent(event: any, blocks: Map<number, Partial>, result: TurnResult, onText: (text: string) => void) {
+/**
+ * Apply one SSE event to the blocks being assembled. `onThinking` gets the
+ * current thinking block's text so far (with `display: 'updates'`, the model's
+ * progress notes). Exported for tests.
+ */
+export function applyStreamEvent(event: any, blocks: Map<number, Partial>, result: TurnResult, onText: (text: string) => void, onThinking?: (text: string) => void) {
   switch (event?.type) {
     case 'content_block_start': {
       const block = event.content_block;
@@ -66,7 +70,10 @@ export function applyStreamEvent(event: any, blocks: Map<number, Partial>, resul
         partial.block.text += event.delta.text;
         onText(event.delta.text);
       } else if (event.delta?.type === 'input_json_delta') partial.json += event.delta.partial_json ?? '';
-      else if (event.delta?.type === 'thinking_delta' && partial.block.type === 'thinking') partial.block.thinking += event.delta.thinking ?? '';
+      else if (event.delta?.type === 'thinking_delta' && partial.block.type === 'thinking') {
+        partial.block.thinking += event.delta.thinking ?? '';
+        onThinking?.(partial.block.thinking);
+      }
       else if (event.delta?.type === 'signature_delta' && partial.block.type === 'thinking') partial.block.signature += event.delta.signature ?? '';
       break;
     }
@@ -88,7 +95,9 @@ export function applyStreamEvent(event: any, blocks: Map<number, Partial>, resul
 
 export async function streamTurn(
   messages: ApiMessage[],
-  options: { signal?: AbortSignal; onText?: (text: string) => void; fetchImpl?: typeof fetch; conversation?: string; apiKey?: string } = {},
+  options: {
+    signal?: AbortSignal; onText?: (text: string) => void; onThinking?: (text: string) => void; fetchImpl?: typeof fetch; conversation?: string; apiKey?: string;
+  } = {},
 ): Promise<TurnResult> {
   const doFetch = options.fetchImpl ?? fetch;
   // With the person's own key, go straight to Anthropic; otherwise through openPlan3D's server.
@@ -136,7 +145,7 @@ export async function streamTurn(
       if (!data) continue;
       let event: unknown;
       try { event = JSON.parse(data); } catch { continue; }
-      applyStreamEvent(event, blocks, result, onText);
+      applyStreamEvent(event, blocks, result, onText, options.onThinking);
     }
   }
   result.content = keptBlocks([...blocks.entries()].sort((a, b) => a[0] - b[0]).map(([, partial]) => partial.block));
