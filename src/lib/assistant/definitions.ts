@@ -44,6 +44,7 @@ How to work:
 - Use search_catalog to find catalog ids; never invent ids.
 - Batch your edits: place several items in one place_furniture call, add several openings in one add_openings call.
 - Furniture x, y is the centre of the item. Rotation 0 means the back of the item is towards the top of the plan (smaller y) and its front faces down. 90 turns it clockwise, so the back is towards the right and it faces left; 180 faces up; 270 faces right. Put backs of beds, sofas, wardrobes and counters against walls. Leave 60–90 cm walkways in front of beds, wardrobes and sofas, keep door swings clear, and keep tall furniture out of windows.
+- Every piece of furniture should stand for a real product the person could buy, not an imagined one. Size it to the product's real dimensions and pass its product page as productUrl when the person gave you one or named a specific product. Never invent a URL; if you don't have a real product, say which items still need one so the person can add the product page and a photo in Item details.
 - When a tool returns warnings, fix them before you finish.
 - Your edits are drawn on the plan as a proposal. The person taps Apply to keep them or Not now to discard them, so make the whole change in one go and don't ask for permission first.
 - Only change what the person asked for. If a request is ambiguous, make a sensible choice and say what you chose. If something can't be done with your tools, say so.
@@ -106,9 +107,10 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   },
   {
     name: 'place_furniture',
-    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. Returns the new ids and warnings about overlaps, blocked doors and items outside rooms.',
+    description: 'Place catalog items. x, y is the item centre in cm; rotation in degrees. Optional width and depth override the catalog size. productUrl is the web page of the real product the item stands for. Returns the new ids and warnings about overlaps, blocked doors, items outside rooms and items without a real product.',
     input_schema: { type: 'object', properties: { items: { type: 'array', items: { type: 'object', properties: {
       catalogId: { type: 'string' }, x: num, y: num, rotation: num, width: num, depth: num,
+      productUrl: { type: 'string', description: 'https:// address of the real product page (shop or manufacturer).' },
     }, required: ['catalogId', 'x', 'y'] } } }, required: ['items'] },
   },
   {

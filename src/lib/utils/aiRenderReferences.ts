@@ -30,6 +30,8 @@ export const REFERENCE_TOTAL_BASE64 = 12 * 1024 * 1024;
 const MODEL_LIMITS: Record<string, number> = {
   'gemini-2.5-flash-image': 3,
   'gemini-3-pro-image-preview': 8,
+  'gemini-3-pro-image': 8,
+  'nano-banana-pro-preview': 8,
 };
 export const DEFAULT_REFERENCE_LIMIT = 3;
 export const OPENAI_REFERENCE_LIMIT = 4;
@@ -69,7 +71,8 @@ function itemSize(item: FurnitureItem, project: Project): string | undefined {
 }
 
 function sourceLink(item: FurnitureItem, project: Project): string | undefined {
-  const url = item.customModelId ? project.customModels?.find(model => model.id === item.customModelId)?.sourceUrl : undefined;
+  const url = item.details?.productUrl
+    ?? (item.customModelId ? project.customModels?.find(model => model.id === item.customModelId)?.sourceUrl : undefined);
   return url && /^https?:\/\//i.test(url) && url.length <= 300 ? url : undefined;
 }
 

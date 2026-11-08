@@ -5,8 +5,19 @@ export const WALL_MATERIALS = ['wood', 'brick', 'stone', 'drywall', 'concrete', 
 export const ROOM_TYPES = ['livingRoom', 'bedroom', 'kitchen', 'bathroom', 'diningRoom', 'laundryRoom', 'office', 'hallway', 'garage', 'closet', 'pantry', 'entryway'];
 const fields: Record<DetailKind, (keyof ItemDetails)[]> = {
   walls: ['note', 'material'], doors: ['price'], windows: ['price'],
-  furniture: ['note', 'price', 'photos'], rooms: ['note', 'photos', 'roomType', 'ceilingHeight'],
+  furniture: ['note', 'price', 'photos', 'productUrl'], rooms: ['note', 'photos', 'roomType', 'ceilingHeight'],
 };
+export const PRODUCT_URL_MAX = 2048;
+/** An http(s) address short enough to store, or false. */
+export function isProductUrl(value: unknown): value is string {
+  if (typeof value !== 'string' || !value || value.length > PRODUCT_URL_MAX) return false;
+  try { return ['http:', 'https:'].includes(new URL(value).protocol); } catch { return false; }
+}
+/** Whether a furniture item is tied to a real product: a product page and a photo of it. */
+export function productStatus(details: ItemDetails): { link: boolean; photo: boolean; complete: boolean } {
+  const link = isProductUrl(details.productUrl), photo = (details.photos?.length ?? 0) > 0;
+  return { link, photo, complete: link && photo };
+}
 export function validateItemDetails(value: unknown, kind: DetailKind): asserts value is ItemDetails {
   const fail = () => { throw new Error('Invalid item details. Check notes, costs, room metadata and photo references.'); };
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail();
@@ -19,6 +30,8 @@ export function validateItemDetails(value: unknown, kind: DetailKind): asserts v
       if (!Array.isArray(v) || v.length > 512 || v.some(name => typeof name !== 'string' || !safePackagePath(name))) fail();
     } else if (field === 'price' || field === 'ceilingHeight') {
       if (typeof v !== 'number' || !Number.isFinite(v) || (field === 'price' ? v < 0 : v <= 0 || v > 1_000_000)) fail();
+    } else if (field === 'productUrl') {
+      if (!isProductUrl(v)) fail();
     } else if (typeof v !== 'string' || field === 'roomType' && !ROOM_TYPES.includes(v)) fail();
   }
 }

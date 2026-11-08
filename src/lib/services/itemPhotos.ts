@@ -6,6 +6,7 @@ import { nativeAssetNames, webToNative } from '$lib/utils/projectPackageBridge';
 import { readProject } from '$lib/utils/projectValidation';
 import { allPlanFloors, inactiveAlternatives } from '$lib/utils/planAlternatives';
 import { writeSnapshotStorage, type StoredSnapshot } from '$lib/utils/snapshotStorage';
+import { aiRenderAssetNames } from '$lib/utils/aiRenders';
 
 export const PHOTO_FILE_LIMIT = 8 * 1024 * 1024;
 export const PHOTO_STORED_LIMIT = 512 * 1024;
@@ -108,6 +109,8 @@ export function usedPhotoNames(project: Project): Set<string> {
   if (!state) return new Set();
   const names = new Set(nativeAssetNames(webToNative(project, state.native, state.mapping).plan));
   for (const model of project.customModels ?? []) names.add(model.assetName);
+  // Saved AI renders and their 3D captures; deleting a render removes them.
+  for (const name of aiRenderAssetNames(project)) names.add(name);
   // Photos on items of plan alternatives that are not being edited right now.
   for (const floor of inactiveAlternatives(project).flatMap(alt => alt.floors)) {
     for (const item of [...floor.walls, ...floor.doors, ...floor.windows, ...floor.furniture, ...floor.rooms]) {

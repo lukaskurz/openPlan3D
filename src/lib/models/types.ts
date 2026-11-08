@@ -8,6 +8,8 @@ export interface ItemDetails {
   material?: string | null;
   roomType?: string | null;
   ceilingHeight?: number | null; // centimetres; metadata, not a wall-height edit
+  /** Furniture: web page of the real product this item stands for (http/https). */
+  productUrl?: string | null;
 }
 export type DetailKind = 'walls' | 'doors' | 'windows' | 'furniture' | 'rooms';
 export type DetailTarget = { floorId: string; kind: DetailKind; id: string };
@@ -409,6 +411,37 @@ export interface Project {
   /** Section cut lines. Project-level because a cut passes through every storey;
    * shared by all plan alternatives so they can be compared at the same cut. */
   sections?: PlanSection[];
+  /** Saved AI renders, oldest first. Project-level so renders of every plan
+   * alternative can be compared; each names the alternative it was made from. */
+  renders?: AIRenderRecord[];
+}
+
+/**
+ * One saved AI render (utils/aiRenders.ts). The images are JPEG attachments in
+ * `projectPackage.assets` (`assets/<assetName>`), so they autosave, travel in project
+ * packages and share bytes across saved versions like item photos.
+ */
+export interface AIRenderRecord {
+  id: string;
+  /** The rendered image: a filename in projectPackage.assets, without assets/. */
+  assetName: string;
+  /** The 3D capture sent to the model, for comparing with the render. */
+  inputAssetName?: string;
+  /** ISO 8601 time the render was saved. */
+  createdAt: string;
+  /** 'gemini', 'openai' or another provider name. */
+  provider: string;
+  model: string;
+  /** The plan alternative the render was made from, with its code and name at that time
+   * (they stay readable after the alternative is renamed or deleted). */
+  alternativeId?: string;
+  alternativeCode?: string;
+  alternativeName?: string;
+  floorId?: string;
+  /** Interior camera in viewer coordinates (cm, y up), when known. */
+  camera?: { position: { x: number; y: number; z: number }; target: { x: number; y: number; z: number }; fov: number };
+  prompt?: string;
+  note?: string;
 }
 
 /**

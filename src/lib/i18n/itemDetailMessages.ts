@@ -13,5 +13,6 @@ export const itemDetailMessages: Record<string, TranslationKey> = {
   "This file is still used by an item or tracing image. Remove those references first.": "itemDetailMessage.used",
   "Could not check attachment references.": "itemDetailMessage.references",
   "File removed from this project’s future exports. Save to keep this change.": "itemDetailMessage.deleted",
-  "Could not delete the attachment.": "itemDetailMessage.delete"
+  "Could not delete the attachment.": "itemDetailMessage.delete",
+  "Enter the full product page address, starting with https://.": "itemDetailMessage.productUrl"
 };

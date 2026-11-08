@@ -12,6 +12,7 @@ import {
 } from '$lib/stores/project';
 import { projectSettings } from '$lib/stores/settings';
 import { furnitureCatalog, getCatalogItem, getFurnitureSize } from '$lib/utils/furnitureCatalog';
+import { isProductUrl } from '$lib/utils/itemDetails';
 import { resolveRoomGeometry } from '$lib/utils/roomDetection';
 import { interiorRoomArea } from '$lib/utils/interiorArea';
 import { wallLength } from '$lib/utils/wallEditing';
@@ -332,9 +333,13 @@ function placeFurniture(input: Record<string, unknown>): ToolOutcome {
       const updates: Partial<FurnitureItem> = { rotation };
       if (raw.width !== undefined) updates.width = finite(raw.width, 'width', 5, 2000);
       if (raw.depth !== undefined) updates.depth = finite(raw.depth, 'depth', 5, 2000);
+      if (raw.productUrl !== undefined) {
+        if (!isProductUrl(raw.productUrl)) fail('productUrl must be a full http(s) address.');
+        updates.details = { productUrl: raw.productUrl };
+      }
       const id = addFurniture(catalogId, position);
       updateFurniture(id, updates);
-      lines.push(`${id} ${catalogId} ok`);
+      lines.push(`${id} ${catalogId} ok${updates.details ? '' : ' (no real product yet: add productUrl or ask the person for the product)'}`);
       changed.push(id);
     } catch (error) {
       lines.push(`error: ${(error as Error).message}`);

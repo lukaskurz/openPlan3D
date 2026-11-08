@@ -6,6 +6,8 @@ import { duplicatePlanSelection, pastePlanSelection, shiftedOpeningPosition } fr
 import { writable, derived, get, type Writable } from 'svelte/store';
 import type { Project, Floor, Wall, Door, Window as Win, FurnitureItem, Point, Stair, Column, BackgroundImage, GuideLine, ElementGroup, EntourageItem, InterchangeState, Pipe, PlanSection } from '$lib/models/types';
 import { nextSectionCode } from '$lib/utils/sectionPlan';
+import type { AIRenderRecord } from '$lib/models/types';
+import { insertAIRender, parseRenderDataURL, removeAIRenderFrom, type NewAIRender, type RenderImage } from '$lib/utils/aiRenders';
 import { minPipePoints, validPipeData } from '$lib/utils/pipes';
 import { planWallResize, planWallAngle, planStraightenWalls, finitePoint, validPositiveDimension, validOpeningPosition, type WallEndpoint } from '$lib/utils/wallEditing';
 import { getOuterWalls } from '$lib/utils/outerWalls';
@@ -1826,6 +1828,67 @@ export function removeSection(id: string) {
   }, 'Deleted section');
   if (get(openSectionId) === id) openSectionId.set(null);
   if (get(selectedElementId) === id) selectedElementId.set(null);
+}
+
+// --- Saved AI renders (utils/aiRenders.ts) ---
+
+/** What a caller says about a new render; id, time, alternative and floor default to the editor's current state. */
+export type AIRenderInput = Partial<Omit<AIRenderRecord, 'assetName' | 'inputAssetName'>> & Pick<AIRenderRecord, 'provider' | 'model'>;
+
+/**
+ * Save an AI render with the project, as one Undo step that autosaves like any edit.
+ * `resultDataUrl` is the render and `inputDataUrl` the 3D capture sent to the model
+ * (both `data:image/…;base64,` URLs); each is re-encoded as JPEG (quality 0.85, at most
+ * 2048 px) and stored in projectPackage.assets. Works from page scripts too:
+ * `(await import('/src/lib/stores/project.ts')).addAIRender({ provider, model }, url)`.
+ * Rejects when no project is open, the open project changed while encoding, or the
+ * project and its saved versions would outgrow the 64 MiB attachment budget.
+ */
+export async function addAIRender(record: AIRenderInput, resultDataUrl: string, inputDataUrl?: string, options: { encode?: boolean } = {}): Promise<AIRenderRecord> {
+  const start = get(currentProject);
+  if (!start) throw new Error('Open a project before saving a render.');
+  const encodeImage: (url: string) => Promise<RenderImage> = options.encode === false
+    ? async url => parseRenderDataURL(url) ?? Promise.reject(new Error('The render image must be an embedded PNG or JPEG image.'))
+    : (await import('$lib/services/aiRenderImages')).encodeRenderJPEG;
+  const [result, input, { webToNative }, { checkPhotoStorage }, { snapshotsStore }, estimate] = await Promise.all([
+    encodeImage(resultDataUrl),
+    inputDataUrl ? encodeImage(inputDataUrl) : Promise.resolve(undefined),
+    import('$lib/utils/projectPackageBridge'),
+    import('$lib/services/itemPhotos'),
+    import('./versionHistory'),
+    globalThis.navigator?.storage?.estimate?.().catch(() => undefined),
+  ]);
+  const project = get(currentProject);
+  if (!project || project.id !== start.id) throw new Error('The project changed before the render could be saved.');
+  const next = readProject(project);
+  if (!next.projectPackage) {
+    const { plan, mapping } = webToNative(next, undefined);
+    next.projectPackage = { version: 1, native: plan, mapping, assets: {} };
+  }
+  const alternative = next.alternatives?.find(alt => alt.id === next.activeAlternativeId);
+  const createdAt = record.createdAt && Number.isFinite(Date.parse(record.createdAt)) ? new Date(record.createdAt).toISOString() : new Date().toISOString();
+  const full: NewAIRender = {
+    ...record,
+    id: record.id ?? globalThis.crypto?.randomUUID?.() ?? uid(),
+    createdAt,
+    ...(record.alternativeId === undefined && alternative
+      ? { alternativeId: alternative.id, alternativeCode: alternative.code, alternativeName: alternative.name } : {}),
+    floorId: record.floorId ?? next.activeFloorId,
+  };
+  for (const key of Object.keys(full) as (keyof NewAIRender)[]) if (full[key] === undefined) delete full[key];
+  const stored = insertAIRender(next, full, result, input);
+  checkPhotoStorage(project, next, get(snapshotsStore), estimate);
+  const valid = readProject(next);
+  snapshot('Saved AI render');
+  valid.updatedAt = new Date();
+  currentProject.set(valid);
+  return stored;
+}
+
+/** Delete a saved render and the images nothing else uses, as one Undo step. */
+export function deleteAIRender(id: string) {
+  if (!get(currentProject)?.renders?.some(render => render.id === id)) return;
+  mutateProject(p => { removeAIRenderFrom(p, id); }, 'Deleted AI render');
 }
 
 // --- Annotations ---

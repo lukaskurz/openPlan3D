@@ -120,6 +120,13 @@ export function branchAlternative(project: Project, options: BranchOptions): Pla
   if (!project.alternatives?.length) {
     project.alternatives = [{ id: options.originalId, name: options.nameFor(FIRST_CODE), code: FIRST_CODE, floors: [], activeFloorId: project.activeFloorId, updatedAt: options.now }];
     project.activeAlternativeId = options.originalId;
+    // Renders saved before there were alternatives were made from this original plan.
+    for (const render of project.renders ?? []) {
+      if (render.alternativeId !== undefined) continue;
+      render.alternativeId = options.originalId;
+      render.alternativeCode ??= FIRST_CODE;
+      render.alternativeName ??= project.alternatives[0].name;
+    }
   }
   ensureAlternativeCodes(project);
   stash(project, options.now, options.thumbnail);

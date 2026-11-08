@@ -11,7 +11,8 @@
   import { openAISettings, setOpenAIModel } from '$lib/stores/aiKeys';
   import { generateOpenAIRenderImage, validateOpenAIConfig, getEffectiveModel, normalizeBaseUrl } from '$lib/utils/openaiClient';
   import OpenAIModelPicker from '$lib/components/ai/OpenAIModelPicker.svelte';
-  import { activeFloor, currentProject, selectedElementId } from '$lib/stores/project';
+  import { activeFloor, addAIRender, currentProject, selectedElementId } from '$lib/stores/project';
+  import AIRenderGallery from './AIRenderGallery.svelte';
   import { triggerTip } from '$lib/stores/onboarding.svelte';
   import type { Floor, Wall, Door, Window as Win, Stair } from '$lib/models/types';
   import { getWallStartHeight, getWallEndHeight } from '$lib/models/types';
@@ -147,6 +148,8 @@
   let aiRendering = $state(false);
   let aiRenderResult = $state<string | null>(null);
   let aiRenderError = $state<string | null>(null);
+  /** Saving the last render with the project: 'saving', 'saved' or an error message. */
+  let aiRenderSave = $state<'saving' | 'saved' | { error: string } | null>(null);
   let aiRenderStyle = $state('photorealistic');
   let aiRenderLighting = $state('natural daylight');
   let aiRenderMood = $state('warm and inviting');
@@ -155,10 +158,14 @@
   const LIGHTING_OPTIONS = ['natural daylight', 'warm afternoon', 'golden hour', 'soft ambient', 'dramatic shadows', 'bright and airy', 'moody evening', 'studio lighting'];
   const MOOD_OPTIONS = ['warm and inviting', 'clean and modern', 'cozy', 'elegant', 'rustic charm', 'sophisticated', 'relaxed', 'vibrant'];
   let aiProvider = $state<'gemini' | 'openai'>('gemini');
-  let aiModel = $state('gemini-2.5-flash-image');
+  let aiModel = $state('gemini-3.1-flash-image');
+  // Gemini image models the API listed on 2026-11-08, cheapest first.
   const AI_MODELS = [
-    { id: 'gemini-2.5-flash-image', name: 'Nano Banana (2.5 Flash)', desc: 'Fast & efficient image gen ✓' },
-    { id: 'gemini-3-pro-image-preview', name: 'Nano Banana Pro (3 Pro)', desc: 'Best quality, thinking, up to 4K ✓' },
+    { id: 'gemini-3.1-flash-lite-image', name: 'Nano Banana 2 Lite', desc: 'Cheapest, quick drafts' },
+    { id: 'gemini-2.5-flash-image', name: 'Nano Banana (2.5 Flash)', desc: 'Older fast model' },
+    { id: 'gemini-nano-banana-2.1', name: 'Nano Banana 2.1', desc: 'Newest flash model, cheap drafts' },
+    { id: 'gemini-3.1-flash-image', name: 'Nano Banana 2 (3.1 Flash)', desc: 'Good drafts at about half the Pro price' },
+    { id: 'gemini-3-pro-image', name: 'Nano Banana Pro (3 Pro)', desc: 'Best quality, thinking, up to 4K' },
   ];
   let openaiModel = $state('');
   let renderController: AbortController | null = null;
@@ -248,30 +255,56 @@
     }
   }
 
+  /** What a finished render request returns: the image plus what made it, for saving. */
+  type RenderOutcome = { image: string; input: string; prompt: string; model: string };
+
+  /** The interior camera in viewer coordinates (cm, y up), stored with a saved render. */
+  function renderCamera() {
+    if (!interiorCamera) return undefined;
+    updateInteriorCamera();
+    const position = interiorCamera.position, target = interiorCamera.getWorldDirection(new THREE.Vector3()).multiplyScalar(500).add(position);
+    const round = (value: number) => Math.round(value * 10) / 10;
+    return { position: { x: round(position.x), y: round(position.y), z: round(position.z) },
+      target: { x: round(target.x), y: round(target.y), z: round(target.z) }, fov: cameraFOV };
+  }
+
   async function runAIRender() {
     if (!scene || !interiorCamera || aiRendering) return;
     const controller = new AbortController();
     renderController = controller; aiRendering = true;
-    aiRenderResult = null; aiRenderError = null;
+    aiRenderResult = null; aiRenderError = null; aiRenderSave = null;
+    const projectId = get(currentProject)?.id, provider = aiProvider, floorId = currentFloor?.id, camera = renderCamera();
+    let outcome: RenderOutcome | undefined;
     try {
-      const result = aiProvider === 'gemini' ? await runGeminiRender(controller.signal) : await runOpenAIRender(controller.signal);
-      if (renderController === controller) aiRenderResult = result;
+      outcome = provider === 'gemini' ? await runGeminiRender(controller.signal) : await runOpenAIRender(controller.signal);
+      if (renderController === controller) aiRenderResult = outcome.image;
     } catch (error) {
       if (renderController === controller) aiRenderError = error instanceof Error ? error.message : 'Rendering failed.';
     } finally {
       if (renderController === controller) { aiRendering = false; renderController = null; }
     }
+    // Every finished render is kept with the project it was made in, even after Cancel was too late.
+    if (!outcome || !projectId || get(currentProject)?.id !== projectId) return;
+    const showStatus = aiRenderResult === outcome.image;
+    if (showStatus) aiRenderSave = 'saving';
+    try {
+      await addAIRender({ provider, model: outcome.model, prompt: outcome.prompt, floorId, camera }, outcome.image, outcome.input);
+      if (aiRenderResult === outcome.image) aiRenderSave = 'saved';
+    } catch (error) {
+      if (aiRenderResult === outcome.image) aiRenderSave = { error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
-  async function runGeminiRender(signal: AbortSignal): Promise<string> {
+  async function runGeminiRender(signal: AbortSignal): Promise<RenderOutcome> {
     const geminiKey = localStorage.getItem('o3d_gemini_key');
     if (!geminiKey) {
       throw new Error('Please add your Gemini API key in Settings → AI first.');
     }
 
+    const model = aiModel;
     const imageDataUrl = captureSceneBase64(1024, 576);
     const base64Image = imageDataUrl.split(',')[1];
-    const references = renderReferences('gemini', aiModel);
+    const references = renderReferences('gemini', model);
     const prompt = buildAIPrompt(references);
 
     const requestBody: any = {
@@ -285,7 +318,7 @@
     };
     requestBody.generationConfig.imageConfig = { aspectRatio: '16:9' };
 
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${aiModel}:generateContent?key=${geminiKey}`, {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
@@ -302,19 +335,21 @@
     const parts = data.candidates?.[0]?.content?.parts ?? [];
     const imagePart = parts.find((p: any) => p.inlineData?.mimeType?.startsWith('image/'));
     if (imagePart) {
-      return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
+      return { image: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`, input: imageDataUrl, prompt, model };
     } else {
       const textPart = parts.find((p: any) => p.text && !p.thought);
       throw new Error(textPart?.text || 'No image returned. Try a different model or prompt.');
     }
   }
 
-  async function runOpenAIRender(signal: AbortSignal): Promise<string> {
+  async function runOpenAIRender(signal: AbortSignal): Promise<RenderOutcome> {
     const config = { ...get(openAISettings), model: openaiModel };
     validateOpenAIConfig(config);
     const imageDataUrl = captureSceneBase64(1024, 576);
     const references = renderReferences('openai', config.model);
-    return generateOpenAIRenderImage(config, imageDataUrl.split(',')[1], buildAIPrompt(references), fetch, signal, references);
+    const prompt = buildAIPrompt(references);
+    const image = await generateOpenAIRenderImage(config, imageDataUrl.split(',')[1], prompt, fetch, signal, references);
+    return { image, input: imageDataUrl, prompt, model: getEffectiveModel(config) };
   }
 
   function downloadAIRender() {
@@ -522,7 +557,7 @@
       cameraHelper = null;
     }
     interiorCamera = null;
-    aiRenderOpen = false; aiRenderResult = null; aiRenderError = null;
+    aiRenderOpen = false; aiRenderResult = null; aiRenderError = null; aiRenderSave = null;
     markSceneDirty();
   }
 
@@ -2261,8 +2296,15 @@
               >
                 {$t('viewerAI.download')}
               </button>
+              {#if aiRenderSave === 'saved'}
+                <p role="status" class="text-[10px] text-green-400">{$t('aiRenders.saved')}</p>
+              {:else if aiRenderSave && typeof aiRenderSave === 'object'}
+                <p role="alert" class="text-[10px] text-red-300">{$t('aiRenders.saveFailed', { error: aiRenderSave.error })}</p>
+              {/if}
             </div>
           {/if}
+
+          <AIRenderGallery />
         </div>
       {/if}
     </div>

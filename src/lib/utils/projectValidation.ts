@@ -4,6 +4,7 @@ import { refreshLegacyFurnitureCategories } from './legacyFurnitureCategories';
 import { validateCustomModelDefinitions } from './customModelDefinitions';
 import { CODE, ensureAlternativeCodes } from './planAlternatives';
 import { nextSectionCode } from './sectionPlan';
+import { validateAIRenders } from './aiRenders';
 
 /** Highest ceiling height accepted in `floor.roomCeilingHeights`, in cm (matches utils/ceilingHeights.ts). */
 const MAX_CEILING_HEIGHT = 100_000;
@@ -327,6 +328,8 @@ export function readProject(value: unknown): Project {
       codes.add(item.code);
     }
   }
+  // Saved AI renders (utils/aiRenders.ts); a render whose image attachment is gone is dropped.
+  if (project!.renders !== undefined) project!.renders = validateAIRenders(project!.renders, project!.projectPackage?.assets);
   if (project!.customEntourage !== undefined) {
     const seen = new Set<string>();
     for (const [i, item] of list(project!, 'customEntourage', 'document').entries()) {

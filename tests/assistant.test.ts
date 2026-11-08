@@ -83,6 +83,19 @@ describe('plan tools', () => {
     expect(placed.text).not.toMatch(/warning/);
   });
 
+  it('ties placed furniture to a real product page and flags items without one', () => {
+    twoRooms();
+    const placed = runPlanTool('place_furniture', { items: [
+      { catalogId: 'sofa', x: 250, y: 60, productUrl: 'https://example.com/sofa' },
+      { catalogId: 'bed_queen', x: 700, y: 85 },
+      { catalogId: 'chair', x: 250, y: 300, productUrl: 'javascript:alert(1)' },
+    ] });
+    expect(floor().furniture).toHaveLength(2);
+    expect(floor().furniture.find(i => i.catalogId === 'sofa')?.details?.productUrl).toBe('https://example.com/sofa');
+    expect(placed.text).toMatch(/bed_queen ok \(no real product yet/);
+    expect(placed.text).toMatch(/productUrl must be a full http\(s\) address/);
+  });
+
   it('rejects openings that do not fit', () => {
     twoRooms();
     const wall = floor().walls[0];

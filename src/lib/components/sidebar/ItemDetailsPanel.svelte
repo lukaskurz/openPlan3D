@@ -9,7 +9,7 @@
   import { MAX_CEILING_HEIGHT } from '$lib/utils/ceilingHeights';
   import { projectSettings } from '$lib/stores/settings';
   import { getSnapshots } from '$lib/stores/versionHistory';
-  import { itemDetails, ROOM_TYPES, WALL_MATERIALS } from '$lib/utils/itemDetails';
+  import { isProductUrl, itemDetails, productStatus, PRODUCT_URL_MAX, ROOM_TYPES, WALL_MATERIALS } from '$lib/utils/itemDetails';
   import { attachItemPhoto, checkPhotoStorage, deleteUnusedPhoto, downloadPhoto, photoPreview, prepareItemPhoto, usedPhotoNames } from '$lib/services/itemPhotos';
 
   let { target }: { target: DetailTarget } = $props();
@@ -23,7 +23,9 @@
   let input = $state<HTMLInputElement>();
   let generation = 0;
   onDestroy(() => { generation++; });
-  let retained = $derived(Object.keys(assets).map(path => path.slice(7)));
+  // Saved AI renders keep their images in the same store; they live in the 3D render gallery, not here.
+  let renderFiles = $derived(new Set(($currentProject?.renders ?? []).flatMap(r => [r.assetName, r.inputAssetName]).filter(Boolean)));
+  let retained = $derived(Object.keys(assets).map(path => path.slice(7)).filter(name => !renderFiles.has(name)));
   let attachmentMiB = $derived((Object.values(assets).reduce((n, value) => n + value.length * 3 / 4, 0) / 1024 / 1024).toFixed(2));
   let imperial = $derived($projectSettings.units === 'imperial');
   const photoName = (name: string) => $currentProject?.attachmentNames?.[name] ?? (/^photo-[a-f0-9]{64}\./.test(name) ? 'Added photo' : name);
@@ -43,6 +45,15 @@
       patch = rest;
     }
     try { updateItemDetails(target, patch); } catch (e) { error = e instanceof Error ? e.message : 'Could not update item details.'; }
+  }
+  let product = $derived(productStatus(details));
+  function productUrl(event: Event) {
+    const input = event.currentTarget as HTMLInputElement, value = input.value.trim();
+    if (!value) { if (event.type === 'change') save({ productUrl: null }); return; }
+    if (isProductUrl(value)) { save({ productUrl: value }); return; }
+    if (event.type !== 'change') return;
+    error = 'Enter the full product page address, starting with https://.';
+    input.value = details.productUrl ?? '';
   }
   function optionalNumber(event: Event, field: 'price' | 'ceilingHeight') {
     const input = event.currentTarget as HTMLInputElement;
@@ -110,6 +121,19 @@
 
 <section aria-label={$t('itemDetails.heading')} class="mt-4 space-y-3 border-t border-gray-200 pt-3">
   <h3 class="text-sm font-semibold text-gray-700">{$t('itemDetails.heading')}</h3>
+  {#if target.kind === 'furniture'}
+    <div class="space-y-1">
+      <label class="block text-xs text-gray-600">{$t('itemDetails.product')}
+        <input type="url" inputmode="url" maxlength={PRODUCT_URL_MAX} placeholder="https://" value={details.productUrl ?? ''} oninput={productUrl} onchange={productUrl} class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm" />
+      </label>
+      {#if product.link}<a href={details.productUrl} target="_blank" rel="noopener noreferrer" class="text-xs text-blue-700 underline">{$t('itemDetails.openProduct')}</a>{/if}
+      {#if !product.complete}
+        <p role="note" class="rounded border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900">
+          {$t(!product.link && !product.photo ? 'itemDetails.productMissing' : !product.link ? 'itemDetails.productLinkMissing' : 'itemDetails.productPhotoMissing')}
+        </p>
+      {/if}
+    </div>
+  {/if}
   {#if target.kind === 'walls' || supportsPhotos}
     <label class="block text-xs text-gray-600">{$t('itemDetails.notes')}
       <textarea value={details.note ?? ''} rows="3" maxlength="20000" oninput={e => save({ note: e.currentTarget.value || null })} class="mt-1 w-full rounded border border-gray-300 px-2 py-1.5 text-sm"></textarea>
