@@ -130,14 +130,21 @@ export async function fetchOpenAIModels(config: OpenAIConfig, customFetch: typeo
   return parseModelsResponse(await request({ ...config, model: DEFAULT_OPENAI_MODEL }, 'models', undefined, customFetch, signal));
 }
 
+/** A labelled extra input image, e.g. a reference photo of a real product. */
+export type OpenAIReferenceImage = { label: string; mimeType: string; data: string };
+
 export async function generateOpenAIRenderImage(
   config: OpenAIConfig, base64Image: string, prompt: string,
-  customFetch: typeof fetch = fetch, signal?: AbortSignal
+  customFetch: typeof fetch = fetch, signal?: AbortSignal, references: OpenAIReferenceImage[] = []
 ): Promise<string> {
   const data = await request(config, 'responses', {
     model: getEffectiveModel(config), store: false,
     input: [{ role: 'user', content: [
       { type: 'input_image', image_url: `data:image/png;base64,${base64Image}` },
+      ...references.flatMap(reference => [
+        { type: 'input_text', text: reference.label },
+        { type: 'input_image', image_url: `data:${reference.mimeType};base64,${reference.data}` },
+      ]),
       { type: 'input_text', text: prompt },
     ] }],
     tools: [{ type: 'image_generation', quality: 'high', size: '1536x1024', output_format: 'png' }],

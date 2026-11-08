@@ -40,7 +40,8 @@
   import { disposeModel } from '$lib/utils/furnitureModelResources';
   import { createDoorModel, doorUsesWhiteFrame } from '$lib/utils/doorModels3d';
   import { ownColorCanvasTexture } from '$lib/utils/viewerTextures';
-  import { createFloorFurnitureModels, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
+  import { createPlacedFurnitureModel, createFurnitureModelWithGLB, FLOOR_FINISH } from '$lib/utils/furnitureModelLoader';
+  import { collectRenderReferences, geminiRenderParts, referenceLimit, referencePromptAddendum, type AIRenderReference, type VisibleItem } from '$lib/utils/aiRenderReferences';
   import { defaultMountingHeight, effectiveElevation } from '$lib/utils/mounting';
   import { createCeilingResolver, effectiveRoomCeiling, roomCeilingOverride } from '$lib/utils/ceilingHeights';
   import { buildPipeMeshes, storeySpacing } from '$lib/utils/pipeModels3d';
@@ -178,12 +179,13 @@
     catch { return 'Invalid provider URL. Update Settings → AI.'; }
   }
 
-  function buildAIPrompt(): string {
+  function buildAIPrompt(references: AIRenderReference[] = []): string {
     let prompt = `Transform this interior 3D floor plan render into a ${aiRenderStyle} image. `;
     prompt += `Lighting: ${aiRenderLighting}. Mood: ${aiRenderMood}. `;
     prompt += `Keep the exact same room geometry, furniture placement, and camera angle. `;
     prompt += `Add realistic materials, textures, shadows, and reflections. `;
     prompt += `Make walls, floors, and furniture look like real materials (wood, fabric, metal, etc). `;
+    prompt += referencePromptAddendum(references);
     if (aiRenderExtra.trim()) prompt += aiRenderExtra.trim() + ' ';
     prompt += `Do NOT change the room layout, furniture positions, or camera perspective.`;
     return prompt;
@@ -204,6 +206,45 @@
       }, false);
     } finally {
       releaseRenderer(offRenderer);
+    }
+  }
+
+  /** Furniture of the viewed floor whose model meets the interior camera's frustum, nearest
+   *  first, with a rough image position. Undefined when no furniture model is tagged. */
+  function visibleFurniture(): VisibleItem[] | undefined {
+    if (!interiorCamera || !wallGroup) return;
+    updateInteriorCamera();
+    interiorCamera.updateMatrixWorld();
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(
+      new THREE.Matrix4().multiplyMatrices(interiorCamera.projectionMatrix, interiorCamera.matrixWorldInverse));
+    const found: (VisibleItem & { distance: number })[] = [];
+    let tagged = 0;
+    const box = new THREE.Box3(), center = new THREE.Vector3();
+    for (const object of wallGroup.children) {
+      const id = object.userData.furnitureId;
+      if (typeof id !== 'string') continue;
+      tagged++;
+      box.setFromObject(object);
+      if (box.isEmpty() || !frustum.intersectsBox(box)) continue;
+      box.getCenter(center);
+      const distance = center.distanceTo(interiorCamera.position);
+      const x = center.clone().project(interiorCamera).x;
+      const side = x < -0.33 ? 'on the left of the scene' : x > 0.33 ? 'on the right of the scene' : 'in the middle of the scene';
+      found.push({ id, hint: `${side}${distance < 250 ? ', in the foreground' : distance > 600 ? ', in the background' : ''}`, distance });
+    }
+    if (!tagged) return;
+    return found.sort((a, b) => a.distance - b.distance).map(({ id, hint }) => ({ id, hint }));
+  }
+
+  /** Reference photos of real products for the furniture the interior camera sees. */
+  function renderReferences(provider: 'gemini' | 'openai', model: string): AIRenderReference[] {
+    const project = get(currentProject);
+    if (!project || !currentFloor) return [];
+    const floor = project.floors.find(f => f.id === currentFloor!.id) ?? currentFloor;
+    try {
+      return collectRenderReferences(project, floor, referenceLimit(provider, model), visibleFurniture());
+    } catch {
+      return []; // A broken attachment never blocks the render itself.
     }
   }
 
@@ -230,14 +271,13 @@
 
     const imageDataUrl = captureSceneBase64(1024, 576);
     const base64Image = imageDataUrl.split(',')[1];
-    const prompt = buildAIPrompt();
+    const references = renderReferences('gemini', aiModel);
+    const prompt = buildAIPrompt(references);
 
     const requestBody: any = {
       contents: [{
-        parts: [
-          { inlineData: { mimeType: 'image/png', data: base64Image } },
-          { text: prompt }
-        ]
+        // The scene screenshot first, then each labelled reference photo, then the prompt.
+        parts: geminiRenderParts(base64Image, prompt, references)
       }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
@@ -273,7 +313,8 @@
     const config = { ...get(openAISettings), model: openaiModel };
     validateOpenAIConfig(config);
     const imageDataUrl = captureSceneBase64(1024, 576);
-    return generateOpenAIRenderImage(config, imageDataUrl.split(',')[1], buildAIPrompt(), fetch, signal);
+    const references = renderReferences('openai', config.model);
+    return generateOpenAIRenderImage(config, imageDataUrl.split(',')[1], buildAIPrompt(references), fetch, signal, references);
   }
 
   function downloadAIRender() {
@@ -1365,7 +1406,13 @@
     activeCeilingAt = ceilingAt;
 
     // Furniture; ceiling items at ceiling − drop − height of the room they hang in
-    for (const model of createFloorFurnitureModels(floor, ceilingAt, project, markSceneDirty)) wallGroup.add(model);
+    // Each model is tagged with its item so the AI render can find the furniture in view.
+    for (const item of floor.furniture) {
+      const model = createPlacedFurnitureModel(item, markSceneDirty, project, effectiveElevation(item, ceilingAt));
+      if (!model) continue;
+      model.userData.furnitureId = item.id;
+      wallGroup.add(model);
+    }
     // Pipes: runs at their height (ceiling runs under the ceiling), risers up to the next storey.
     for (const pipe of buildPipeMeshes(floor, ceilingAt, storeySpacing(project, floor))) wallGroup.add(pipe);
 
