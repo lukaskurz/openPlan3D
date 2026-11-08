@@ -159,13 +159,14 @@
   const MOOD_OPTIONS = ['warm and inviting', 'clean and modern', 'cozy', 'elegant', 'rustic charm', 'sophisticated', 'relaxed', 'vibrant'];
   let aiProvider = $state<'gemini' | 'openai'>('gemini');
   let aiModel = $state('gemini-3.1-flash-image');
-  // Gemini image models the API listed on 2026-11-08, cheapest first.
+  // Gemini image models the API listed on 2026-11-08. Descriptions come from a side-by-side test
+  // on three interior views (same 3D capture, product photo and prompt for every model).
   const AI_MODELS = [
-    { id: 'gemini-3.1-flash-lite-image', name: 'Nano Banana 2 Lite', desc: 'Cheapest, quick drafts' },
-    { id: 'gemini-2.5-flash-image', name: 'Nano Banana (2.5 Flash)', desc: 'Older fast model' },
-    { id: 'gemini-nano-banana-2.1', name: 'Nano Banana 2.1', desc: 'Newest flash model, cheap drafts' },
-    { id: 'gemini-3.1-flash-image', name: 'Nano Banana 2 (3.1 Flash)', desc: 'Good drafts at about half the Pro price' },
-    { id: 'gemini-3-pro-image', name: 'Nano Banana Pro (3 Pro)', desc: 'Best quality, thinking, up to 4K' },
+    { id: 'gemini-3.1-flash-image', name: 'Nano Banana 2 (3.1 Flash)', desc: 'Recommended: keeps the camera and layout, ~10 s' },
+    { id: 'gemini-3-pro-image', name: 'Nano Banana Pro (3 Pro)', desc: 'Final renders, up to 4K; about twice the price' },
+    { id: 'gemini-nano-banana-2.1', name: 'Nano Banana 2.1', desc: 'Photoreal but may reframe the shot; slowest' },
+    { id: 'gemini-3.1-flash-lite-image', name: 'Nano Banana 2 Lite', desc: 'Fastest and cheapest; recomposes the shot' },
+    { id: 'gemini-2.5-flash-image', name: 'Nano Banana (2.5 Flash)', desc: 'Older; often leaves the 3D look' },
   ];
   let openaiModel = $state('');
   let renderController: AbortController | null = null;
